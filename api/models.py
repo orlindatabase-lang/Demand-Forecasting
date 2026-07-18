@@ -63,6 +63,26 @@ class NewDesignsResponse(BaseModel):
     items: list[NewDesignRow]
 
 
+class SimilarDesignRef(BaseModel):
+    design: str
+    similarity: float
+    sharedMaterials: list[str]
+
+
+class NewDesignFestivalSpike(BaseModel):
+    designNo: str
+    event: str
+    weekStart: str  # ISO date (Monday start of the predicted spike week)
+    predictedQty: int
+    upliftPct: int  # vs. this design's own non-festival-week baseline
+    similarDesigns: list[SimilarDesignRef]  # material-similar neighbors the cold-start blend borrowed from
+
+
+class NewDesignFestivalSpikesResponse(BaseModel):
+    total: int
+    items: list[NewDesignFestivalSpike]
+
+
 class HistoricalPoint(BaseModel):
     date: str  # Monday start of the week
     forecast: int  # what had been forecast for that past week (back-test)

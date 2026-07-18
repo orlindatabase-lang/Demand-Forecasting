@@ -881,6 +881,71 @@ def get_new_designs(max_age_days: int = 90) -> list[dict]:
     return sorted(by_design.values(), key=lambda d: d["daysSinceLaunch"])
 
 
+def get_new_design_festival_spikes(max_age_days: int = 90) -> list[dict]:
+    """Newly-launched designs (<=max_age_days old) whose 6-week forecast shows
+    a genuine uplift in a festival/sale week.
+
+    A design this young hasn't lived through ``_REQUIRED_WEEKS`` (13, in
+    lgbm_forecast's cold-start blend) of its own history, let alone an actual
+    festival — so any predicted spike here leans heavily on the confidence-
+    weighted demand-CURVE borrowed from material-similar designs at the same
+    weeks-since-launch offset (see similar_design.similar_design_curve),
+    rather than the design's own observed seasonal response. Attaches the
+    design's top similar-design neighbors so the UI can show why."""
+    import similar_design
+
+    by_design_skus: dict[str, list[str]] = {}
+    for r in PLAN_ROWS:
+        if 0 <= r.daysSinceLaunch <= max_age_days:
+            by_design_skus.setdefault(r.designNo, []).append(r.skuCode)
+
+    out: list[dict] = []
+    for design_no, skus in by_design_skus.items():
+        weekly = [0.0] * _FC_WEEKS
+        has_series = False
+        for sku in skus:
+            series = _FC_WEEKLY.get(sku)
+            if not series:
+                continue
+            has_series = True
+            for i, v in enumerate(series[:_FC_WEEKS]):
+                weekly[i] += v
+        if not has_series:
+            continue
+
+        weeks_info = []
+        for w in range(_FC_WEEKS):
+            ws = _forecast_week_start(SNAPSHOT_DATE, w)
+            mult, event = _week_festival(ws)
+            weeks_info.append((ws, event, weekly[w]))
+
+        non_festival_vals = [v for _, ev, v in weeks_info if not ev]
+        baseline = (sum(non_festival_vals) / len(non_festival_vals)) if non_festival_vals \
+            else (sum(weekly) / len(weekly) if weekly else 0.0)
+        if baseline <= 0:
+            continue
+
+        festival_weeks = [(ws, ev, v) for ws, ev, v in weeks_info if ev]
+        if not festival_weeks:
+            continue
+        ws, event, qty = max(festival_weeks, key=lambda t: t[2])
+        uplift_pct = round((qty / baseline - 1) * 100)
+        if uplift_pct < 10:  # not a real spike, just noise around baseline
+            continue
+
+        out.append({
+            "designNo": design_no,
+            "event": event,
+            "weekStart": ws.isoformat(),
+            "predictedQty": round(qty),
+            "upliftPct": uplift_pct,
+            "similarDesigns": similar_design.get_similar_designs(design_no, top_k=3),
+        })
+
+    out.sort(key=lambda d: d["upliftPct"], reverse=True)
+    return out
+
+
 def get_breakdown(sku: str, weeks: int) -> BreakdownResponse | None:
     """Week-wise forecast vs actual: the last ``_HIST_WEEKS`` weeks (actual vs
     the real backtested model prediction where available, else the naive

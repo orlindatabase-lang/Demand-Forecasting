@@ -52,6 +52,21 @@ export interface NewDesignRow {
   skuCount: number;
 }
 
+export interface SimilarDesignRef {
+  design: string;
+  similarity: number;
+  sharedMaterials: string[];
+}
+
+export interface NewDesignFestivalSpike {
+  designNo: string;
+  event: string;
+  weekStart: string;
+  predictedQty: number;
+  upliftPct: number;
+  similarDesigns: SimilarDesignRef[];
+}
+
 export interface HistoricalPoint {
   date: string;
   forecast: number;

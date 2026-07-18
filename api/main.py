@@ -34,6 +34,7 @@ import purchase_order
 from models import (
     AllBreakdownsResponse,
     BreakdownResponse,
+    NewDesignFestivalSpikesResponse,
     NewDesignsResponse,
     PlanResponse,
     TopRegion,
@@ -155,6 +156,18 @@ def list_new_designs(
     against the full plan so it matches ``newDesignCount`` exactly."""
     items = data.get_new_designs(max_age_days=maxAgeDays)
     return NewDesignsResponse(total=len(items), items=items)
+
+
+@app.get("/api/new-designs/festival-outlook", response_model=NewDesignFestivalSpikesResponse, tags=["plan"])
+def list_new_design_festival_spikes(
+    maxAgeDays: int = Query(90, ge=1, le=3650, description="Launched within this many days"),
+) -> NewDesignFestivalSpikesResponse:
+    """Newly-launched designs whose 6-week forecast predicts a genuine uplift
+    in a festival/sale week, plus the material-similar designs the cold-start
+    blend borrowed that demand shape from (these designs haven't lived
+    through a festival of their own yet)."""
+    items = data.get_new_design_festival_spikes(max_age_days=maxAgeDays)
+    return NewDesignFestivalSpikesResponse(total=len(items), items=items)
 
 
 # Declared BEFORE "/{sku}" so the static "breakdown" path is matched first.

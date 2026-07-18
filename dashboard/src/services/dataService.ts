@@ -5,6 +5,7 @@ import type {
   TopWarehouseRow,
   BreakdownResponse,
   NewDesignRow,
+  NewDesignFestivalSpike,
 } from "@/types";
 
 interface PlanResponse {
@@ -16,6 +17,11 @@ interface PlanResponse {
 interface NewDesignsResponse {
   total: number;
   items: NewDesignRow[];
+}
+
+interface NewDesignFestivalSpikesResponse {
+  total: number;
+  items: NewDesignFestivalSpike[];
 }
 
 // --- Inhouse / FOB (shared row shape) ---------------------------------------- //
@@ -231,6 +237,12 @@ export const dataService = {
   /** All newly-launched designs (not just the count) for the KPI drill-down. */
   async newDesigns(maxAgeDays = 90) {
     return apiGet<NewDesignsResponse>(`/api/new-designs?maxAgeDays=${maxAgeDays}`);
+  },
+
+  /** Newly-launched designs predicted to spike at a specific festival/sale,
+   * based on the demand shape borrowed from material-similar designs. */
+  async newDesignFestivalSpikes(maxAgeDays = 90) {
+    return apiGet<NewDesignFestivalSpikesResponse>(`/api/new-designs/festival-outlook?maxAgeDays=${maxAgeDays}`);
   },
 
   /** Server-side SKU/design search across the FULL plan (not just the

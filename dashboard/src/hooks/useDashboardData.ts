@@ -36,6 +36,14 @@ export function useNewDesigns(enabled: boolean, maxAgeDays = 90) {
   });
 }
 
+export function useNewDesignFestivalSpikes(enabled: boolean, maxAgeDays = 90) {
+  return useQuery({
+    queryKey: ["newDesignFestivalSpikes", maxAgeDays],
+    queryFn: () => dataService.newDesignFestivalSpikes(maxAgeDays),
+    enabled,
+  });
+}
+
 export function useInhouseLots(process?: string) {
   return useQuery({
     queryKey: ["inhouseLots", process],
