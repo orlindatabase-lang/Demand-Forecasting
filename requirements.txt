@@ -1,0 +1,7 @@
+# Core dependencies for the demand-forecasting system
+pandas>=2.0
+numpy>=1.24
+lightgbm>=4.0
+joblib>=1.3
+# Optional (only if you re-fetch source data in the notebook):
+# google-cloud-bigquery, db-dtypes, requests

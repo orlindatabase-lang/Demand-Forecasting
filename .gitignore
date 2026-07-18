@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+api/.cache/
+dashboard/node_modules/
+dashboard/dist/
+
+# Large/legacy data exports kept locally but not tracked in history
+# (scratch pulls from earlier debugging, not referenced by any live code).
+archive/
+demand_forecasting/outputs/
+*.parquet
+final_merged_data.csv
+merged_sales_erp.csv
+Allocation_Data.csv
+Closed_Lot.csv
+df1.csv

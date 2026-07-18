@@ -1,0 +1,410 @@
+LT-06747 — design 041-03 — stuck at Cutting, 90d old, 85d over its 5d expected time, 54 pcs pending
+LT-06670 — design 009-02 — stuck at Final Barcode Generator, 87d old, 85d over its 2d expected time, 2 pcs pending
+LT-07316 — design 444-07 — stuck at Final Barcode Generator, 87d old, 85d over its 2d expected time, 8 pcs pending
+LT-06746 — design 041-02 — stuck at Cutting, 89d old, 84d over its 5d expected time, 60 pcs pending
+LT-06770 — design K-8303-PANT — stuck at Cutting, 86d old, 81d over its 5d expected time, 48 pcs pending
+LT-07147 — design K-8301 — stuck at Cutting, 86d old, 81d over its 5d expected time, 48 pcs pending
+LT-06970 — design 043-03 — stuck at Final Barcode Generator, 81d old, 79d over its 2d expected time, 1 pcs pending
+LT-07040 — design 444-08 — stuck at Final Barcode Generator, 81d old, 79d over its 2d expected time, 39 pcs pending
+LT-06780 — design K-6403-DUPATTA, vendor AGASTYA COUTURE — stuck at Stitching, 89d old, 77d over its 12d expected time, 183 pcs pending
+LT-06873 — design 014-02, vendor SHIVAM CREATION — stuck at Stitching, 88d old, 76d over its 12d expected time, 8 pcs pending
+LT-07291 — design 417-03 — stuck at Final Barcode Generator, 78d old, 76d over its 2d expected time, 15 pcs pending
+LT-07321 — design 444-07 — stuck at Stitching, 86d old, 74d over its 12d expected time, 3 pcs pending
+LT-07347 — design 444-08, vendor H R FASHION — stuck at Stitching, 86d old, 74d over its 12d expected time, 204 pcs pending
+LT-06657 — design 490-04 — stuck at Final Barcode Generator, 76d old, 74d over its 2d expected time, 10 pcs pending
+LT-07754 — design 444-08, vendor H R FASHION — stuck at Stitching, 83d old, 71d over its 12d expected time, 2 pcs pending
+LT-06678 — design 340-02, vendor SIDHDHI CREATION — stuck at Stitching, 82d old, 70d over its 12d expected time, 1 pcs pending
+LT-06793 — design 335-01, vendor SIDHDHI CREATION — stuck at Stitching, 82d old, 70d over its 12d expected time, 1 pcs pending
+LT-06834 — design 376-02 — stuck at Final Barcode Generator, 72d old, 70d over its 2d expected time, 11 pcs pending
+LT-07387 — design K-6302-DUPATTA — stuck at Cutting, 74d old, 69d over its 5d expected time, 1 pcs pending
+LT-06747 — design 041-03, vendor MAA KRUPA GARMENT — stuck at Stitching, 80d old, 68d over its 12d expected time, 6 pcs pending
+LT-06746 — design 041-02, vendor MAA KRUPA GARMENT — stuck at Stitching, 80d old, 68d over its 12d expected time, 8 pcs pending
+LT-07315 — design 444-06-PANT, vendor H R FASHION — stuck at Stitching, 80d old, 68d over its 12d expected time, 105 pcs pending
+LT-07966 — design 336-07 — stuck at Cutting, 73d old, 68d over its 5d expected time, 5 pcs pending
+LT-07737 — design 444-05-DUPATTA, vendor H R FASHION — stuck at Stitching, 79d old, 67d over its 12d expected time, 33 pcs pending
+LT-07610 — design 024-02 — stuck at Cutting, 72d old, 67d over its 5d expected time, 18 pcs pending
+LT-06770 — design nan, vendor JAMIL — stuck at Stitching, 78d old, 66d over its 12d expected time, 1740 pcs pending
+LT-07181 — design 049-02, vendor H R FASHION — stuck at Stitching, 75d old, 63d over its 12d expected time, 4 pcs pending
+LT-06363 — design 467-03 — stuck at Final Barcode Generator, 65d old, 63d over its 2d expected time, 3 pcs pending
+LT-07306 — design 417-03 — stuck at Stitching, 74d old, 62d over its 12d expected time, 34 pcs pending
+LT-07180 — design 049-01, vendor H R FASHION — stuck at Stitching, 74d old, 62d over its 12d expected time, 73 pcs pending
+LT-07182 — design 049-03-LEHENGA, vendor H R FASHION — stuck at Stitching, 74d old, 62d over its 12d expected time, 186 pcs pending
+LT-07183 — design 049-04-DUPATTA, vendor H R FASHION — stuck at Stitching, 74d old, 62d over its 12d expected time, 140 pcs pending
+LT-06707 — design 475-02 — stuck at Final Barcode Generator, 64d old, 62d over its 2d expected time, 7 pcs pending
+LT-07279 — design 335-04, vendor SIDHDHI CREATION — stuck at Stitching, 73d old, 61d over its 12d expected time, 6 pcs pending
+LT-06778 — design K-6604, vendor ALISHA FASHION — stuck at Stitching, 73d old, 61d over its 12d expected time, 632 pcs pending
+LT-06450 — design 476-02 — stuck at Final Barcode Generator, 63d old, 61d over its 2d expected time, 1 pcs pending
+LT-06835 — design 376-03 — stuck at Final Barcode Generator, 63d old, 61d over its 2d expected time, 30 pcs pending
+LT-06766 — design K-8603, vendor BREEZY IMPORT EXPORT — stuck at Stitching, 72d old, 60d over its 12d expected time, 13 pcs pending
+LT-07737 — design 444-05 — stuck at Final Barcode Generator, 62d old, 60d over its 2d expected time, 1 pcs pending
+LT-07030 — design 417-04 — stuck at Final Barcode Generator, 62d old, 60d over its 2d expected time, 2 pcs pending
+LT-07073 — design 044-04 — stuck at General Store Out, 62d old, 60d over its 2d expected time, 54 pcs pending
+LT-07073 — design 044-04 — stuck at Final Barcode Generator, 61d old, 59d over its 2d expected time, 11 pcs pending
+LT-07759 — design 444-08 — stuck at Final Barcode Generator, 59d old, 57d over its 2d expected time, 1 pcs pending
+LT-07755 — design 444-08 — stuck at Final Barcode Generator, 59d old, 57d over its 2d expected time, 1 pcs pending
+LT-07701 — design 417-03, vendor H R FASHION — stuck at Stitching, 68d old, 56d over its 12d expected time, 56 pcs pending
+LT-07297 — design 417-03, vendor H R FASHION — stuck at Stitching, 68d old, 56d over its 12d expected time, 443 pcs pending
+LT-07699 — design 417-03-PANT, vendor H R FASHION — stuck at Stitching, 68d old, 56d over its 12d expected time, 408 pcs pending
+LT-07411 — design K-9801-PANT — stuck at Cutting, 60d old, 55d over its 5d expected time, 6 pcs pending
+LT-07700 — design 417-03-PANT, vendor H R FASHION — stuck at Stitching, 66d old, 54d over its 12d expected time, 1323 pcs pending
+LT-07919 — design 417-03-DUPATTA, vendor H R FASHION — stuck at Stitching, 66d old, 54d over its 12d expected time, 142 pcs pending
+LT-07442 — design 050-03, vendor REKHA CREATION — stuck at Stitching, 66d old, 54d over its 12d expected time, 4 pcs pending
+LT-07720 — design 417-07-PANT, vendor H R FASHION — stuck at Stitching, 66d old, 54d over its 12d expected time, 677 pcs pending
+LT-07071 — design 044-02 — stuck at Final Barcode Generator, 56d old, 54d over its 2d expected time, 7 pcs pending
+LT-07897 — design 417-04 — stuck at Cutting, 58d old, 53d over its 5d expected time, 30 pcs pending
+LT-07315 — design 444-06 — stuck at Final Barcode Generator, 55d old, 53d over its 2d expected time, 3 pcs pending
+LT-07881 — design 474-02-PANT — stuck at Cutting, 55d old, 50d over its 5d expected time, 21 pcs pending
+LT-06699 — design 467-04, vendor BREEZY IMPORT EXPORT — stuck at Stitching, 59d old, 47d over its 12d expected time, 1701 pcs pending
+LT-07721 — design 444-01, vendor H R FASHION — stuck at Stitching, 56d old, 44d over its 12d expected time, 577 pcs pending
+LT-07931 — design 444-04, vendor H R FASHION — stuck at Stitching, 56d old, 44d over its 12d expected time, 72 pcs pending
+LT-07929 — design 444-04, vendor H R FASHION — stuck at Stitching, 56d old, 44d over its 12d expected time, 1620 pcs pending
+LT-07930 — design 444-04, vendor H R FASHION — stuck at Stitching, 56d old, 44d over its 12d expected time, 1620 pcs pending
+LT-07618 — design 025-02 — stuck at Stitching, 56d old, 44d over its 12d expected time, 56 pcs pending
+LT-06675 — design 014-03 — stuck at Final Barcode Generator, 46d old, 44d over its 2d expected time, 9 pcs pending
+LT-07148 — design K-8302 — stuck at Final Barcode Generator, 45d old, 43d over its 2d expected time, 1 pcs pending
+LT-06769 — design K-8302 — stuck at Stitching, 53d old, 41d over its 12d expected time, 5 pcs pending
+LT-07148 — design K-8302 — stuck at Stitching, 53d old, 41d over its 12d expected time, 5 pcs pending
+LT-07912 — design 417-04-DUPATTA — stuck at Cutting, 46d old, 41d over its 5d expected time, 30 pcs pending
+LT-07937 — design 444-05, vendor H R FASHION — stuck at Stitching, 52d old, 40d over its 12d expected time, 120 pcs pending
+LT-07736 — design 444-05, vendor H R FASHION — stuck at Stitching, 52d old, 40d over its 12d expected time, 1602 pcs pending
+LT-07783 — design 055-01-SALWAR, vendor RAMLAXMAN INDUSTRIES PRIVATE LIMITED — stuck at Stitching, 51d old, 39d over its 12d expected time, 558 pcs pending
+LT-07784 — design 055-02, vendor RAMLAXMAN INDUSTRIES PRIVATE LIMITED — stuck at Stitching, 51d old, 39d over its 12d expected time, 900 pcs pending
+LT-07377 — design 490-03 — stuck at Final Barcode Generator, 40d old, 38d over its 2d expected time, 8 pcs pending
+LT-07072 — design 044-03, vendor KAAVYA KREATIONS — stuck at Stitching, 48d old, 36d over its 12d expected time, 900 pcs pending
+LT-07822 — design 358-03 — stuck at Cutting, 40d old, 35d over its 5d expected time, 65 pcs pending
+LT-07591 — design 358-03 — stuck at Cutting, 40d old, 35d over its 5d expected time, 50 pcs pending
+LT-07821 — design 358-02 — stuck at Cutting, 40d old, 35d over its 5d expected time, 50 pcs pending
+LT-07820 — design 358-01 — stuck at Cutting, 40d old, 35d over its 5d expected time, 50 pcs pending
+LT-07982 — design 026-04-PLAZZO — stuck at Cutting, 39d old, 34d over its 5d expected time, 24 pcs pending
+LT-07991 — design 026-03-PLAZZO — stuck at Cutting, 39d old, 34d over its 5d expected time, 36 pcs pending
+LT-00221 — design 550-02-PLAZZO — stuck at Cutting, 39d old, 34d over its 5d expected time, 36 pcs pending
+LT-07990 — design 026-02 — stuck at Cutting, 39d old, 34d over its 5d expected time, 18 pcs pending
+LT-07341 — design K-7002-DUPATTA — stuck at Cutting, 37d old, 32d over its 5d expected time, 629 pcs pending
+LT-07345 — design K-7004-DUPATTA — stuck at Cutting, 37d old, 32d over its 5d expected time, 144 pcs pending
+LT-00164 — design 386-03 — stuck at Cutting, 36d old, 31d over its 5d expected time, 56 pcs pending
+LT-00166 — design 386-01 — stuck at Cutting, 36d old, 31d over its 5d expected time, 57 pcs pending
+LT-00076 — design 017-01-DUPATTA — stuck at Cutting, 35d old, 30d over its 5d expected time, 36 pcs pending
+LT-00077 — design 017-02-PLAZZO — stuck at Cutting, 35d old, 30d over its 5d expected time, 77 pcs pending
+LT-00078 — design 017-03-PLAZZO — stuck at Cutting, 35d old, 30d over its 5d expected time, 3 pcs pending
+LT-06794 — design 335-04 — stuck at Final Barcode Generator, 32d old, 30d over its 2d expected time, 87 pcs pending
+LT-07586 — design 352-04 — stuck at Stitching, 40d old, 28d over its 12d expected time, 17 pcs pending
+LT-00011 — design 058-04, vendor REKHA CREATION — stuck at Stitching, 40d old, 28d over its 12d expected time, 90 pcs pending
+LT-00008 — design 058-01-PLAZZO, vendor REKHA CREATION — stuck at Stitching, 40d old, 28d over its 12d expected time, 190 pcs pending
+LT-07612 — design 024-04 — stuck at Cutting, 33d old, 28d over its 5d expected time, 18 pcs pending
+LT-07611 — design 024-03 — stuck at Cutting, 33d old, 28d over its 5d expected time, 18 pcs pending
+LT-07609 — design 024-01 — stuck at Cutting, 33d old, 28d over its 5d expected time, 18 pcs pending
+LT-00010 — design 058-03-PLAZZO, vendor REKHA CREATION — stuck at Stitching, 39d old, 27d over its 12d expected time, 161 pcs pending
+LT-00009 — design 058-02-PLAZZO, vendor REKHA CREATION — stuck at Stitching, 39d old, 27d over its 12d expected time, 2 pcs pending
+LT-00480 — design 474-01 — stuck at Cutting, 32d old, 27d over its 5d expected time, 96 pcs pending
+LT-07680 — design K-6304 — stuck at Cutting, 31d old, 26d over its 5d expected time, 33 pcs pending
+LT-07679 — design K-6302-DUPATTA — stuck at Cutting, 31d old, 26d over its 5d expected time, 65 pcs pending
+LT-00278 — design 474-01 — stuck at Cutting, 31d old, 26d over its 5d expected time, 12 pcs pending
+LT-00484 — design 474-01 — stuck at Cutting, 31d old, 26d over its 5d expected time, 36 pcs pending
+LT-07590 — design 356-04 — stuck at Cutting, 30d old, 25d over its 5d expected time, 10 pcs pending
+LT-00215 — design 544-02-PLAZZO — stuck at Cutting, 30d old, 25d over its 5d expected time, 42 pcs pending
+LT-07589 — design 356-03 — stuck at Cutting, 30d old, 25d over its 5d expected time, 10 pcs pending
+LT-00214 — design 544-01 — stuck at Cutting, 30d old, 25d over its 5d expected time, 30 pcs pending
+LT-00216 — design 544-03 — stuck at Cutting, 30d old, 25d over its 5d expected time, 36 pcs pending
+LT-07283 — design 356-01 — stuck at Cutting, 30d old, 25d over its 5d expected time, 5 pcs pending
+LT-07285 — design 356-03 — stuck at Cutting, 29d old, 24d over its 5d expected time, 5 pcs pending
+LT-00071 — design 014-01-DUPATTA — stuck at Stitching, 35d old, 23d over its 12d expected time, 38 pcs pending
+LT-07279 — design 335-04 — stuck at Final Barcode Generator, 25d old, 23d over its 2d expected time, 13 pcs pending
+LT-07415 — design 488-04-DUPATTA — stuck at Thread Cutting Store, 25d old, 22d over its 3d expected time, 30 pcs pending
+LT-07699 — design 417-03 — stuck at General Store Out, 24d old, 22d over its 2d expected time, 66 pcs pending
+LT-07181 — design 049-02-DUPATTA — stuck at Thread Cutting Store, 24d old, 21d over its 3d expected time, 3 pcs pending
+LT-00219 — design 546-03 — stuck at Cutting, 25d old, 20d over its 5d expected time, 36 pcs pending
+LT-00268 — design 417-04-PANT — stuck at Thread Cutting Store, 23d old, 20d over its 3d expected time, 56 pcs pending
+LT-00573 — design 474-01 — stuck at Cutting, 24d old, 19d over its 5d expected time, 45 pcs pending
+LT-07427 — design 020-02-DUPATTA — stuck at Cutting, 24d old, 19d over its 5d expected time, 30 pcs pending
+LT-00217 — design 546-01 — stuck at Cutting, 24d old, 19d over its 5d expected time, 12 pcs pending
+LT-00218 — design 546-02 — stuck at Cutting, 24d old, 19d over its 5d expected time, 30 pcs pending
+LT-07813 — design 020-01-PLAZZO — stuck at Cutting, 24d old, 19d over its 5d expected time, 27 pcs pending
+LT-00317 — design K-7004 — stuck at Cutting, 24d old, 19d over its 5d expected time, 72 pcs pending
+LT-00353 — design 025-03-PLAZZO — stuck at Cutting, 24d old, 19d over its 5d expected time, 9 pcs pending
+LT-07624 — design 025-04 — stuck at Cutting, 24d old, 19d over its 5d expected time, 72 pcs pending
+LT-07284 — design 356-02 — stuck at Final Barcode Generator, 21d old, 19d over its 2d expected time, 5 pcs pending
+LT-07642 — design 488-03-PLAZZO — stuck at Stitching, 30d old, 18d over its 12d expected time, 191 pcs pending
+LT-07609 — design 024-01-PLAZZO — stuck at Stitching, 30d old, 18d over its 12d expected time, 1 pcs pending
+LT-00058 — design 061-01-PLAZZO, vendor SAHJANAND TEXTILES — stuck at Stitching, 30d old, 18d over its 12d expected time, 184 pcs pending
+LT-07612 — design 024-04-PLAZZO — stuck at Stitching, 30d old, 18d over its 12d expected time, 53 pcs pending
+LT-00059 — design 061-02-PLAZZO, vendor SAHJANAND TEXTILES — stuck at Stitching, 30d old, 18d over its 12d expected time, 441 pcs pending
+LT-07095 — design 046-01, vendor SHAMA FASHION — stuck at Stitching, 30d old, 18d over its 12d expected time, 237 pcs pending
+LT-00482 — design 474-01 — stuck at Cutting, 23d old, 18d over its 5d expected time, 72 pcs pending
+LT-00571 — design 474-01 — stuck at Cutting, 23d old, 18d over its 5d expected time, 18 pcs pending
+LT-07376 — design 490-03 — stuck at Final Barcode Generator, 20d old, 18d over its 2d expected time, 9 pcs pending
+LT-07411 — design K-9801 — stuck at Stitching, 29d old, 17d over its 12d expected time, 1 pcs pending
+LT-07868 — design 488-02-PLAZZO — stuck at Stitching, 29d old, 17d over its 12d expected time, 281 pcs pending
+LT-07414 — design 488-03-DUPATTA — stuck at Stitching, 29d old, 17d over its 12d expected time, 234 pcs pending
+LT-06708 — design 491-01 — stuck at Cutting, 22d old, 17d over its 5d expected time, 102 pcs pending
+LT-00259 — design 077-03-PLAZZO — stuck at Cutting, 21d old, 16d over its 5d expected time, 3 pcs pending
+LT-00258 — design 077-02 — stuck at Cutting, 21d old, 16d over its 5d expected time, 11 pcs pending
+LT-00257 — design 077-01-DUPATTA — stuck at Cutting, 21d old, 16d over its 5d expected time, 33 pcs pending
+LT-00463 — design 077-04-DUPATTA — stuck at Cutting, 21d old, 16d over its 5d expected time, 126 pcs pending
+LT-07051 — design 491-01 — stuck at Cutting, 21d old, 16d over its 5d expected time, 174 pcs pending
+LT-00195 — design 417-03-DUPATTA — stuck at Thread Cutting Store, 19d old, 16d over its 3d expected time, 30 pcs pending
+LT-00071 — design 014-01 — stuck at Final Barcode Generator, 18d old, 16d over its 2d expected time, 9 pcs pending
+LT-07731 — design 444-04-PANT, vendor H R FASHION — stuck at Stitching, 27d old, 15d over its 12d expected time, 1519 pcs pending
+LT-06780 — design K-6403 — stuck at Thread Cutting Store, 18d old, 15d over its 3d expected time, 13 pcs pending
+LT-07931 — design 444-04 — stuck at Final Barcode Generator, 17d old, 15d over its 2d expected time, 3 pcs pending
+LT-00288 — design 498-01 — stuck at Stitching, 26d old, 14d over its 12d expected time, 60 pcs pending
+LT-00220 — design 550-01-PLAZZO, vendor SAVANI TEX — stuck at Stitching, 26d old, 14d over its 12d expected time, 3 pcs pending
+LT-00221 — design 550-02-PLAZZO, vendor SAVANI TEX — stuck at Stitching, 26d old, 14d over its 12d expected time, 1 pcs pending
+LT-07936 — design 444-04, vendor H R FASHION — stuck at Stitching, 26d old, 14d over its 12d expected time, 1335 pcs pending
+LT-06885 — design 020-02 — stuck at Cutting, 19d old, 14d over its 5d expected time, 36 pcs pending
+LT-00719 — design 553-01 — stuck at Cutting, 19d old, 14d over its 5d expected time, 6 pcs pending
+LT-00214 — design 544-01-PLAZZO — stuck at Thread Cutting Store, 17d old, 14d over its 3d expected time, 1 pcs pending
+LT-00350 — design 025-02 — stuck at Thread Cutting Store, 17d old, 14d over its 3d expected time, 34 pcs pending
+LT-07627 — design 473-02 — stuck at General Store Out, 16d old, 14d over its 2d expected time, 21 pcs pending
+LT-07935 — design 444-04-DUPATTA, vendor H R FASHION — stuck at Stitching, 25d old, 13d over its 12d expected time, 930 pcs pending
+LT-07826 — design K-7101-PANT — stuck at Cutting, 18d old, 13d over its 5d expected time, 24 pcs pending
+LT-07828 — design K-7104 — stuck at Cutting, 18d old, 13d over its 5d expected time, 66 pcs pending
+LT-07827 — design K-7102-PANT — stuck at Cutting, 18d old, 13d over its 5d expected time, 48 pcs pending
+LT-00053 — design 386-04 — stuck at Cutting, 18d old, 13d over its 5d expected time, 5 pcs pending
+LT-07144 — design K-7102-PANT — stuck at Cutting, 18d old, 13d over its 5d expected time, 48 pcs pending
+LT-00193 — design 043-04-DUPATTA — stuck at Cutting, 18d old, 13d over its 5d expected time, 90 pcs pending
+LT-00490 — design 545-04-PLAZZO — stuck at Cutting, 18d old, 13d over its 5d expected time, 6 pcs pending
+LT-00317 — design K-7004-DUPATTA — stuck at Thread Cutting Store, 16d old, 13d over its 3d expected time, 120 pcs pending
+LT-07982 — design 026-04-PLAZZO — stuck at Thread Cutting Store, 16d old, 13d over its 3d expected time, 53 pcs pending
+LT-00351 — design 025-02-DUPATTA — stuck at Thread Cutting Store, 16d old, 13d over its 3d expected time, 43 pcs pending
+LT-07624 — design 025-04-DUPATTA — stuck at Thread Cutting Store, 16d old, 13d over its 3d expected time, 41 pcs pending
+LT-06780 — design K-6403 — stuck at General Store Out, 15d old, 13d over its 2d expected time, 183 pcs pending
+LT-00077 — design 017-02 — stuck at Final Barcode Generator, 15d old, 13d over its 2d expected time, 43 pcs pending
+LT-07411 — design K-9801 — stuck at Final Barcode Generator, 15d old, 13d over its 2d expected time, 136 pcs pending
+LT-00290 — design 498-01-PANT — stuck at Stitching, 24d old, 12d over its 12d expected time, 117 pcs pending
+LT-00173 — design 364-03 — stuck at Stitching, 24d old, 12d over its 12d expected time, 37 pcs pending
+LT-07285 — design 356-03 — stuck at Stitching, 24d old, 12d over its 12d expected time, 110 pcs pending
+LT-07283 — design nan, vendor RD TEXTILES — stuck at Stitching, 24d old, 12d over its 12d expected time, 50 pcs pending
+LT-07590 — design nan, vendor RD TEXTILES — stuck at Stitching, 24d old, 12d over its 12d expected time, 515 pcs pending
+LT-07595 — design 364-02 — stuck at Stitching, 24d old, 12d over its 12d expected time, 14 pcs pending
+LT-07286 — design 356-04 — stuck at Stitching, 24d old, 12d over its 12d expected time, 38 pcs pending
+LT-07589 — design nan, vendor RD TEXTILES — stuck at Stitching, 24d old, 12d over its 12d expected time, 595 pcs pending
+LT-07284 — design 356-02 — stuck at Stitching, 24d old, 12d over its 12d expected time, 173 pcs pending
+LT-07587 — design 356-01 — stuck at Stitching, 24d old, 12d over its 12d expected time, 451 pcs pending
+LT-00078 — design 017-03-PLAZZO — stuck at Stitching, 23d old, 11d over its 12d expected time, 11 pcs pending
+LT-00077 — design 017-02 — stuck at Stitching, 23d old, 11d over its 12d expected time, 10 pcs pending
+LT-07606 — design 022-02-PLAZZO, vendor SWASTIK GAURI GARMENTS — stuck at Stitching, 23d old, 11d over its 12d expected time, 486 pcs pending
+LT-07603 — design 022-01-PLAZZO, vendor SWASTIK GAURI GARMENTS — stuck at Stitching, 23d old, 11d over its 12d expected time, 1080 pcs pending
+LT-07605 — design 022-02-BLOUSE, vendor SWASTIK GAURI GARMENTS — stuck at Stitching, 23d old, 11d over its 12d expected time, 792 pcs pending
+LT-07604 — design 022-01-PLAZZO, vendor SWASTIK GAURI GARMENTS — stuck at Stitching, 23d old, 11d over its 12d expected time, 882 pcs pending
+LT-07631 — design 484-01-DUPATTA — stuck at Cutting, 16d old, 11d over its 5d expected time, 81 pcs pending
+LT-00347 — design 014-04 — stuck at Cutting, 16d old, 11d over its 5d expected time, 359 pcs pending
+LT-00346 — design 014-03 — stuck at Cutting, 16d old, 11d over its 5d expected time, 326 pcs pending
+LT-00528 — design 014-03-PANT — stuck at Cutting, 16d old, 11d over its 5d expected time, 492 pcs pending
+LT-00463 — design 077-04-PLAZZO — stuck at Thread Cutting Store, 14d old, 11d over its 3d expected time, 41 pcs pending
+LT-00462 — design 077-04-DUPATTA — stuck at Thread Cutting Store, 14d old, 11d over its 3d expected time, 93 pcs pending
+LT-00259 — design 077-03-DUPATTA — stuck at Thread Cutting Store, 14d old, 11d over its 3d expected time, 36 pcs pending
+LT-07822 — design 358-03 — stuck at Stitching, 22d old, 10d over its 12d expected time, 1 pcs pending
+LT-00267 — design 417-04-PANT — stuck at Stitching, 22d old, 10d over its 12d expected time, 90 pcs pending
+LT-00215 — design 544-02-PLAZZO — stuck at Stitching, 22d old, 10d over its 12d expected time, 54 pcs pending
+LT-07820 — design 358-01 — stuck at Stitching, 22d old, 10d over its 12d expected time, 1 pcs pending
+LT-00074 — design 014-04 — stuck at Stitching, 22d old, 10d over its 12d expected time, 16 pcs pending
+LT-00360 — design 496-01 — stuck at Cutting, 15d old, 10d over its 5d expected time, 69 pcs pending
+LT-00207 — design 496-01-DUPATTA — stuck at Cutting, 15d old, 10d over its 5d expected time, 18 pcs pending
+LT-00208 — design 496-03 — stuck at Cutting, 15d old, 10d over its 5d expected time, 30 pcs pending
+LT-00475 — design 014-03 — stuck at Cutting, 15d old, 10d over its 5d expected time, 486 pcs pending
+LT-00058 — design 061-01 — stuck at Thread Cutting Store, 13d old, 10d over its 3d expected time, 3 pcs pending
+LT-00076 — design 017-01 — stuck at Final Barcode Generator, 12d old, 10d over its 2d expected time, 47 pcs pending
+LT-07591 — design 358-03 — stuck at Final Barcode Generator, 12d old, 10d over its 2d expected time, 14 pcs pending
+LT-07821 — design 358-02 — stuck at Final Barcode Generator, 12d old, 10d over its 2d expected time, 85 pcs pending
+LT-00076 — design 017-01 — stuck at Stitching, 21d old, 9d over its 12d expected time, 28 pcs pending
+LT-07427 — design 020-02 — stuck at Stitching, 21d old, 9d over its 12d expected time, 61 pcs pending
+LT-07813 — design 020-01-DUPATTA — stuck at Stitching, 21d old, 9d over its 12d expected time, 376 pcs pending
+LT-00574 — design 474-01 — stuck at Cutting, 14d old, 9d over its 5d expected time, 45 pcs pending
+LT-00058 — design 061-01 — stuck at Final Barcode Generator, 11d old, 9d over its 2d expected time, 8 pcs pending
+LT-00479 — design 340-01, vendor SIDHDHI CREATION — stuck at Stitching, 20d old, 8d over its 12d expected time, 1 pcs pending
+LT-00478 — design 340-01, vendor SIDHDHI CREATION — stuck at Stitching, 20d old, 8d over its 12d expected time, 165 pcs pending
+LT-00357 — design 340-01, vendor SIDHDHI CREATION — stuck at Stitching, 20d old, 8d over its 12d expected time, 536 pcs pending
+LT-00483 — design 474-01 — stuck at Cutting, 13d old, 8d over its 5d expected time, 180 pcs pending
+LT-00466 — design 042-03-DUPATTA — stuck at Cutting, 13d old, 8d over its 5d expected time, 12 pcs pending
+LT-00467 — design 042-04 — stuck at Cutting, 13d old, 8d over its 5d expected time, 58 pcs pending
+LT-00352 — design 025-03-PLAZZO — stuck at Cutting, 13d old, 8d over its 5d expected time, 54 pcs pending
+LT-00309 — design 444-04-PANT — stuck at Cutting, 13d old, 8d over its 5d expected time, 790 pcs pending
+LT-00270 — design 444-04 — stuck at Cutting, 13d old, 8d over its 5d expected time, 747 pcs pending
+LT-00482 — design 474-01 — stuck at Thread Cutting Store, 11d old, 8d over its 3d expected time, 87 pcs pending
+LT-00079 — design 017-04 — stuck at Final Barcode Generator, 10d old, 8d over its 2d expected time, 294 pcs pending
+LT-00351 — design 025-02-DUPATTA — stuck at Stitching, 19d old, 7d over its 12d expected time, 43 pcs pending
+LT-00349 — design 025-01-PLAZZO — stuck at Cutting, 12d old, 7d over its 5d expected time, 56 pcs pending
+LT-00269 — design 444-04 — stuck at Cutting, 12d old, 7d over its 5d expected time, 720 pcs pending
+LT-07427 — design 020-02 — stuck at Thread Cutting Store, 10d old, 7d over its 3d expected time, 64 pcs pending
+LT-00481 — design 474-01-DUPATTA — stuck at Stitching, 18d old, 6d over its 12d expected time, 736 pcs pending
+LT-00079 — design 017-04-PLAZZO — stuck at Stitching, 18d old, 6d over its 12d expected time, 28 pcs pending
+LT-00186 — design 038-01-PLAZZO — stuck at Cutting, 11d old, 6d over its 5d expected time, 579 pcs pending
+LT-00188 — design 038-02-PLAZZO — stuck at Cutting, 11d old, 6d over its 5d expected time, 711 pcs pending
+LT-00190 — design 038-04-PLAZZO — stuck at Cutting, 11d old, 6d over its 5d expected time, 570 pcs pending
+LT-00191 — design 038-04-DUPATTA — stuck at Cutting, 11d old, 6d over its 5d expected time, 733 pcs pending
+LT-00199 — design 417-03-PANT — stuck at Thread Cutting Store, 9d old, 6d over its 3d expected time, 19 pcs pending
+LT-07813 — design 020-01-DUPATTA — stuck at Thread Cutting Store, 9d old, 6d over its 3d expected time, 125 pcs pending
+LT-07345 — design K-7004-DUPATTA — stuck at General Store Out, 8d old, 6d over its 2d expected time, 219 pcs pending
+LT-00214 — design 544-01 — stuck at General Store Out, 8d old, 6d over its 2d expected time, 18 pcs pending
+LT-07051 — design 491-01-DUPATTA — stuck at Stitching, 17d old, 5d over its 12d expected time, 268 pcs pending
+LT-00571 — design 474-01-PANT — stuck at Thread Cutting Store, 8d old, 5d over its 3d expected time, 41 pcs pending
+LT-06885 — design 020-02-DUPATTA — stuck at Thread Cutting Store, 8d old, 5d over its 3d expected time, 32 pcs pending
+LT-00259 — design 077-03 — stuck at Final Barcode Generator, 7d old, 5d over its 2d expected time, 3 pcs pending
+LT-00218 — design 546-02 — stuck at General Store Out, 7d old, 5d over its 2d expected time, 100 pcs pending
+LT-00257 — design 077-01 — stuck at Final Barcode Generator, 7d old, 5d over its 2d expected time, 76 pcs pending
+LT-00278 — design 474-01 — stuck at Final Barcode Generator, 7d old, 5d over its 2d expected time, 11 pcs pending
+LT-00051 — design 386-02, vendor TULSI FASHION — stuck at Stitching, 16d old, 4d over its 12d expected time, 250 pcs pending
+LT-00164 — design 386-03, vendor TULSI FASHION — stuck at Stitching, 16d old, 4d over its 12d expected time, 11 pcs pending
+LT-00166 — design 386-01, vendor TULSI FASHION — stuck at Stitching, 16d old, 4d over its 12d expected time, 10 pcs pending
+LT-00050 — design 386-01, vendor TULSI FASHION — stuck at Stitching, 16d old, 4d over its 12d expected time, 160 pcs pending
+LT-00052 — design 386-03, vendor TULSI FASHION — stuck at Stitching, 16d old, 4d over its 12d expected time, 219 pcs pending
+LT-00463 — design 077-04-DUPATTA — stuck at Stitching, 16d old, 4d over its 12d expected time, 1 pcs pending
+LT-00756 — design 549-02-PLAZZO — stuck at Cutting, 9d old, 4d over its 5d expected time, 88 pcs pending
+LT-00673 — design 553-02-PANT — stuck at Cutting, 9d old, 4d over its 5d expected time, 10 pcs pending
+LT-00674 — design 553-03-PANT — stuck at Cutting, 9d old, 4d over its 5d expected time, 16 pcs pending
+LT-00208 — design 496-03-DUPATTA — stuck at Thread Cutting Store, 7d old, 4d over its 3d expected time, 60 pcs pending
+LT-00207 — design 496-01-PLAZZO — stuck at Thread Cutting Store, 7d old, 4d over its 3d expected time, 176 pcs pending
+LT-00257 — design 077-01-DUPATTA — stuck at Stitching, 15d old, 3d over its 12d expected time, 82 pcs pending
+LT-00571 — design 474-01-PANT — stuck at Stitching, 15d old, 3d over its 12d expected time, 246 pcs pending
+LT-00217 — design 546-01-PLAZZO — stuck at Stitching, 15d old, 3d over its 12d expected time, 294 pcs pending
+LT-00573 — design 474-01-DUPATTA — stuck at Stitching, 15d old, 3d over its 12d expected time, 665 pcs pending
+LT-07723 — design 444-01, vendor H R FASHION — stuck at Stitching, 15d old, 3d over its 12d expected time, 1250 pcs pending
+LT-07735 — design 444-04-PANT, vendor H R FASHION — stuck at Stitching, 15d old, 3d over its 12d expected time, 1578 pcs pending
+LT-07733 — design 444-04, vendor H R FASHION — stuck at Stitching, 15d old, 3d over its 12d expected time, 1536 pcs pending
+LT-07734 — design 444-04, vendor H R FASHION — stuck at Stitching, 15d old, 3d over its 12d expected time, 1152 pcs pending
+LT-07742 — design 444-06, vendor JIYA FASHION — stuck at Stitching, 15d old, 3d over its 12d expected time, 1224 pcs pending
+LT-00704 — design 474-03-DUPATTA — stuck at Cutting, 8d old, 3d over its 5d expected time, 642 pcs pending
+LT-00658 — design 474-01 — stuck at Cutting, 8d old, 3d over its 5d expected time, 726 pcs pending
+LT-00800 — design 554-02 — stuck at Cutting, 8d old, 3d over its 5d expected time, 168 pcs pending
+LT-00349 — design 025-01-DUPATTA — stuck at Thread Cutting Store, 6d old, 3d over its 3d expected time, 255 pcs pending
+LT-00483 — design 474-01-PANT — stuck at Thread Cutting Store, 6d old, 3d over its 3d expected time, 936 pcs pending
+LT-00307 — design 444-07 — stuck at General Store Out, 5d old, 3d over its 2d expected time, 63 pcs pending
+LT-00258 — design 077-02-DUPATTA — stuck at Stitching, 14d old, 2d over its 12d expected time, 44 pcs pending
+LT-07144 — design K-7102-PANT, vendor SHIV SHAKTI PROCESS — stuck at Stitching, 14d old, 2d over its 12d expected time, 164 pcs pending
+LT-07828 — design K-7104, vendor SHIV SHAKTI PROCESS — stuck at Stitching, 14d old, 2d over its 12d expected time, 528 pcs pending
+LT-07826 — design K-7101-PANT, vendor SHIV SHAKTI PROCESS — stuck at Stitching, 14d old, 2d over its 12d expected time, 474 pcs pending
+LT-07827 — design K-7102-PANT, vendor SHIV SHAKTI PROCESS — stuck at Stitching, 14d old, 2d over its 12d expected time, 528 pcs pending
+LT-00272 — design 444-05, vendor ISTEKAR — stuck at Stitching, 14d old, 2d over its 12d expected time, 1632 pcs pending
+LT-00360 — design 496-01-DUPATTA — stuck at Thread Cutting Store, 5d old, 2d over its 3d expected time, 38 pcs pending
+LT-00173 — design 364-03 — stuck at Thread Cutting Store, 5d old, 2d over its 3d expected time, 79 pcs pending
+LT-00209 — design 496-04 — stuck at Thread Cutting Store, 5d old, 2d over its 3d expected time, 440 pcs pending
+LT-00352 — design 025-03-DUPATTA — stuck at Thread Cutting Store, 5d old, 2d over its 3d expected time, 102 pcs pending
+LT-07952 — design 444-06-PANT, vendor ISTEKAR — stuck at Stitching, 13d old, 1d over its 12d expected time, 1290 pcs pending
+LT-07962 — design 444-08, vendor ISTEKAR — stuck at Stitching, 13d old, 1d over its 12d expected time, 1404 pcs pending
+LT-07948 — design 444-06-PANT, vendor ISTEKAR — stuck at Stitching, 13d old, 1d over its 12d expected time, 1185 pcs pending
+LT-07963 — design 444-08, vendor ISTEKAR — stuck at Stitching, 13d old, 1d over its 12d expected time, 1410 pcs pending
+LT-00554 — design 444-05, vendor ISTEKAR — stuck at Stitching, 13d old, 1d over its 12d expected time, 915 pcs pending
+LT-00572 — design 474-01 — stuck at Cutting, 6d old, 1d over its 5d expected time, 630 pcs pending
+LT-00201 — design 417-03 — stuck at Cutting, 6d old, 1d over its 5d expected time, 87 pcs pending
+LT-00202 — design 417-03 — stuck at Cutting, 6d old, 1d over its 5d expected time, 1038 pcs pending
+LT-00198 — design 417-03 — stuck at Cutting, 6d old, 1d over its 5d expected time, 1124 pcs pending
+LT-00200 — design 417-03-DUPATTA — stuck at Cutting, 6d old, 1d over its 5d expected time, 852 pcs pending
+LT-00266 — design 417-03-DUPATTA — stuck at Cutting, 6d old, 1d over its 5d expected time, 848 pcs pending
+LT-00031 — design 444-05 — stuck at Thread Cutting Store, 4d old, 1d over its 3d expected time, 414 pcs pending
+LT-00304 — design 444-07-DUPATTA — stuck at Thread Cutting Store, 4d old, 1d over its 3d expected time, 99 pcs pending
+LT-00196 — design 417-03 — stuck at General Store Out, 3d old, 1d over its 2d expected time, 147 pcs pending
+LT-00196 — design 417-03 — stuck at Final Barcode Generator, 3d old, 1d over its 2d expected time, 91 pcs pending
+LT-00265 — design 417-03 — stuck at Final Barcode Generator, 3d old, 1d over its 2d expected time, 169 pcs pending
+LT-00258 — design 077-02 — stuck at Final Barcode Generator, 3d old, 1d over its 2d expected time, 131 pcs pending
+LT-07095 — design 046-01 — stuck at Final Barcode Generator, 3d old, 1d over its 2d expected time, 13 pcs pending
+LT-00196 — design 417-03 — stuck at Stitching, 12d old, 0d over its 12d expected time, 50 pcs pending
+LT-06885 — design 020-02-DUPATTA — stuck at Stitching, 12d old, 0d over its 12d expected time, 349 pcs pending
+LT-00347 — design 014-04-DUPATTA — stuck at Stitching, 12d old, 0d over its 12d expected time, 344 pcs pending
+LT-00475 — design 014-03-DUPATTA — stuck at Stitching, 12d old, 0d over its 12d expected time, 486 pcs pending
+LT-00528 — design 014-03-DUPATTA — stuck at Stitching, 12d old, 0d over its 12d expected time, 492 pcs pending
+LT-07631 — design 484-01 — stuck at Stitching, 11d old, 0d over its 12d expected time, 10 pcs pending
+LT-00192 — design 043-01-DUPATTA — stuck at Stitching, 10d old, 0d over its 12d expected time, 840 pcs pending
+LT-00346 — design 014-03 — stuck at Stitching, 10d old, 0d over its 12d expected time, 332 pcs pending
+LT-00193 — design 043-04-PLAZZO — stuck at Stitching, 10d old, 0d over its 12d expected time, 1022 pcs pending
+LT-00652 — design 474-01 — stuck at Cutting, 5d old, 0d over its 5d expected time, 1530 pcs pending
+LT-00645 — design 474-08 — stuck at Cutting, 5d old, 0d over its 5d expected time, 1944 pcs pending
+LT-00622 — design 014-03-PANT — stuck at Cutting, 5d old, 0d over its 5d expected time, 564 pcs pending
+LT-00621 — design 014-03 — stuck at Cutting, 5d old, 0d over its 5d expected time, 960 pcs pending
+LT-00623 — design 014-04-DUPATTA — stuck at Cutting, 5d old, 0d over its 5d expected time, 1494 pcs pending
+LT-07631 — design 484-01-DUPATTA — stuck at Thread Cutting Store, 3d old, 0d over its 3d expected time, 617 pcs pending
+LT-00173 — design 364-03 — stuck at Final Barcode Generator, 2d old, 0d over its 2d expected time, 230 pcs pending
+LT-00199 — design 417-03-DUPATTA — stuck at General Store Out, 2d old, 0d over its 2d expected time, 150 pcs pending
+LT-06766 — design K-8603 — stuck at Final Barcode Generator, 2d old, 0d over its 2d expected time, 39 pcs pending
+LT-00482 — design 474-01 — stuck at Final Barcode Generator, 2d old, 0d over its 2d expected time, 147 pcs pending
+LT-00483 — design 474-01-PANT — stuck at Stitching, 9d old, 0d over its 12d expected time, 216 pcs pending
+LT-00163 — design 073-03, vendor SHIV SHAKTI — stuck at Stitching, 9d old, 0d over its 12d expected time, 600 pcs pending
+LT-00162 — design 073-02-SALWAR, vendor SHIV SHAKTI — stuck at Stitching, 9d old, 0d over its 12d expected time, 576 pcs pending
+LT-00161 — design 073-01, vendor SHIV SHAKTI — stuck at Stitching, 9d old, 0d over its 12d expected time, 1092 pcs pending
+LT-00352 — design 025-03-DUPATTA — stuck at Stitching, 8d old, 0d over its 12d expected time, 432 pcs pending
+LT-00209 — design 496-04 — stuck at Stitching, 8d old, 0d over its 12d expected time, 348 pcs pending
+LT-00361 — design 551-04-PLAZZO — stuck at Stitching, 8d old, 0d over its 12d expected time, 450 pcs pending
+LT-00349 — design 025-01-PLAZZO — stuck at Stitching, 8d old, 0d over its 12d expected time, 675 pcs pending
+LT-00360 — design 496-01 — stuck at Stitching, 8d old, 0d over its 12d expected time, 2 pcs pending
+LT-00269 — design 444-04 — stuck at Stitching, 7d old, 0d over its 12d expected time, 960 pcs pending
+LT-00053 — design 386-04, vendor TULSI FASHION — stuck at Stitching, 7d old, 0d over its 12d expected time, 135 pcs pending
+LT-00270 — design 444-04 — stuck at Stitching, 7d old, 0d over its 12d expected time, 1180 pcs pending
+LT-00551 — design 444-04-PANT — stuck at Stitching, 5d old, 0d over its 12d expected time, 308 pcs pending
+LT-00467 — design 042-04-DUPATTA — stuck at Stitching, 5d old, 0d over its 12d expected time, 390 pcs pending
+LT-00574 — design 474-01-PANT — stuck at Stitching, 5d old, 0d over its 12d expected time, 860 pcs pending
+LT-00465 — design 042-02-PLAZZO — stuck at Stitching, 5d old, 0d over its 12d expected time, 972 pcs pending
+LT-00031 — design 444-05-DUPATTA, vendor JIYA FASHION — stuck at Stitching, 5d old, 0d over its 12d expected time, 16 pcs pending
+LT-00304 — design 444-07-DUPATTA, vendor JIYA FASHION — stuck at Stitching, 5d old, 0d over its 12d expected time, 106 pcs pending
+LT-00219 — design 546-03 — stuck at Stitching, 5d old, 0d over its 12d expected time, 1716 pcs pending
+LT-00264 — design 417-03 — stuck at Stitching, 5d old, 0d over its 12d expected time, 792 pcs pending
+LT-00629 — design 417-03 — stuck at Stitching, 5d old, 0d over its 12d expected time, 1024 pcs pending
+LT-07955 — design 444-06-PANT, vendor JIYA FASHION — stuck at Stitching, 5d old, 0d over its 12d expected time, 1365 pcs pending
+LT-07953 — design 444-06-PANT, vendor JIYA FASHION — stuck at Stitching, 5d old, 0d over its 12d expected time, 1395 pcs pending
+LT-00552 — design 444-05-DUPATTA, vendor JIYA FASHION — stuck at Stitching, 5d old, 0d over its 12d expected time, 1530 pcs pending
+LT-00550 — design 444-04, vendor JIYA FASHION — stuck at Stitching, 5d old, 0d over its 12d expected time, 1620 pcs pending
+LT-07951 — design 444-06-PANT, vendor JIYA FASHION — stuck at Stitching, 5d old, 0d over its 12d expected time, 1395 pcs pending
+LT-00262 — design 417-03-PANT — stuck at Stitching, 4d old, 0d over its 12d expected time, 159 pcs pending
+LT-00466 — design 042-03 — stuck at Stitching, 4d old, 0d over its 12d expected time, 60 pcs pending
+LT-00658 — design 474-01 — stuck at Stitching, 4d old, 0d over its 12d expected time, 537 pcs pending
+LT-00092 — design 364-01 — stuck at Stitching, 4d old, 0d over its 12d expected time, 426 pcs pending
+LT-07869 — design 488-03-PLAZZO — stuck at Cutting, 3d old, 0d over its 5d expected time, 1458 pcs pending
+LT-07643 — design 488-03-PLAZZO — stuck at Cutting, 3d old, 0d over its 5d expected time, 1260 pcs pending
+LT-00201 — design 417-03 — stuck at Stitching, 2d old, 0d over its 12d expected time, 1062 pcs pending
+LT-00186 — design 038-01-DUPATTA — stuck at Thread Cutting Store, 2d old, 0d over its 3d expected time, 120 pcs pending
+LT-00673 — design 553-02 — stuck at Stitching, 2d old, 0d over its 12d expected time, 230 pcs pending
+LT-00756 — design 549-02 — stuck at Stitching, 2d old, 0d over its 12d expected time, 321 pcs pending
+LT-00674 — design 553-03 — stuck at Stitching, 2d old, 0d over its 12d expected time, 219 pcs pending
+LT-00489 — design 545-03-PLAZZO — stuck at Thread Cutting Store, 2d old, 0d over its 3d expected time, 57 pcs pending
+LT-07947 — design 444-06, vendor H R FASHION — stuck at Stitching, 2d old, 0d over its 12d expected time, 1152 pcs pending
+LT-07954 — design 444-06, vendor H R FASHION — stuck at Stitching, 2d old, 0d over its 12d expected time, 1185 pcs pending
+LT-07950 — design 444-06, vendor H R FASHION — stuck at Stitching, 2d old, 0d over its 12d expected time, 1275 pcs pending
+LT-00308 — design 444-06, vendor H R FASHION — stuck at Stitching, 2d old, 0d over its 12d expected time, 2124 pcs pending
+LT-00551 — design 444-04-PANT — stuck at Thread Cutting Store, 2d old, 0d over its 3d expected time, 44 pcs pending
+LT-00185 — design 021-01-DUPATTA — stuck at Cutting, 2d old, 0d over its 5d expected time, 1044 pcs pending
+LT-07932 — design 444-04-PANT — stuck at Stitching, 2d old, 0d over its 12d expected time, 1060 pcs pending
+LT-00527 — design 444-06, vendor H R FASHION — stuck at Stitching, 2d old, 0d over its 12d expected time, 1422 pcs pending
+LT-00757 — design 549-01-PLAZZO — stuck at Stitching, 2d old, 0d over its 12d expected time, 225 pcs pending
+LT-00309 — design 444-04 — stuck at Stitching, 2d old, 0d over its 12d expected time, 625 pcs pending
+LT-00260 — design 077-04-DUPATTA — stuck at Cutting, 1d old, 0d over its 5d expected time, 792 pcs pending
+LT-00817 — design 553-02 — stuck at Cutting, 1d old, 0d over its 5d expected time, 1010 pcs pending
+LT-00826 — design 801-01 — stuck at Cutting, 1d old, 0d over its 5d expected time, 240 pcs pending
+LT-00080 — design 026-04 — stuck at Cutting, 1d old, 0d over its 5d expected time, 444 pcs pending
+LT-00456 — design 077-01 — stuck at Cutting, 1d old, 0d over its 5d expected time, 810 pcs pending
+LT-00488 — design 545-02 — stuck at Cutting, 1d old, 0d over its 5d expected time, 468 pcs pending
+LT-00837 — design 399-02 — stuck at Cutting, 1d old, 0d over its 5d expected time, 155 pcs pending
+LT-00827 — design 801-02 — stuck at Cutting, 1d old, 0d over its 5d expected time, 200 pcs pending
+LT-00818 — design 553-03 — stuck at Cutting, 1d old, 0d over its 5d expected time, 1000 pcs pending
+LT-00199 — design 417-03 — stuck at Final Barcode Generator, 1d old, 0d over its 2d expected time, 73 pcs pending
+LT-00672 — design 553-01 — stuck at Cutting, 1d old, 0d over its 5d expected time, 1020 pcs pending
+LT-00836 — design 399-01 — stuck at Cutting, 1d old, 0d over its 5d expected time, 190 pcs pending
+LT-00838 — design 399-03 — stuck at Cutting, 1d old, 0d over its 5d expected time, 165 pcs pending
+LT-00459 — design 077-02-DUPATTA — stuck at Cutting, 1d old, 0d over its 5d expected time, 612 pcs pending
+LT-00828 — design 801-03 — stuck at Cutting, 1d old, 0d over its 5d expected time, 215 pcs pending
+LT-00167 — design 074-01, vendor RAMLAXMAN INDUSTRIES PRIVATE LIMITED — stuck at Stitching, 1d old, 0d over its 12d expected time, 528 pcs pending
+LT-07443 — design 548-03 — stuck at Cutting, 1d old, 0d over its 5d expected time, 288 pcs pending
+LT-00169 — design 074-03, vendor RAMLAXMAN INDUSTRIES PRIVATE LIMITED — stuck at Stitching, 1d old, 0d over its 12d expected time, 600 pcs pending
+LT-00168 — design 074-02, vendor RAMLAXMAN INDUSTRIES PRIVATE LIMITED — stuck at Stitching, 1d old, 0d over its 12d expected time, 504 pcs pending
+LT-07414 — design 488-03 — stuck at General Store Out, 1d old, 0d over its 2d expected time, 666 pcs pending
+LT-00197 — design 417-03 — stuck at Stitching, 1d old, 0d over its 12d expected time, 440 pcs pending
+LT-00704 — design 474-03 — stuck at Stitching, 1d old, 0d over its 12d expected time, 288 pcs pending
+LT-00191 — design 038-04-DUPATTA — stuck at Thread Cutting Store, 1d old, 0d over its 3d expected time, 329 pcs pending
+LT-00462 — design 077-04 — stuck at Final Barcode Generator, 1d old, 0d over its 2d expected time, 164 pcs pending
+LT-00463 — design 077-04 — stuck at Final Barcode Generator, 1d old, 0d over its 2d expected time, 45 pcs pending
+LT-00800 — design 554-02-SALWAR — stuck at Stitching, 1d old, 0d over its 12d expected time, 480 pcs pending
+LT-00190 — design 038-04-DUPATTA — stuck at Thread Cutting Store, 1d old, 0d over its 3d expected time, 240 pcs pending
+LT-00467 — design 042-04-DUPATTA — stuck at Thread Cutting Store, 1d old, 0d over its 3d expected time, 120 pcs pending
+LT-00490 — design 545-04-PLAZZO — stuck at Thread Cutting Store, 1d old, 0d over its 3d expected time, 423 pcs pending
+LT-00188 — design 038-02-DUPATTA — stuck at Thread Cutting Store, 1d old, 0d over its 3d expected time, 180 pcs pending
+LT-07642 — design 488-03-PLAZZO — stuck at General Store Out, 1d old, 0d over its 2d expected time, 777 pcs pending
+LT-07927 — design 444-04 — stuck at Stitching, 1d old, 0d over its 12d expected time, 162 pcs pending
+LT-00799 — design 554-01-SALWAR — stuck at Stitching, 1d old, 0d over its 12d expected time, 618 pcs pending
+LT-00262 — design 417-03-PANT — stuck at Thread Cutting Store, 1d old, 0d over its 3d expected time, 119 pcs pending
+LT-00317 — design K-7004-DUPATTA — stuck at General Store Out, 1d old, 0d over its 2d expected time, 132 pcs pending
+LT-00266 — design 417-03-DUPATTA — stuck at Stitching, 1d old, 0d over its 12d expected time, 184 pcs pending
+LT-00274 — design 444-08, vendor H R FASHION — stuck at Stitching, 1d old, 0d over its 12d expected time, 1458 pcs pending
+LT-07946 — design 444-06, vendor JIYA FASHION — stuck at Stitching, 1d old, 0d over its 12d expected time, 1260 pcs pending
+LT-00361 — design 551-04-PLAZZO — stuck at Thread Cutting Store, 1d old, 0d over its 3d expected time, 162 pcs pending
+LT-00271 — design 444-05, vendor JIYA FASHION — stuck at Stitching, 1d old, 0d over its 12d expected time, 1548 pcs pending
+LT-00192 — design 043-01-DUPATTA — stuck at Thread Cutting Store, 1d old, 0d over its 3d expected time, 240 pcs pending
+LT-00207 — design 496-01 — stuck at Final Barcode Generator, 0d old, 0d over its 2d expected time, 138 pcs pending
+LT-00208 — design 496-03 — stuck at Final Barcode Generator, 0d old, 0d over its 2d expected time, 128 pcs pending
+LT-00360 — design 496-01 — stuck at Final Barcode Generator, 0d old, 0d over its 2d expected time, 60 pcs pending
