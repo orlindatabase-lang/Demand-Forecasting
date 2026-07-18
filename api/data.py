@@ -388,11 +388,32 @@ def _load_real_plan(df, forecasts: dict | None = None) -> tuple[
     design_group = (df.groupby("product_sku_code")["DESIGN_GROUP"].first()
                      if "DESIGN_GROUP" in df.columns else pd.Series(dtype="object"))
     # Earliest launch date per SKU -> drives days-since-launch / launch tier.
-    if "LAUNCH_DATE" in df.columns:
-        launched = pd.to_datetime(df["LAUNCH_DATE"], errors="coerce").groupby(
-            df["product_sku_code"]).min()
-    else:
-        launched = pd.Series(dtype="datetime64[ns]")
+    # NOT sourced from df["LAUNCH_DATE"]: that column is populated by
+    # live_source.assemble()'s sales-row merge onto a regex-extracted
+    # design_key prefix, deduplicated by keeping an arbitrary "first" master
+    # row per key - when a design_key collides with more than one master
+    # row, some of a design's own order rows can join to the WRONG one
+    # (observed: a spurious Excel-epoch 1900-01-01 placeholder for design
+    # 417-04, whose real LAUNCH_DATE of 2024-06-25 is intact in the master
+    # view fetched directly). Fetch the master view directly instead (one
+    # row per DESIGN_NO, no join/collision) and map each SKU to its own
+    # design's launch date - the same source similar_design.py already uses
+    # successfully for cold-start donor-age gating.
+    launched = pd.Series(dtype="datetime64[ns]")
+    try:
+        import live_source
+        master = live_source.fetch_erp_view(live_source.VIEW_MASTER)
+        if not master.empty and "DESIGN_NO" in master.columns:
+            master_dt = pd.to_datetime(master.get("LAUNCH_DATE"), errors="coerce")
+            master_launch: dict[str, "pd.Timestamp"] = {}
+            for dn, dt in zip(master["DESIGN_NO"].astype(str), master_dt):
+                if pd.isna(dt) or dt < pd.Timestamp("2015-01-01"):
+                    continue  # implausible placeholder (e.g. Excel epoch) - treat as unknown
+                if dn not in master_launch or dt < master_launch[dn]:
+                    master_launch[dn] = dt
+            launched = design.astype(str).map(master_launch)
+    except Exception as exc:  # noqa: BLE001 — never let this block the plan rebuild
+        print(f"[data] direct launch-date fetch failed: {exc!r}", file=sys.stderr)
 
     # Per-SKU WEEKLY actual sales (Mon-anchored) for the drill-down history.
     last_monday = pd.Timestamp(snap).normalize() - pd.Timedelta(days=pd.Timestamp(snap).weekday())

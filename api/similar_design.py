@@ -137,10 +137,14 @@ def _fetch_design_meta() -> tuple[dict, dict]:
     groups = master.get("DESIGN_GROUP")
     launch_dates: dict = {}
     design_vertical: dict[str, str] = {}
+    _min_plausible = pd.Timestamp("2015-01-01")
     for i, design in enumerate(master["DESIGN_NO"].astype(str)):
         base = _base_design(design)
         dt = launch.iloc[i]
-        if not pd.isna(dt) and (base not in launch_dates or dt < launch_dates[base]):
+        # Guard against a placeholder LAUNCH_DATE (e.g. the Excel epoch,
+        # 1900-01-01) masquerading as a real one - see the matching check in
+        # data.py's `launched` computation for the full explanation.
+        if not pd.isna(dt) and dt >= _min_plausible and (base not in launch_dates or dt < launch_dates[base]):
             launch_dates[base] = dt
         if groups is not None and base not in design_vertical:
             design_vertical[base] = verticals.vertical_of(groups.iloc[i])
