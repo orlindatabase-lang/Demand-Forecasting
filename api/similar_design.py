@@ -37,6 +37,8 @@ import threading
 import time
 from pathlib import Path
 
+import verticals
+
 _VIEW = "View_Dboard_Trans_Article_Master_Details_Test_BI"
 
 _TOP_K = 6                    # neighbors kept per design
@@ -67,6 +69,7 @@ _REFRESHING = False
 _DESIGN_MATERIALS: dict[str, set[str]] = {}
 _NEIGHBORS: dict[str, list[tuple[str, float]]] = {}
 _LAUNCH_DATES: dict = {}  # design -> pandas.Timestamp
+_DESIGN_VERTICAL: dict[str, str] = {}  # design -> vertical (see verticals.py)
 
 _CACHE_DIR = Path(__file__).resolve().parent / ".cache"
 _CACHE_FILE = _CACHE_DIR / "similar_design.json"
@@ -81,6 +84,7 @@ def _save_cache() -> None:
             "materials": {d: sorted(g) for d, g in _DESIGN_MATERIALS.items()},
             "neighbors": _NEIGHBORS,
             "launchDates": {d: ts.isoformat() for d, ts in _LAUNCH_DATES.items()},
+            "designVertical": _DESIGN_VERTICAL,
         }
         _CACHE_FILE.write_text(json.dumps(payload))
         print(f"[similar_design] cache saved ({len(_DESIGN_MATERIALS)} designs)", file=sys.stderr)
@@ -89,7 +93,7 @@ def _save_cache() -> None:
 
 
 def _load_cache() -> bool:
-    global _DESIGN_MATERIALS, _NEIGHBORS, _LAUNCH_DATES, _FETCHED_AT
+    global _DESIGN_MATERIALS, _NEIGHBORS, _LAUNCH_DATES, _DESIGN_VERTICAL, _FETCHED_AT
     if not _CACHE_FILE.exists():
         return False
     try:
@@ -100,10 +104,16 @@ def _load_cache() -> bool:
         if age > _CACHE_MAX_AGE:
             print(f"[similar_design] disk cache too old ({age / 3600:.1f}h), ignoring", file=sys.stderr)
             return False
+        # No "designVertical" key means this cache predates same-vertical donor
+        # gating - ignore it so a stale, ungated neighbor graph isn't reused.
+        if "designVertical" not in payload:
+            print("[similar_design] disk cache predates vertical gating, ignoring", file=sys.stderr)
+            return False
         with _LOCK:
             _DESIGN_MATERIALS = {d: set(g) for d, g in payload.get("materials", {}).items()}
             _NEIGHBORS = {d: [tuple(p) for p in neigh] for d, neigh in payload.get("neighbors", {}).items()}
             _LAUNCH_DATES = {d: pd.Timestamp(ts) for d, ts in payload.get("launchDates", {}).items()}
+            _DESIGN_VERTICAL = dict(payload.get("designVertical", {}))
             _FETCHED_AT = cached_at
         print(f"[similar_design] loaded {len(_DESIGN_MATERIALS)} designs from disk cache "
               f"({age / 60:.0f}m old)", file=sys.stderr)
@@ -113,36 +123,51 @@ def _load_cache() -> bool:
         return False
 
 
-def _fetch_launch_dates() -> dict:
-    """Design -> earliest known LAUNCH_DATE, from the same master view
-    lifecycle.py/data.py already read LAUNCH_DATE from."""
+def _fetch_design_meta() -> tuple[dict, dict]:
+    """(launch_dates, verticals) per base design, from the same master view
+    lifecycle.py/data.py already read LAUNCH_DATE from — it also carries
+    DESIGN_GROUP, which we map to a vertical for same-vertical donor gating."""
     import pandas as pd
     import live_source
 
     master = live_source.fetch_erp_view(live_source.VIEW_MASTER)
     if master.empty or "DESIGN_NO" not in master.columns:
-        return {}
+        return {}, {}
     launch = pd.to_datetime(master.get("LAUNCH_DATE"), errors="coerce")
-    out: dict = {}
-    for design, dt in zip(master["DESIGN_NO"].astype(str), launch):
-        if pd.isna(dt):
-            continue
+    groups = master.get("DESIGN_GROUP")
+    launch_dates: dict = {}
+    design_vertical: dict[str, str] = {}
+    for i, design in enumerate(master["DESIGN_NO"].astype(str)):
         base = _base_design(design)
-        if base not in out or dt < out[base]:
-            out[base] = dt
-    return out
+        dt = launch.iloc[i]
+        if not pd.isna(dt) and (base not in launch_dates or dt < launch_dates[base]):
+            launch_dates[base] = dt
+        if groups is not None and base not in design_vertical:
+            design_vertical[base] = verticals.vertical_of(groups.iloc[i])
+    return launch_dates, design_vertical
 
 
-def _build_neighbors(design_materials: dict, top_k: int = _TOP_K) -> dict:
+def _build_neighbors(
+    design_materials: dict, design_vertical: dict | None = None, top_k: int = _TOP_K
+) -> dict:
     """Top-K neighbors per design by IDF-weighted-Jaccard over material sets.
 
     Uses an inverted index (ARTICLE_GROUP -> designs containing it) so only
     designs that actually share >=1 material are ever compared, instead of
     the full O(n^2) pairwise scan.
+
+    ``design_vertical`` (design -> vertical, see verticals.py), if given,
+    restricts candidates to the SAME vertical as the query design: a shared
+    fabric between, say, a Kurti and an unrelated Top shouldn't make them
+    demand-similar just because both happen to use that fabric. A design on
+    EITHER side with an unknown/missing vertical is exempt from this
+    restriction (missing category data shouldn't block an otherwise-good
+    material match).
     """
     n_designs = len(design_materials)
     if n_designs < 2:
         return {}
+    dv = design_vertical or {}
 
     group_doc_count: dict[str, int] = {}
     for groups in design_materials.values():
@@ -157,12 +182,17 @@ def _build_neighbors(design_materials: dict, top_k: int = _TOP_K) -> dict:
 
     neighbors: dict[str, list[tuple[str, float]]] = {}
     for d, groups in design_materials.items():
+        d_vert = dv.get(d, verticals.VERTICAL_UNKNOWN)
         candidates: dict[str, float] = {}
         for g in groups:
             w = idf.get(g, 1.0)
             for other in inv.get(g, ()):
                 if other == d:
                     continue
+                if d_vert != verticals.VERTICAL_UNKNOWN:
+                    other_vert = dv.get(other, verticals.VERTICAL_UNKNOWN)
+                    if other_vert != verticals.VERTICAL_UNKNOWN and other_vert != d_vert:
+                        continue
                 candidates[other] = candidates.get(other, 0.0) + w
         scored: list[tuple[str, float]] = []
         for other, shared_w in candidates.items():
@@ -175,9 +205,9 @@ def _build_neighbors(design_materials: dict, top_k: int = _TOP_K) -> dict:
 
 
 def refresh() -> None:
-    """Fetch the article-master view + launch dates, rebuild the similarity
-    graph, and cache to disk. Safe to call from a background thread."""
-    global _DESIGN_MATERIALS, _NEIGHBORS, _LAUNCH_DATES, _FETCHED_AT, _REFRESHING
+    """Fetch the article-master view + launch dates/verticals, rebuild the
+    similarity graph, and cache to disk. Safe to call from a background thread."""
+    global _DESIGN_MATERIALS, _NEIGHBORS, _LAUNCH_DATES, _DESIGN_VERTICAL, _FETCHED_AT, _REFRESHING
     _REFRESHING = True
     try:
         import live_source
@@ -201,16 +231,17 @@ def refresh() -> None:
                 base = _base_design(token)
                 design_materials.setdefault(base, set()).add(grp)
 
-        neighbors = _build_neighbors(design_materials)
-        launch_dates = _fetch_launch_dates()
+        launch_dates, design_vertical = _fetch_design_meta()
+        neighbors = _build_neighbors(design_materials, design_vertical)
 
         with _LOCK:
             _DESIGN_MATERIALS = design_materials
             _NEIGHBORS = neighbors
             _LAUNCH_DATES = launch_dates
+            _DESIGN_VERTICAL = design_vertical
             _FETCHED_AT = time.time()
         print(f"[similar_design] built {len(design_materials)} design material fingerprints, "
-              f"{len(launch_dates)} launch dates", file=sys.stderr)
+              f"{len(launch_dates)} launch dates, {len(design_vertical)} verticals", file=sys.stderr)
         _save_cache()
     except Exception as exc:  # noqa: BLE001
         print(f"[similar_design] refresh failed: {exc!r}", file=sys.stderr)

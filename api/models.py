@@ -26,6 +26,7 @@ class PlanRow(BaseModel):
     calculatedProductionSuggestion: int  # MOQ-rounded produce-now qty (0 unless below reorder pt)
     stockStatus: str  # "In Stock" | "Reorder"
     historicalLast10d: int
+    vertical: str = ""  # product vertical bucket derived from DESIGN_GROUP (see verticals.py)
     # --- velocity tier (back-compat; now mirrors currentTier) ---
     tier: str = ""
     tierSuggestedProduction: int = 0
@@ -81,6 +82,44 @@ class NewDesignFestivalSpike(BaseModel):
 class NewDesignFestivalSpikesResponse(BaseModel):
     total: int
     items: list[NewDesignFestivalSpike]
+
+
+class VerticalRollup(BaseModel):
+    vertical: str
+    designCount: int
+    newDesignCount: int  # designs launched within the plan's "newly launched" window
+    skuCount: int
+    forecast7: int
+    forecast10: int
+    forecast35: int
+    inventoryQty: int
+    wipQty: int
+    availableQty: int
+    calculatedProductionSuggestion: int
+
+
+class VerticalRollupResponse(BaseModel):
+    asOf: str
+    items: list[VerticalRollup]
+
+
+class VerticalTopDownWeek(BaseModel):
+    weekStart: str
+    forecastQty: int
+    event: str | None = None
+
+
+class VerticalTopDownForecast(BaseModel):
+    vertical: str
+    weeklyHistoryAvg: float  # trailing ~4wk avg actual, for context
+    forecast: list[VerticalTopDownWeek]
+    bottomUpForecast35: int  # sum of the existing per-SKU forecast35 (unchanged pipeline)
+    topDownForecast35: int   # this vertical-level series' own first-5-week sum
+
+
+class VerticalTopDownResponse(BaseModel):
+    asOf: str
+    items: list[VerticalTopDownForecast]
 
 
 class HistoricalPoint(BaseModel):

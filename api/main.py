@@ -39,6 +39,8 @@ from models import (
     PlanResponse,
     TopRegion,
     TopWarehouse,
+    VerticalRollupResponse,
+    VerticalTopDownResponse,
 )
 
 
@@ -168,6 +170,23 @@ def list_new_design_festival_spikes(
     through a festival of their own yet)."""
     items = data.get_new_design_festival_spikes(max_age_days=maxAgeDays)
     return NewDesignFestivalSpikesResponse(total=len(items), items=items)
+
+
+@app.get("/api/verticals", response_model=VerticalRollupResponse, tags=["plan"])
+def list_vertical_rollup() -> VerticalRollupResponse:
+    """Forecast/inventory/production totals grouped by product vertical
+    (see verticals.py for the DESIGN_GROUP -> vertical mapping)."""
+    items = data.get_vertical_rollup()
+    return VerticalRollupResponse(asOf=data.SNAPSHOT_DATE.isoformat(), items=items)
+
+
+@app.get("/api/verticals/topdown-forecast", response_model=VerticalTopDownResponse, tags=["plan"])
+def list_vertical_topdown_forecast() -> VerticalTopDownResponse:
+    """Independent, vertical-level top-down forecast for comparison against
+    the existing bottom-up total. Does NOT feed into or replace the per-SKU
+    forecast7/10/35 fields or the safety-stock/reorder-point policy."""
+    items = data.get_vertical_topdown_forecast()
+    return VerticalTopDownResponse(asOf=data.SNAPSHOT_DATE.isoformat(), items=items)
 
 
 # Declared BEFORE "/{sku}" so the static "breakdown" path is matched first.

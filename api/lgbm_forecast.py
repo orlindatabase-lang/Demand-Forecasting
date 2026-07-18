@@ -82,8 +82,9 @@ _CACHE_DIR = Path(__file__).resolve().parent / ".cache"
 # v5 = weekly XGBoost, v6 = + design-level/price/trend features, v7 = + festival
 # signal as a model feature, v8 = + similar-design cold-start feature, v9 = +
 # confidence-weighted similar-design curve blend for young designs, v10 =
-# n_estimators 600 -> 1000, lr/depth unchanged).
-_CACHE_VERSION = "v10"
+# n_estimators 600 -> 1000, lr/depth unchanged, v11 = + vertical (grouped
+# DESIGN_GROUP) as a model feature).
+_CACHE_VERSION = "v11"
 
 
 def _cache_file(snapshot: str) -> Path:
@@ -117,6 +118,7 @@ def compute(df_full) -> dict:
 
     import config
     import data_processing as dp
+    import verticals
 
     id_col = "product_sku_code"
     clean = dp.clean_data(df_full)
@@ -134,6 +136,14 @@ def compute(df_full) -> dict:
     if wk.empty:
         return {}
     static = dp.build_static_attrs(clean, id_col)
+    # Product vertical (see verticals.py) - a coarser grouping of DESIGN_GROUP's
+    # 14 raw values into ~7 buckets, so the model can borrow statistical
+    # strength across sparse DESIGN_GROUPs (e.g. SET/SHRUGE SET, a few hundred
+    # rows each) from their larger vertical siblings (CO-ORDS, 72K rows).
+    if "DESIGN_GROUP" in static.columns:
+        static["vertical"] = static["DESIGN_GROUP"].map(verticals.vertical_of).fillna(verticals.VERTICAL_UNKNOWN)
+    else:
+        static["vertical"] = verticals.VERTICAL_UNKNOWN
     gmax = wk["_week"].max()
     starts = wk.groupby(id_col)["_week"].min().reset_index(name="_start")
     starts["_w"] = starts["_start"].apply(lambda s: pd.date_range(s, gmax, freq="W-MON"))
@@ -224,9 +234,9 @@ def compute(df_full) -> dict:
     festival_cols = ["festival_mult", "is_festival", "festival_event", "days_to_festival_peak"] if _USE_FESTIVAL_FEATURES else []
     momentum_cols = ["momentum"] if _USE_MOMENTUM_FEATURE else []
     feature_cols = (lag_cols + roll_cols + ["trend", "weekofyear", "month"]
-                    + prod_cat + ["age_weeks", "design_level", "similar_design_level", "price"]
+                    + prod_cat + ["vertical", "age_weeks", "design_level", "similar_design_level", "price"]
                     + festival_cols + momentum_cols)
-    cat_cols = prod_cat + ["month"] + (["festival_event"] if _USE_FESTIVAL_FEATURES else [])
+    cat_cols = prod_cat + ["vertical", "month"] + (["festival_event"] if _USE_FESTIVAL_FEATURES else [])
     for c in cat_cols:
         panel[c] = panel[c].astype("category")
     cat_dtypes = {c: panel[c].dtype for c in cat_cols}
@@ -279,6 +289,7 @@ def compute(df_full) -> dict:
         for c in config.PRODUCT_ATTR_COLS:
             if c in stat.columns:
                 data[c] = stat[c].to_numpy()
+        data["vertical"] = stat["vertical"].to_numpy()
         data["design_level"] = stat["design_level"].to_numpy()
         data["similar_design_level"] = stat["similar_design_level"].to_numpy()
         data["price"] = stat["price"].to_numpy()

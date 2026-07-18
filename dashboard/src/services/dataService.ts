@@ -6,6 +6,8 @@ import type {
   BreakdownResponse,
   NewDesignRow,
   NewDesignFestivalSpike,
+  VerticalRollupRow,
+  VerticalTopDownForecast,
 } from "@/types";
 
 interface PlanResponse {
@@ -22,6 +24,16 @@ interface NewDesignsResponse {
 interface NewDesignFestivalSpikesResponse {
   total: number;
   items: NewDesignFestivalSpike[];
+}
+
+interface VerticalRollupResponse {
+  asOf: string;
+  items: VerticalRollupRow[];
+}
+
+interface VerticalTopDownResponse {
+  asOf: string;
+  items: VerticalTopDownForecast[];
 }
 
 // --- Inhouse / FOB (shared row shape) ---------------------------------------- //
@@ -243,6 +255,18 @@ export const dataService = {
    * based on the demand shape borrowed from material-similar designs. */
   async newDesignFestivalSpikes(maxAgeDays = 90) {
     return apiGet<NewDesignFestivalSpikesResponse>(`/api/new-designs/festival-outlook?maxAgeDays=${maxAgeDays}`);
+  },
+
+  /** Forecast/inventory/production totals grouped by product vertical. */
+  async verticalRollup() {
+    return apiGet<VerticalRollupResponse>("/api/verticals");
+  },
+
+  /** Independent vertical-level top-down forecast, for comparison against
+   * the existing bottom-up (per-SKU summed) total. Read-only comparison —
+   * doesn't affect the live per-SKU forecast/production numbers. */
+  async verticalTopDownForecast() {
+    return apiGet<VerticalTopDownResponse>("/api/verticals/topdown-forecast");
   },
 
   /** Server-side SKU/design search across the FULL plan (not just the

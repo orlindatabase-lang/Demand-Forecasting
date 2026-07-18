@@ -13,6 +13,7 @@ import {
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import HomeIcon from "@mui/icons-material/Home";
+import CategoryIcon from "@mui/icons-material/Category";
 import FactoryIcon from "@mui/icons-material/Factory";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import Inventory2Icon from "@mui/icons-material/Inventory2";
@@ -133,6 +134,23 @@ export default function Sidebar({ open }: { open: boolean }) {
             <HomeIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Demand Forecasting" primaryTypographyProps={{ fontWeight: 600, fontSize: "0.88rem" }} />
+        </ListItemButton>
+
+        <ListItemButton
+          component={NavLink}
+          to="/verticals"
+          sx={{
+            color: SIDEBAR_TEXT,
+            borderRadius: 1.5,
+            mb: 0.5,
+            "&.active": { bgcolor: SIDEBAR_BG_ACTIVE, color: SIDEBAR_TEXT_ACTIVE },
+            "&:hover": { bgcolor: SIDEBAR_BG_ACTIVE },
+          }}
+        >
+          <ListItemIcon sx={{ minWidth: 36, color: "inherit" }}>
+            <CategoryIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Vertical Performance" primaryTypographyProps={{ fontWeight: 600, fontSize: "0.88rem" }} />
         </ListItemButton>
 
         {SECTIONS.map((section) => (

@@ -9,6 +9,7 @@ import Dashboard from "@/pages/Dashboard";
 import InventoryPlanning from "@/pages/InventoryPlanning";
 import Bottleneck from "@/pages/Bottleneck";
 import ProductionTrackers from "@/pages/ProductionTrackers";
+import VerticalPerformance from "@/pages/VerticalPerformance";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -53,6 +54,7 @@ export default function App() {
               <Box component="main" sx={{ p: 3 }}>
                 <Routes>
                   <Route path="/" element={<Dashboard />} />
+                  <Route path="/verticals" element={<VerticalPerformance />} />
                   <Route path="/inventory" element={<InventoryPlanning />} />
                   <Route path="/bottleneck" element={<Bottleneck />} />
                   <Route path="/production" element={<ProductionTrackers />} />
