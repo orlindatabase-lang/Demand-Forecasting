@@ -964,7 +964,8 @@ def get_new_design_festival_spikes(max_age_days: int = 90) -> list[dict]:
             "weekStart": ws.isoformat(),
             "predictedQty": round(qty),
             "upliftPct": uplift_pct,
-            "similarDesigns": similar_design.get_similar_designs(design_no, top_k=3),
+            "similarDesigns": similar_design.get_similar_designs(
+                design_no, top_k=3, eligible_donors_only=True),
         })
 
     out.sort(key=lambda d: d["upliftPct"], reverse=True)

@@ -20,11 +20,18 @@ function SpikeBadge({ spike }: { spike: NewDesignFestivalSpike }) {
       <Typography variant="caption" sx={{ display: "block", fontWeight: 700, mb: 0.5 }}>
         Borrowed demand shape from:
       </Typography>
-      {spike.similarDesigns.map((s) => (
-        <Typography key={s.design} variant="caption" sx={{ display: "block" }}>
-          {s.design} · {Math.round(s.similarity * 100)}% material match
+      {spike.similarDesigns.length > 0 ? (
+        spike.similarDesigns.map((s) => (
+          <Typography key={s.design} variant="caption" sx={{ display: "block" }}>
+            {s.design} · {Math.round(s.similarity * 100)}% material match
+          </Typography>
+        ))
+      ) : (
+        <Typography variant="caption" sx={{ display: "block", fontStyle: "italic" }}>
+          No material-similar design old enough to donate yet — this leans on the
+          model/naive baseline instead.
         </Typography>
-      ))}
+      )}
     </Box>
   );
   return (

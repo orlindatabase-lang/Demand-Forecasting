@@ -266,14 +266,36 @@ def _maybe_refresh_bg() -> None:
 
 
 # ── Public API ───────────────────────────────────────────────────────────── #
-def get_similar_designs(design_no: str, top_k: int = _TOP_K) -> list[dict]:
-    """Top-K material-similar designs for one design (debugging / future UI)."""
+def get_similar_designs(
+    design_no: str, top_k: int = _TOP_K, eligible_donors_only: bool = False, as_of=None
+) -> list[dict]:
+    """Top-K material-similar designs for one design (debugging / future UI).
+
+    ``eligible_donors_only=True`` filters out any neighbor that couldn't
+    actually be used as a donor right now - i.e. applies the SAME
+    ``_MIN_DONOR_AGE_DAYS`` gate borrow_design_level()/similar_design_curve()
+    use. Without this, a raw neighbor list can include a design that's
+    itself too young to lend anything (e.g. two designs launched the same
+    week can be each other's closest material match), which is fine for
+    pure similarity debugging but actively misleading in any UI that
+    attributes a forecast to "borrowed from X" - X might never have been
+    eligible to donate in the first place.
+    """
     _maybe_refresh_bg()
     base = _base_design(design_no)
     with _LOCK:
-        neigh = list(_NEIGHBORS.get(base, []))[:top_k]
+        neigh = list(_NEIGHBORS.get(base, []))
         own = set(_DESIGN_MATERIALS.get(base, set()))
         materials = dict(_DESIGN_MATERIALS)
+        launch = dict(_LAUNCH_DATES)
+    if eligible_donors_only:
+        import pandas as pd
+        as_of = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp.today().normalize()
+        neigh = [
+            (other, sim) for other, sim in neigh
+            if other not in launch or (as_of - launch[other]).days >= _MIN_DONOR_AGE_DAYS
+        ]
+    neigh = neigh[:top_k]
     return [
         {
             "design": other,
