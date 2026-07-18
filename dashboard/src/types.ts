@@ -68,34 +68,6 @@ export interface NewDesignFestivalSpike {
   similarDesigns: SimilarDesignRef[];
 }
 
-export interface VerticalRollupRow {
-  vertical: string;
-  designCount: number;
-  newDesignCount: number;
-  skuCount: number;
-  forecast7: number;
-  forecast10: number;
-  forecast35: number;
-  inventoryQty: number;
-  wipQty: number;
-  availableQty: number;
-  calculatedProductionSuggestion: number;
-}
-
-export interface VerticalTopDownWeek {
-  weekStart: string;
-  forecastQty: number;
-  event: string | null;
-}
-
-export interface VerticalTopDownForecast {
-  vertical: string;
-  weeklyHistoryAvg: number;
-  forecast: VerticalTopDownWeek[];
-  bottomUpForecast35: number;
-  topDownForecast35: number;
-}
-
 export interface HistoricalPoint {
   date: string;
   forecast: number;

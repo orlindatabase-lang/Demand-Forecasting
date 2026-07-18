@@ -44,22 +44,6 @@ export function useNewDesignFestivalSpikes(enabled: boolean, maxAgeDays = 90) {
   });
 }
 
-export function useVerticalRollup() {
-  return useQuery({
-    queryKey: ["verticalRollup"],
-    queryFn: () => dataService.verticalRollup(),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function useVerticalTopDownForecast() {
-  return useQuery({
-    queryKey: ["verticalTopDownForecast"],
-    queryFn: () => dataService.verticalTopDownForecast(),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
 export function useInhouseLots(process?: string) {
   return useQuery({
     queryKey: ["inhouseLots", process],
