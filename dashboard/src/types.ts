@@ -16,6 +16,7 @@ export interface PlanningRow {
   calculatedProductionSuggestion: number;
   stockStatus: string; // "In Stock" | "Reorder"
   historicalLast10d: number;
+  vertical: string;
   tier: string;
   tierSuggestedProduction: number;
   tierPolicy: string;

@@ -71,6 +71,18 @@ export default function Dashboard() {
       },
       { accessorKey: "designNo", header: "Design No", size: 110 },
       {
+        accessorKey: "vertical",
+        header: "Vertical",
+        cell: (c) => {
+          const v = c.getValue() as string;
+          if (!v || v === "Unclassified") {
+            return <Typography variant="body2" sx={{ color: "text.disabled" }}>Unclassified</Typography>;
+          }
+          return <Typography variant="body2">{v}</Typography>;
+        },
+        size: 150,
+      },
+      {
         accessorKey: "forecast35",
         header: "Forecast (5wk / 35d)",
         cell: ({ row }) => (
