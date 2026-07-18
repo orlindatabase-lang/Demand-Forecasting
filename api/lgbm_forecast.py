@@ -83,8 +83,11 @@ _CACHE_DIR = Path(__file__).resolve().parent / ".cache"
 # signal as a model feature, v8 = + similar-design cold-start feature, v9 = +
 # confidence-weighted similar-design curve blend for young designs, v10 =
 # n_estimators 600 -> 1000, lr/depth unchanged, v11 = + vertical (grouped
-# DESIGN_GROUP) as a model feature).
-_CACHE_VERSION = "v11"
+# DESIGN_GROUP) as a model feature, v12 = similar_design's donor-age gate
+# raised 60 -> 90 days, matching the "newly launched" threshold everywhere
+# else - a design still counted as newly launched can no longer donate its
+# demand level/curve to an even-younger design).
+_CACHE_VERSION = "v12"
 
 
 def _cache_file(snapshot: str) -> Path:

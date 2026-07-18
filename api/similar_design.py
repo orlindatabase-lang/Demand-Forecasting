@@ -42,7 +42,11 @@ import verticals
 _VIEW = "View_Dboard_Trans_Article_Master_Details_Test_BI"
 
 _TOP_K = 6                    # neighbors kept per design
-_MIN_DONOR_AGE_DAYS = 60       # a neighbor must be at least this old to lend its demand level
+# A neighbor must be at least this old to lend its demand level/curve - kept
+# equal to the "newly launched" threshold used everywhere else (the KPI,
+# festival-spike prediction) so a design still counted as newly launched
+# itself can never be used as a donor for an even-younger design.
+_MIN_DONOR_AGE_DAYS = 90
 
 _DESIGN_SECTION_SUFFIXES = (
     "-DUPATTA", "-PLAZZO", "-PALAZZO", "-BOTTOM", "-PANT", "-TROUSER",
