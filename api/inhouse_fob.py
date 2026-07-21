@@ -134,6 +134,18 @@ def _num(series: pd.Series, default: float = 0.0) -> pd.Series:
     return pd.to_numeric(series, errors="coerce").fillna(default)
 
 
+def _s(val) -> str:
+    """NaN-safe str() + strip. A blank source cell is a real NaN float, and
+    plain str(nan) produces the literal text "nan" — which then renders as
+    the word "nan" in the UI instead of an empty cell."""
+    try:
+        if val is None or pd.isna(val):
+            return ""
+    except Exception:
+        pass
+    return str(val).strip()
+
+
 def _find_col(df: pd.DataFrame, *candidates: str) -> str | None:
     cols_upper = {c.upper().replace(" ", "_"): c for c in df.columns}
     for cand in candidates:
@@ -185,8 +197,8 @@ def _build_rows(df: pd.DataFrame) -> list[dict]:
     fob_iss_qty:  dict[str, int] = {}
 
     for _, r in df.iterrows():
-        lot_no = str(r[lot_col]).strip()
-        proc   = str(r[proc_col]).strip()
+        lot_no = _s(r[lot_col])
+        proc   = _s(r[proc_col])
         if not lot_no or not proc:
             continue
         if proc == "FOB Issue":
@@ -217,8 +229,8 @@ def _build_rows(df: pd.DataFrame) -> list[dict]:
     # ── Pass 2: emit one row per process event (skip FOB Receive) ─────────── #
     rows: list[dict] = []
     for _, r in df.iterrows():
-        lot_no = str(r[lot_col]).strip()
-        proc   = str(r[proc_col]).strip()
+        lot_no = _s(r[lot_col])
+        proc   = _s(r[proc_col])
         if not lot_no or not proc:
             continue
         if proc == _FOB_RECEIVE:
@@ -274,9 +286,9 @@ def _build_rows(df: pd.DataFrame) -> list[dict]:
 
         rows.append({
             "lotNo":        lot_no,
-            "design":       str(r[design_col]).strip()  if design_col  else "",
-            "section":      str(r[section_col]).strip() if section_col else "",
-            "vendor":       str(r[vendor_col]).strip()  if vendor_col  else "",
+            "design":       _s(r[design_col])  if design_col  else "",
+            "section":      _s(r[section_col]) if section_col else "",
+            "vendor":       _s(r[vendor_col])  if vendor_col  else "",
             "process":      proc,
             "issueQty":     int(r[iqty_col]) if iqty_col else 0,
             "issueDate":    _fmt(row_dt) if pd.notna(row_dt) else "",

@@ -63,6 +63,18 @@ def _find_col(df: pd.DataFrame, *candidates: str) -> str | None:
     return None
 
 
+def _s(val) -> str:
+    """NaN-safe str() + strip. A blank source cell is a real NaN float, and
+    plain str(nan) produces the literal text "nan" — which then renders as
+    the word "nan" in the UI instead of an empty cell."""
+    try:
+        if val is None or pd.isna(val):
+            return ""
+    except Exception:
+        pass
+    return str(val).strip()
+
+
 def _build(df: pd.DataFrame) -> dict[str, list[dict]]:
     if df.empty:
         return {}
@@ -89,15 +101,15 @@ def _build(df: pd.DataFrame) -> dict[str, list[dict]]:
     by_lot: dict[str, list[dict]] = {}
 
     for _, r in df.iterrows():
-        lot_no = str(r[lot_col]).strip() if lot_col else ""
-        if not lot_no or lot_no.lower() in ("nan", "none", ""):
+        lot_no = _s(r[lot_col]) if lot_col else ""
+        if not lot_no:
             continue
 
         entry = {
-            "voucherNo":   str(r[vno_col]).strip()     if vno_col    else "",
+            "voucherNo":   _s(r[vno_col])     if vno_col    else "",
             "voucherDate": _fmt(r[date_col])            if date_col   else "",
-            "partyName":   str(r[party_col]).strip()    if party_col  else "",
-            "article":     str(r[article_col]).strip()  if article_col else "",
+            "partyName":   _s(r[party_col])    if party_col  else "",
+            "article":     _s(r[article_col])  if article_col else "",
             "qty":         round(float(r[qty_col]),  2) if qty_col    else 0.0,
             "rate":        round(float(r[rate_col]), 2) if rate_col   else 0.0,
             "amount":      round(float(r[amt_col]),  2) if amt_col    else 0.0,

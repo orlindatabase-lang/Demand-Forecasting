@@ -196,6 +196,18 @@ def _num(series: pd.Series, default: float = 0.0) -> pd.Series:
     return pd.to_numeric(series, errors="coerce").fillna(default)
 
 
+def _s(val) -> str:
+    """NaN-safe str() + strip. A blank source cell is a real NaN float, and
+    plain str(nan) produces the literal text "nan" — which then renders as
+    the word "nan" in the UI instead of an empty cell."""
+    try:
+        if val is None or pd.isna(val):
+            return ""
+    except Exception:
+        pass
+    return str(val).strip()
+
+
 def _find_col(df: pd.DataFrame, *candidates: str) -> str | None:
     cols_upper = {c.upper().replace(" ", "_"): c for c in df.columns}
     for cand in candidates:
@@ -264,15 +276,15 @@ def _build_rows(df: pd.DataFrame) -> list[dict]:
     recv_counter: dict[str, int]   = {}
     all_proc_names: set[str]       = set()
     for _, r in df.iterrows():
-        lot_no_r    = str(r[lot_col]).strip() if lot_col else ""
-        proc_raw    = str(r[proc_col]).strip()
+        lot_no_r    = _s(r[lot_col]) if lot_col else ""
+        proc_raw    = _s(r[proc_col])
         if not proc_raw:
             continue
         all_proc_names.add(proc_raw)
         base = _is_receive_proc(proc_raw.lower())
         if base is None:
             continue
-        design_name_r = str(r[design_col]).strip() if design_col else ""
+        design_name_r = _s(r[design_col]) if design_col else ""
         recv_counter[proc_raw] = recv_counter.get(proc_raw, 0) + 1
         key = (lot_no_r, base, design_name_r)
         qty = int(r[pend_col]) if pend_col else 0
@@ -294,14 +306,14 @@ def _build_rows(df: pd.DataFrame) -> list[dict]:
     # Qty instead of being summed into one blended figure.
     accum: dict[tuple, dict] = {}
     for _, r in df.iterrows():
-        proc_raw = str(r[proc_col]).strip()
+        proc_raw = _s(r[proc_col])
         if not proc_raw:
             continue
         proc = _match_proc(proc_raw)
         if proc is None:
             continue
 
-        design_name = str(r[design_col]).strip()
+        design_name = _s(r[design_col])
         if not design_name:
             continue
 
@@ -316,11 +328,11 @@ def _build_rows(df: pd.DataFrame) -> list[dict]:
             if age_chk > 365:
                 continue
 
-        lot_no    = str(r[lot_col]).strip() if lot_col else ""
+        lot_no    = _s(r[lot_col]) if lot_col else ""
         issue_qty = int(r[pend_col]) if pend_col else 0
         bal_mtr   = round(float(r[mtr_col]), 2) if mtr_col else 0.0
-        section   = str(r[section_col]).strip() if section_col else ""
-        vendor    = str(r[vendor_col]).strip()  if vendor_col  else ""
+        section   = _s(r[section_col]) if section_col else ""
+        vendor    = _s(r[vendor_col])  if vendor_col  else ""
 
         key = (lot_no, proc, design_name)
         if key not in accum:

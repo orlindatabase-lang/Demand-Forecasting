@@ -106,6 +106,18 @@ def _num(series: pd.Series, default: float = 0.0) -> pd.Series:
     return pd.to_numeric(series, errors="coerce").fillna(default)
 
 
+def _s(val) -> str:
+    """NaN-safe str() + strip. A blank source cell is a real NaN float, and
+    plain str(nan) produces the literal text "nan" — which then renders as
+    the word "nan" in the UI instead of an empty cell."""
+    try:
+        if val is None or pd.isna(val):
+            return ""
+    except Exception:
+        pass
+    return str(val).strip()
+
+
 def _find_col(df: pd.DataFrame, *candidates: str) -> str | None:
     cols_upper = {c.upper().replace(" ", "_"): c for c in df.columns}
     for cand in candidates:
@@ -159,12 +171,12 @@ def _build_rows(df: pd.DataFrame) -> list[dict]:
     fob_rcv_qty:  dict[tuple, int] = {}
     fob_rcv_date: dict[tuple, str] = {}
     for _, r in df.iterrows():
-        lot_no   = str(r[lot_col]).strip()
-        proc_raw = str(r[proc_col]).strip()
+        lot_no   = _s(r[lot_col])
+        proc_raw = _s(r[proc_col])
         if not lot_no or not proc_raw:
             continue
         if _FOB_RECEIVE.lower() in proc_raw.lower():
-            design_r = str(r[design_col]).strip() if design_col else ""
+            design_r = _s(r[design_col]) if design_col else ""
             rqty = int(r[pend_col]) if pend_col else 0
             key = (lot_no, design_r)
             fob_rcv_qty[key] = fob_rcv_qty.get(key, 0) + rqty
@@ -177,8 +189,8 @@ def _build_rows(df: pd.DataFrame) -> list[dict]:
     # ── Pass 2: accumulate FOB Issue rows by (lot_no, design) ─────────────── #
     accum: dict[tuple, dict] = {}
     for _, r in df.iterrows():
-        lot_no   = str(r[lot_col]).strip()
-        proc_raw = str(r[proc_col]).strip()
+        lot_no   = _s(r[lot_col])
+        proc_raw = _s(r[proc_col])
         if not lot_no or _FOB_ISSUE.lower() not in proc_raw.lower():
             continue
 
@@ -195,8 +207,8 @@ def _build_rows(df: pd.DataFrame) -> list[dict]:
 
         bal_qty = int(r[pend_col])             if pend_col   else 0
         bal_mtr = round(float(r[mtr_col]), 2) if mtr_col    else 0.0
-        design  = str(r[design_col]).strip()   if design_col else ""
-        vendor  = str(r[vendor_col]).strip()   if vendor_col else ""
+        design  = _s(r[design_col])   if design_col else ""
+        vendor  = _s(r[vendor_col])   if vendor_col else ""
 
         key = (lot_no, design)
         if key not in accum:

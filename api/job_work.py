@@ -133,6 +133,18 @@ def _num(series: pd.Series, default: float = 0.0) -> pd.Series:
     return pd.to_numeric(series, errors="coerce").fillna(default)
 
 
+def _s(val) -> str:
+    """NaN-safe str() + strip. A blank source cell is a real NaN float, and
+    plain str(nan) produces the literal text "nan" — which then renders as
+    the word "nan" in the UI instead of an empty cell."""
+    try:
+        if val is None or pd.isna(val):
+            return ""
+    except Exception:
+        pass
+    return str(val).strip()
+
+
 def _find_col(df: pd.DataFrame, *candidates: str) -> str | None:
     """First column that matches any candidate (case-insensitive, space=underscore)."""
     cols_upper = {c.upper().replace(" ", "_"): c for c in df.columns}
@@ -215,11 +227,11 @@ def _build_flat_rows(df: pd.DataFrame) -> list[dict]:
     lot_grn_date:      dict[tuple, str] = {}   # (lot, grn_proc, design) → latest receive date
 
     for _, r in df.iterrows():
-        lot_no = str(r[lot_col]).strip()
-        proc   = str(r[proc_col]).strip()
+        lot_no = _s(r[lot_col])
+        proc   = _s(r[proc_col])
         if not lot_no or not proc:
             continue
-        design_r = str(r[design_col]).strip() if design_col else ""
+        design_r = _s(r[design_col]) if design_col else ""
         if proc in _ISSUE_PROCS:
             qty = int(r[iqty_col]) if iqty_col else 0
             lot_iss_qty[lot_no] = lot_iss_qty.get(lot_no, 0) + qty
@@ -253,8 +265,8 @@ def _build_flat_rows(df: pd.DataFrame) -> list[dict]:
     # One group per distinct design/section a lot+process actually issued.
     accum: dict[tuple, dict] = {}
     for _, r in df.iterrows():
-        lot_no = str(r[lot_col]).strip()
-        proc   = str(r[proc_col]).strip()
+        lot_no = _s(r[lot_col])
+        proc   = _s(r[proc_col])
         if not lot_no or not proc:
             continue
         if proc in _GRN_PROCS:
@@ -271,9 +283,9 @@ def _build_flat_rows(df: pd.DataFrame) -> list[dict]:
             if age_val_check > 365:
                 continue
 
-        design  = str(r[design_col]).strip()  if design_col  else ""
-        section = str(r[section_col]).strip() if section_col else ""
-        vendor  = str(r[vendor_col]).strip()  if vendor_col  else ""
+        design  = _s(r[design_col])  if design_col  else ""
+        section = _s(r[section_col]) if section_col else ""
+        vendor  = _s(r[vendor_col])  if vendor_col  else ""
         iqty    = int(r[iqty_col])            if iqty_col    else 0
         pending = int(r[pend_col])            if pend_col    else 0
 
