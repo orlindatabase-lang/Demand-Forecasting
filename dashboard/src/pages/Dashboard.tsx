@@ -12,6 +12,7 @@ import type { PlanningRow, TopRegionRow } from "@/types";
 import { formatNumber } from "@/utils/format";
 import PlanDetailDrawer from "@/components/common/PlanDetailDrawer";
 import NewDesignsDialog from "@/components/common/NewDesignsDialog";
+import FestivalSpikeBadge from "@/components/common/FestivalSpikeBadge";
 
 const STATUS_COLOR: Record<string, string> = {
   "In Stock": "#22c55e",
@@ -103,6 +104,26 @@ export default function Dashboard() {
         size: 130,
       },
       {
+        id: "festivalSpike",
+        header: "Predicted Festival Spike",
+        cell: ({ row }) => {
+          const r = row.original;
+          if (!r.festivalEvent) {
+            return <Typography variant="body2" sx={{ color: "text.disabled" }}>—</Typography>;
+          }
+          return (
+            <FestivalSpikeBadge
+              event={r.festivalEvent}
+              eventStart={r.festivalEventStart}
+              eventEnd={r.festivalEventEnd}
+              qty={r.festivalQty}
+              upliftPct={r.festivalUpliftPct}
+            />
+          );
+        },
+        size: 220,
+      },
+      {
         accessorKey: "currentDrr",
         header: "DRR (units/day)",
         cell: (c) => (c.getValue() as number).toFixed(2),
@@ -147,6 +168,21 @@ export default function Dashboard() {
         },
         size: 95,
       },
+      {
+        accessorKey: "calculatedProductionSuggestion",
+        header: "Produce Now",
+        cell: (c) => {
+          const v = c.getValue() as number;
+          return v > 0 ? (
+            <Box component="span" sx={{ fontWeight: 700, color: "#f97316" }}>
+              {formatNumber(v)}
+            </Box>
+          ) : (
+            <Typography variant="body2" sx={{ color: "text.disabled" }}>—</Typography>
+          );
+        },
+        size: 105,
+      },
       { accessorKey: "lifecycleStage", header: "Lifecycle", size: 100 },
       {
         accessorKey: "launchDate",
@@ -167,21 +203,6 @@ export default function Dashboard() {
           );
         },
         size: 110,
-      },
-      {
-        accessorKey: "calculatedProductionSuggestion",
-        header: "Produce Now",
-        cell: (c) => {
-          const v = c.getValue() as number;
-          return v > 0 ? (
-            <Box component="span" sx={{ fontWeight: 700, color: "#f97316" }}>
-              {formatNumber(v)}
-            </Box>
-          ) : (
-            <Typography variant="body2" sx={{ color: "text.disabled" }}>—</Typography>
-          );
-        },
-        size: 105,
       },
       {
         accessorKey: "healthScore",

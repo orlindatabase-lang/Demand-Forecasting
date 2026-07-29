@@ -6,7 +6,7 @@ row per (lot, process) stage) and scores every currently-open stage with a
 delay probability. Mirrors ``delay_predict_jw.py``'s approach, but scores at
 the STAGE level rather than the lot level: a single Inhouse lot passes through
 up to 5 sequential processes (Cutting -> Stitching -> Thread Cutting Store ->
-General Store Out -> Final Barcode Generator), each with its own issue/receive
+General Store -> Final Barcode Generator), each with its own issue/receive
 dates and its own expected turnaround — so "will this row be late" is scored
 per stage, not once per lot.
 

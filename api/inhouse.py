@@ -4,7 +4,7 @@ Inhouse production tracking module.
 ERP view: View_Dboard_Trans_Production_And_Job_Work_All_Data_For_BI
 
 Processes shown (each row is an independent production event):
-  Cutting, Stitching, Thread Cutting Store, General Store Out,
+  Cutting, Stitching, Thread Cutting Store, General Store,
   Final Barcode Generator
 """
 from __future__ import annotations
@@ -37,7 +37,7 @@ ALL_PROCESSES = [
     "Cutting",
     "Stitching",
     "Thread Cutting Store",
-    "General Store Out",
+    "General Store",
     "Final Barcode Generator",
 ]
 # Pipeline position of each process — used to infer completion of an earlier
@@ -50,6 +50,11 @@ _PROC_LOWER: dict[str, str] = {p.lower(): p for p in ALL_PROCESSES}
 _PROC_LOWER_SORTED: list[str] = sorted(_PROC_LOWER.keys(), key=len, reverse=True)
 # Receive-process lookup: maps "stitching receive" → "Stitching", etc.
 _RECV_LOWER: dict[str, str] = {(p.lower() + " receive"): p for p in ALL_PROCESSES}
+# "General Store" is the odd one out: its receive/completion voucher isn't
+# named "General Store Receive" like every other stage — the ERP calls it
+# "General Store Out". Issue qty comes off "General Store" rows, receive qty
+# off "General Store Out" rows.
+_RECV_LOWER["general store out"] = "General Store"
 
 
 def _is_receive_proc(proc_lc: str) -> str | None:
@@ -80,7 +85,7 @@ def _match_proc(proc_raw: str) -> str | None:
 
 # closed_lot.py's "Open Lot Production" view only carries a STATUS signal for
 # the Cutting stage of this tracker (raw ERP process name "Cutting Issue") —
-# Stitching/Thread Cutting Store/General Store Out/Final Barcode Generator
+# Stitching/Thread Cutting Store/General Store/Final Barcode Generator
 # have no coverage there, so they keep using the heuristic below untouched.
 _CLOSED_LOT_PROCESS_MAP: dict[str, str] = {"Cutting": "Cutting Issue"}
 
@@ -88,7 +93,7 @@ _EXPECTED_DAYS: dict[str, int] = {
     "Cutting":                  5,
     "Stitching":               10,
     "Thread Cutting Store":     2,
-    "General Store Out":        7,
+    "General Store":            7,
     "Final Barcode Generator":  2,
 }
 _RISK_SCORE: dict[str, int] = {"Delayed": 3, "At Risk": 2, "On Track": 1, "Completed": 0}
@@ -355,6 +360,31 @@ def _build_rows(df: pd.DataFrame) -> list[dict]:
         if vendor:
             g["vendors"].append(vendor)
 
+    # "General Store Out" (receive side) commonly shows up for a (lot, design)
+    # with no matching "General Store" issue voucher at all — confirmed in
+    # live ERP data (e.g. lot LT-07071's base design "044-02" has four
+    # "General Store Out" rows and zero "General Store" rows). An issue-
+    # anchored build like the loop above would silently drop these — they'd
+    # never get an accum entry, so no row, ever. Backfill one directly from
+    # the receive side so the lot still shows up; with no issue qty to divide
+    # by, the emit loop's total_qty = 0 + rcv_qty makes the ratio 1.0, so it
+    # correctly lands as Completed rather than looking stuck.
+    for (lot_no_bf, base_bf, design_bf) in rcv_qty_map:
+        if base_bf != "General Store" or not design_bf:
+            continue
+        key_bf = (lot_no_bf, base_bf, design_bf)
+        if key_bf in accum:
+            continue
+        accum[key_bf] = {
+            "lotNo":    lot_no_bf,
+            "process":  base_bf,
+            "issueQty": 0,
+            "balMtr":   0.0,
+            "dates":    [],
+            "sections": [],
+            "vendors":  [],
+        }
+
     # The ERP's "Cutting Receive"/"Stitching Receive" vouchers report a piece
     # quantity on only ~3-7% of rows (the rest are 0/blank — the ERP simply
     # doesn't record a qty on most receive transactions, only a date). Since
@@ -420,6 +450,7 @@ def _build_rows(df: pd.DataFrame) -> list[dict]:
             "issueDate":    _fmt(earliest_dt) if earliest_dt is not None else "",
             "receiveQty":   rcv_qty,
             "receiveDate":  rcv_date,
+            "balQty":       bal_qty,       # BAL_PIECES: issueQty - receiveQty, still pending at this stage
             "balMtr":       bal_mtr,
             "ageDays":      age_val,
             "riskLevel":    risk,
@@ -508,6 +539,7 @@ def refresh() -> None:
             debit_note.attach(rows)
             with _LOCK:
                 _RAW_ROWS = rows
+            _FETCHED_AT = time.time()
             _save_cache()
         else:
             # Empty result with good data already cached almost always means the
@@ -518,7 +550,7 @@ def refresh() -> None:
                 f"[inhouse] refresh returned 0 rows — keeping {len(_RAW_ROWS)} cached rows",
                 file=sys.stderr,
             )
-        _FETCHED_AT = time.time()
+            _FETCHED_AT = time.time()
     except Exception as exc:
         print(f"[inhouse] refresh failed: {exc!r}", file=sys.stderr)
     finally:

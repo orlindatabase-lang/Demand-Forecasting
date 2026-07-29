@@ -64,11 +64,21 @@ def _build(df: pd.DataFrame) -> dict[tuple[str, str], bool]:
     df = df.copy()
     df["LOT_NO"]  = df["LOT_NO"].astype(str).str.strip()
     df["PROCESS"] = df["PROCESS"].astype(str).str.strip()
-    df["STATUS"]  = df["STATUS"].astype(str).str.strip() if "STATUS" in df.columns else ""
+    if "STATUS" not in df.columns:
+        df["STATUS"] = ""
 
     result: dict[tuple[str, str], bool] = {}
     for (lot_no, proc), grp in df.groupby(["LOT_NO", "PROCESS"], sort=False):
-        statuses = {s for s in grp["STATUS"] if s and s.lower() not in ("nan", "none")}
+        # Don't trust .astype(str) alone to have stringified every missing
+        # value: a nullable/extension-typed STATUS column can leave some
+        # entries as a genuine float NaN even after that call (observed live
+        # — mixed with real "Completed" strings in the same column), and
+        # bool(nan) is truthy in Python, so a plain `if s` guard doesn't
+        # catch it before .lower() crashes. Filter with pd.isna() first.
+        statuses = {
+            str(s).strip() for s in grp["STATUS"]
+            if pd.notna(s) and str(s).strip().lower() not in ("", "nan", "none")
+        }
         if not statuses:
             continue   # no STATUS data for this (lot, process) — no signal
         result[(lot_no, proc)] = statuses == {"Completed"}
@@ -148,10 +158,11 @@ def refresh() -> None:
         if result or not _STATUS:
             with _LOCK:
                 _STATUS = result
+            _FETCHED_AT = time.time()
             _save_cache()
         else:
             print(f"[closed_lot] refresh returned 0 pairs — keeping {len(_STATUS)} cached", file=sys.stderr)
-        _FETCHED_AT = time.time()
+            _FETCHED_AT = time.time()
     except Exception as exc:
         print(f"[closed_lot] refresh failed: {exc!r}", file=sys.stderr)
     finally:

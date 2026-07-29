@@ -37,6 +37,7 @@ from models import (
     NewDesignFestivalSpikesResponse,
     NewDesignsResponse,
     PlanResponse,
+    SkuTopRegionsResponse,
     TopRegion,
     TopWarehouse,
 )
@@ -214,6 +215,20 @@ def get_sku_breakdown(
     return result
 
 
+@app.get("/api/sku-production-plan/{sku}/top-regions", response_model=SkuTopRegionsResponse, tags=["plan"])
+def get_sku_top_regions(
+    sku: str,
+    limit: int = Query(10, ge=1, le=100, description="Max states/cities/warehouses to return each"),
+) -> SkuTopRegionsResponse:
+    """This SKU's own top-selling states/cities/warehouses (10/30/90-day
+    revenue + units) — same shape as the plan-wide top tables on the main
+    dashboard, but filtered to just this SKU's order history."""
+    result = data.get_sku_top_regions(sku, cap=limit)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"SKU '{sku}' not found")
+    return SkuTopRegionsResponse(**result)
+
+
 @app.get("/api/inventory/planning", tags=["plan"])
 def inventory_planning(
     limit: int = Query(500, ge=1, le=5000, description="Max designs to return"),
@@ -262,7 +277,7 @@ def inhouse_lots(
     limit:   int      = Query(5000, ge=1, le=10000, description="Max rows to return"),
     process: str | None = Query(None, description=(
         "Filter by process: 'Cutting' | 'Stitching' | 'Thread Cutting Store' | "
-        "'General Store Out' | 'Final Barcode Generator'"
+        "'General Store' | 'Final Barcode Generator'"
     )),
 ) -> dict:
     """Inhouse production rows. Refreshes from ERP every 5 minutes in background."""

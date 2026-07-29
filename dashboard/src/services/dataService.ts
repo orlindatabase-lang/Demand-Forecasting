@@ -3,6 +3,7 @@ import type {
   PlanningRow,
   TopRegionRow,
   TopWarehouseRow,
+  SkuTopRegions,
   BreakdownResponse,
   NewDesignRow,
   NewDesignFestivalSpike,
@@ -35,6 +36,7 @@ export interface IHFRow {
   issueDate: string;
   receiveQty: number;
   receiveDate: string;
+  balQty: number;
   balMtr: number;
   ageDays: number;
   riskLevel: string; // "Delayed" | "At Risk" | "On Track" | "Completed"
@@ -259,6 +261,14 @@ export const dataService = {
   async skuBreakdown(sku: string, weeks: number) {
     return apiGet<BreakdownResponse>(
       `/api/sku-production-plan/${encodeURIComponent(sku)}/breakdown?weeks=${weeks}`,
+    );
+  },
+
+  /** This SKU's own top-selling states/cities/warehouses (same shape as the
+   * plan-wide top tables, filtered to just this SKU's order history). */
+  async skuTopRegions(sku: string, limit = 10) {
+    return apiGet<SkuTopRegions>(
+      `/api/sku-production-plan/${encodeURIComponent(sku)}/top-regions?limit=${limit}`,
     );
   },
 

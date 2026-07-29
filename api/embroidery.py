@@ -25,6 +25,8 @@ from pathlib import Path
 import pandas as pd
 import requests
 
+import closed_lot
+
 # ── ERP connection ────────────────────────────────────────────────────────── #
 _ERP_URL          = "http://190.92.175.131:8080/DigiBizzErpApi/api/UnknownCallerApi/GetPowerBiReports"
 _API_TOKEN        = "aaaqqqwww111"
@@ -40,6 +42,10 @@ _COMPANY_YEAR_IDS: list[str] = [
 # ── ERP view names ────────────────────────────────────────────────────────── #
 _VIEW_ISSUE = "View_Dboard_Trans_FAB_JOB_ISS_EMB_NEW_Data_For_Test_BI"
 _VIEW_GRN   = "View_Dboard_Trans_FAB_JOB_GRN_Data_For_Test_BI"
+# Process name as it appears in closed_lot.py's authoritative "Open Lot
+# Production" view (View_Dboard_Trans_Open_Lot_Production_Data_Rdp), which
+# does carry a STATUS signal for this issue process.
+_CLOSED_LOT_PROCESS = "Fab. Job Issue (Emb.) new"
 
 # ── Module-level cache ───────────────────────────────────────────────────── #
 _LOTS: list[dict] = []
@@ -254,6 +260,15 @@ def _build_lots(issue: pd.DataFrame, grn: pd.DataFrame) -> list[dict]:
         issue_qty  = int(r.get("issueQty",  0))
         receive_qty = int(r.get("receiveQty", 0))
         is_open    = (receive_qty / issue_qty < 0.90) if issue_qty > 0 else (pending > 0)
+
+        # ERP's own authoritative per-voucher status (closed_lot.py, the
+        # "Open Lot Production" view) — takes precedence over the qty-ratio
+        # heuristic above wherever it has a signal for this lot's embroidery
+        # issue voucher, in either direction.
+        authoritative = closed_lot.is_closed(str(r["LOT_NO"]), _CLOSED_LOT_PROCESS)
+        if authoritative is not None:
+            is_open = not authoritative
+
         risk       = _risk_level(age_days) if is_open else "Completed"
 
         lots.append({
@@ -354,6 +369,7 @@ def refresh() -> None:
             _merge_delay_scores(lots, issue, grn)
             with _LOCK:
                 _LOTS = lots
+            _FETCHED_AT = time.time()
             _save_cache()
         else:
             # Empty result with good data already cached almost always means the
@@ -363,7 +379,7 @@ def refresh() -> None:
                 f"[emb] refresh returned 0 lots — keeping {len(_LOTS)} cached lots",
                 file=sys.stderr,
             )
-        _FETCHED_AT = time.time()
+            _FETCHED_AT = time.time()
     except Exception as exc:
         print(f"[emb] refresh failed: {exc!r}", file=sys.stderr)
     finally:

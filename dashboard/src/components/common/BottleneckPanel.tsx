@@ -19,7 +19,7 @@ const PROCESS_COLOR: Record<string, string> = {
   Cutting: "#6366f1",
   Stitching: "#0d9488",
   "Thread Cutting Store": "#f59e0b",
-  "General Store Out": "#8b5cf6",
+  "General Store": "#8b5cf6",
   "Final Barcode Generator": "#22c55e",
   "Cut to Pack Issue": "#6366f1",
   "Cut to Stitching Issue": "#0d9488",
@@ -31,7 +31,7 @@ const PROCESS_COLOR: Record<string, string> = {
 // to the right Production Trackers tab, since the two trackers use disjoint
 // process names (see get_bottlenecks()'s docstring).
 const INHOUSE_PROCESSES = new Set([
-  "Cutting", "Stitching", "Thread Cutting Store", "General Store Out", "Final Barcode Generator",
+  "Cutting", "Stitching", "Thread Cutting Store", "General Store", "Final Barcode Generator",
 ]);
 
 function trackerLink(process: string): string {
@@ -286,9 +286,7 @@ export default function BottleneckPanel() {
                 <Box component="span" sx={{ color: SEVERITY_COLOR[focusProcess.severity] ?? "text.primary", fontWeight: 700 }}>
                   {focusProcess.severity}
                 </Box>{" "}
-                bottleneck{data?.worstProcess === focusLot.process ? " — the worst in the plant right now" : ""}:{" "}
-                {focusProcess.delayedLots} of its {focusProcess.openLots} open lots are delayed (
-                {Math.round(focusProcess.delayRate * 100)}% delay rate), averaging {focusProcess.avgOverrunDays}d overrun.{" "}
+                bottleneck{data?.worstProcess === focusLot.process ? " — the worst in the plant right now" : ""}.{" "}
                 {focusLot.overrunDays > focusProcess.avgOverrunDays
                   ? "This lot is running worse than that process's own average."
                   : focusLot.overrunDays > 0

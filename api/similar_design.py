@@ -314,7 +314,7 @@ def borrow_design_level(dlevel: dict, as_of=None) -> dict:
     ``_MIN_DONOR_AGE_DAYS`` past their own launch date, so a brand-new
     design can't borrow from an equally unproven neighbor.
 
-    ``dlevel`` is the same design -> avg-recent-weekly-demand dict
+    ``dlevel`` is the same design -> avg-recent-daily-demand dict
     lgbm_forecast.compute() already builds for its own ``design_level``
     feature; this is a purely in-memory lookup (no ERP calls) so it's cheap
     to call once per training run.
@@ -353,28 +353,29 @@ def similar_design_curve(
     top_k: int = _TOP_K,
     as_of=None,
 ) -> list | None:
-    """Borrow a demand-curve *shape* for a young design's next ``horizon_weeks``,
-    using what material-similar designs actually sold at the SAME
-    weeks-since-their-own-launch offset — not just a flat average level. This
-    is what lets a design inherit a festival spike or seasonal ramp it hasn't
+    """Borrow a demand-curve *shape* for a young design's next ``horizon_weeks``
+    weeks, using what material-similar designs actually sold at the SAME
+    weeks-since-their-own-launch — not just a flat average level. This is
+    what lets a design inherit a festival spike or seasonal ramp it hasn't
     lived through yet, as long as a similar design already has.
 
     Each neighbor's contribution is scaled by ``own_early_level`` (this
-    design's own early weekly average, or the pooled design-level average if
-    the design has no sales of its own yet) divided by that neighbor's own
-    early level, so two designs of different absolute popularity but the same
-    *pattern* still combine correctly. Only neighbors that are already
-    ``_MIN_DONOR_AGE_DAYS`` past their own launch (see module docstring) are
-    used as donors, and only for the specific future weeks where they
-    actually have data at that offset — steps with no eligible donor are
-    returned as ``None`` so the caller keeps the model's own prediction there.
+    design's own average weekly qty over its first ~3 observed weeks, or the
+    pooled design-level average if the design has no sales of its own yet)
+    divided by that neighbor's own early level, so two designs of different
+    absolute popularity but the same *pattern* still combine correctly. Only
+    neighbors that are already ``_MIN_DONOR_AGE_DAYS`` past their own launch
+    (see module docstring) are used as donors, and only for the specific
+    future weeks where they actually have data at that offset — weeks with
+    no eligible donor are returned as ``None`` so the caller keeps the
+    model's own prediction there.
 
     Args:
         design:            The design to forecast for.
         weekly_by_design:  {design: {weeks_since_launch: qty}}, built by the
                             caller from its own weekly sales panel (this
                             module has no direct access to sales data).
-        start_offset:       Weeks-since-launch of the FIRST forecast step.
+        start_offset:       Weeks-since-launch of the FIRST forecast week.
         own_early_level:    This design's own average weekly qty over its
                             first ~3 observed weeks (0 if it has none yet).
         horizon_weeks:      Number of future weeks to borrow (default 6).
@@ -382,7 +383,7 @@ def similar_design_curve(
         as_of:              Reference date for donor-age gating (default: today).
 
     Returns:
-        A list of length ``horizon_weeks`` (values or None per step), or
+        A list of length ``horizon_weeks`` (values or None per week), or
         None if no eligible neighbor had any usable data.
     """
     import pandas as pd

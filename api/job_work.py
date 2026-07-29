@@ -220,8 +220,8 @@ def _build_flat_rows(df: pd.DataFrame) -> list[dict]:
     # not a shared lot-wide total), and GRN rows carry their own DESIGN_NO too
     # (100% populated). Without design in the key, one design's real qty/date
     # silently overwrote/blended with every other design sharing that lot+process.
-    lot_iss_qty:       dict[str, int]   = {}   # lot → total issued (all procs) — lot-wide on purpose, only feeds the base open/closed heuristic below
-    lot_grn_qty_total: dict[tuple, int] = {}   # (lot, grn_proc) → total received, all designs — same purpose
+    lot_proc_iss_total: dict[tuple, int] = {}  # (lot, proc) → total issued, all designs
+    lot_grn_qty_total: dict[tuple, int] = {}   # (lot, grn_proc) → total received, all designs
     lot_proc_iss_qty:  dict[tuple, int] = {}   # (lot, proc, design) → total issued
     lot_grn_qty:       dict[tuple, int] = {}   # (lot, grn_proc, design) → total received
     lot_grn_date:      dict[tuple, str] = {}   # (lot, grn_proc, design) → latest receive date
@@ -234,7 +234,8 @@ def _build_flat_rows(df: pd.DataFrame) -> list[dict]:
         design_r = _s(r[design_col]) if design_col else ""
         if proc in _ISSUE_PROCS:
             qty = int(r[iqty_col]) if iqty_col else 0
-            lot_iss_qty[lot_no] = lot_iss_qty.get(lot_no, 0) + qty
+            proc_key = (lot_no, proc)
+            lot_proc_iss_total[proc_key] = lot_proc_iss_total.get(proc_key, 0) + qty
             key = (lot_no, proc, design_r)
             lot_proc_iss_qty[key] = lot_proc_iss_qty.get(key, 0) + qty
         elif proc in _GRN_PROCS:
@@ -254,11 +255,16 @@ def _build_flat_rows(df: pd.DataFrame) -> list[dict]:
                     if key not in lot_grn_date or rdate_str > lot_grn_date[key]:
                         lot_grn_date[key] = rdate_str
 
-    open_lot_nos: set[str] = {
-        lot for lot in lot_iss_qty
-        if lot_iss_qty[lot] > sum(
-            lot_grn_qty_total.get((lot, gp), 0) for gp in _GRN_PROCS
-        )
+    # Per-(lot, process) open/closed — NOT lot-wide. A lot with several issue
+    # legs (e.g. Cut to Stitching Issue still open, Cut to Pack Issue already
+    # dispatched) previously got one shared verdict for every row, so a
+    # finished leg could show Open just because another leg on the same lot
+    # wasn't done yet (or vice versa). Each issue process is also matched only
+    # against its OWN corresponding GRN process, not summed across both GRN
+    # types, for the same reason.
+    open_lot_procs: set[tuple[str, str]] = {
+        (lot, proc) for (lot, proc), issued in lot_proc_iss_total.items()
+        if issued > lot_grn_qty_total.get((lot, _PROC_TO_GRN.get(proc, "")), 0)
     }
 
     # ── Pass 2: accumulate issue rows by (lot_no, process, design) ────────── #
@@ -321,7 +327,7 @@ def _build_flat_rows(df: pd.DataFrame) -> list[dict]:
                 pass
 
         expected = _EXPECTED_DAYS.get(proc, 14)
-        is_open  = lot_no in open_lot_nos
+        is_open  = (lot_no, proc) in open_lot_procs
 
         grn_proc  = _PROC_TO_GRN.get(proc, "")
         row_rqty  = lot_grn_qty.get((lot_no, grn_proc, design), 0)  if grn_proc else 0
@@ -488,6 +494,7 @@ def refresh() -> None:
             debit_note.attach(rows)
             with _LOCK:
                 _RAW_ROWS = rows
+            _FETCHED_AT = time.time()
             _save_cache()
         else:
             # Empty result with good data already cached almost always means the
@@ -497,7 +504,7 @@ def refresh() -> None:
                 f"[jw] refresh returned 0 rows — keeping {len(_RAW_ROWS)} cached rows",
                 file=sys.stderr,
             )
-        _FETCHED_AT = time.time()
+            _FETCHED_AT = time.time()
     except Exception as exc:
         print(f"[jw] refresh failed: {exc!r}", file=sys.stderr)
     finally:

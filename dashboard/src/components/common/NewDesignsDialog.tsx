@@ -3,6 +3,7 @@ import { Box, Dialog, DialogContent, IconButton, Stack, Tooltip, Typography } fr
 import CloseIcon from "@mui/icons-material/Close";
 import type { ColumnDef } from "@tanstack/react-table";
 import DataTable from "@/components/tables/DataTable";
+import FestivalSpikeBadge from "@/components/common/FestivalSpikeBadge";
 import { useNewDesigns, useNewDesignFestivalSpikes } from "@/hooks/useDashboardData";
 import type { NewDesignRow, NewDesignFestivalSpike } from "@/types";
 
@@ -36,24 +37,15 @@ function SpikeBadge({ spike }: { spike: NewDesignFestivalSpike }) {
   );
   return (
     <Tooltip title={tooltip} arrow placement="top">
-      <Box
-        component="span"
-        sx={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 0.5,
-          fontSize: "0.72rem",
-          fontWeight: 700,
-          color: "#f97316",
-          bgcolor: "#f9731622",
-          borderRadius: 1,
-          px: 1,
-          py: 0.4,
-          cursor: "default",
-        }}
-      >
-        🎉 {spike.event} · {spike.weekStart} · {spike.predictedQty} units (+{spike.upliftPct}%)
-      </Box>
+      <span>
+        <FestivalSpikeBadge
+          event={spike.event}
+          eventStart={spike.eventStart}
+          eventEnd={spike.eventEnd}
+          qty={spike.predictedQty}
+          upliftPct={spike.upliftPct}
+        />
+      </span>
     </Tooltip>
   );
 }

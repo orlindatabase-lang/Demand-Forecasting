@@ -15,18 +15,25 @@ class PlanRow(BaseModel):
     forecast7: int
     forecast10: int
     forecast35: int
+    designForecast35: int = 0  # this SKU's parent design's own 5-week forecast (compute_design(),
+    # measurably more accurate than SKU-week — context only, NOT used for
+    # DRR/reorder/production math below, which stays SKU-level deliberately
+    # (redistributing a design total back to SKU grain tested worse)
     inventoryQty: int
     wipQty: int
     availableQty: int  # inventoryQty + wipQty
-    # --- inventory policy (safety stock + reorder point + MOQ) ---
-    leadTimeDays: int = 0       # replenishment lead time used (per-design or default)
-    safetyStock: int = 0        # z * weekly-demand-sigma * sqrt(lead weeks)
-    reorderPoint: int = 0       # lead-time demand + safety stock
-    totalSuggestedProduction: int  # order-up-to level (target stock)
-    calculatedProductionSuggestion: int  # MOQ-rounded produce-now qty (0 unless below reorder pt)
+    # --- production policy: flat 10-week-demand target (currentDrr * 10 weeks) ---
+    # Uses currentDrr (historical trailing-30-day actual, set by lifecycle.classify),
+    # NOT the forward forecast, so this matches the dashboard's own DRR column.
+    leadTimeDays: int = 0       # informational only; no longer gates production
+    safetyStock: int = 0        # informational only; no longer gates production
+    reorderPoint: int = 0       # = totalSuggestedProduction (10-week demand target)
+    totalSuggestedProduction: int  # currentDrr * 10 weeks (target stock level)
+    calculatedProductionSuggestion: int  # totalSuggestedProduction - availableQty (can be negative)
     stockStatus: str  # "In Stock" | "Reorder"
     historicalLast10d: int
     vertical: str = ""  # product vertical bucket derived from DESIGN_GROUP (see verticals.py)
+    price: float = 0.0  # realized avg selling price (revenue/qty) over the last 90 days; 0 if no recent sales
     # --- velocity tier (back-compat; now mirrors currentTier) ---
     tier: str = ""
     tierSuggestedProduction: int = 0
@@ -44,6 +51,12 @@ class PlanRow(BaseModel):
     riskScore: int = 0          # 0-100 (higher = riskier)
     productionPriority: int = 0  # 0-100 (produce-first rank)
     suggestedProduction: int = 0  # stage-aware: max(0, stage target - availableQty)
+    # --- predicted festival/sale spike (real calendar dates, e.g. "8-15 Aug") ---
+    festivalEvent: str = ""        # "" if this design clears no festival window
+    festivalEventStart: str = ""   # ISO date
+    festivalEventEnd: str = ""     # ISO date
+    festivalQty: int = 0           # forecast total for [festivalEventStart, festivalEventEnd]
+    festivalUpliftPct: int = 0     # vs. this design's own non-festival-day daily-rate baseline
 
 
 class PlanResponse(BaseModel):
@@ -73,9 +86,10 @@ class SimilarDesignRef(BaseModel):
 class NewDesignFestivalSpike(BaseModel):
     designNo: str
     event: str
-    weekStart: str  # ISO date (Monday start of the predicted spike week)
-    predictedQty: int
-    upliftPct: int  # vs. this design's own non-festival-week baseline
+    eventStart: str  # ISO date - real festival/sale start (e.g. "8 Aug"), clipped to the forecast horizon
+    eventEnd: str  # ISO date - real festival/sale end (e.g. "15 Aug"), clipped to the forecast horizon
+    predictedQty: int  # forecast total for exactly [eventStart, eventEnd], pro-rated across weekly buckets
+    upliftPct: int  # vs. this design's own non-festival-week daily-rate baseline
     similarDesigns: list[SimilarDesignRef]  # material-similar neighbors the cold-start blend borrowed from
 
 
@@ -109,10 +123,8 @@ class BreakdownResponse(BaseModel):
 
 
 class TopRegion(BaseModel):
-    """Aggregated top-selling state or city (matches the dashboard's TopRegionRow).
-
-    Revenue and sale quantity are reported for the last 10 / 30 / 90 days.
-    """
+    """Top-selling state/city (matches dashboard's TopRegionRow); revenue +
+    quantity for the last 10/30/90 days."""
     name: str
     revenue10: int
     revenue30: int
@@ -123,10 +135,8 @@ class TopRegion(BaseModel):
 
 
 class TopWarehouse(BaseModel):
-    """Aggregated top warehouse (matches the dashboard's TopWarehouseRow).
-
-    Revenue and sale quantity are reported for the last 10 / 30 / 90 days.
-    """
+    """Top warehouse (matches dashboard's TopWarehouseRow); revenue +
+    quantity for the last 10/30/90 days."""
     name: str
     revenue10: int
     revenue30: int
@@ -136,12 +146,19 @@ class TopWarehouse(BaseModel):
     units90: int
 
 
-class AllBreakdownsResponse(BaseModel):
-    """Week-wise breakdown for many SKUs at once.
+class SkuTopRegionsResponse(BaseModel):
+    """One SKU's own top-selling states/cities/warehouses (10/30/90-day
+    revenue + units) — same shape as the plan-wide top tables, filtered to
+    just this SKU's order history. Powers the SKU detail drawer."""
+    topStates: list[TopRegion]
+    topCities: list[TopRegion]
+    topWarehouses: list[TopWarehouse]
 
-    Paginated (offset/limit) because the per-week arrays make the full
-    all-SKU payload too large for a browser to render in one go.
-    """
+
+class AllBreakdownsResponse(BaseModel):
+    """Week-wise breakdown for many SKUs at once, paginated (offset/limit)
+    since the per-week arrays make the full all-SKU payload too large for a
+    browser to render in one go."""
     snapshotDate: str
     periodWeeks: int
     count: int        # total SKUs available

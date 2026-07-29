@@ -19,6 +19,14 @@ export function useSkuBreakdown(sku: string | null, weeks: number) {
   });
 }
 
+export function useSkuTopRegions(sku: string | null) {
+  return useQuery({
+    queryKey: ["skuTopRegions", sku],
+    queryFn: () => dataService.skuTopRegions(sku as string),
+    enabled: !!sku,
+  });
+}
+
 export function usePlanSearch(query: string) {
   const q = query.trim();
   return useQuery({

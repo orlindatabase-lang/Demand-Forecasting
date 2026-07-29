@@ -6,6 +6,8 @@ export interface PlanningRow {
   forecast7: number;
   forecast10: number;
   forecast35: number;
+  /** This SKU's parent design's own 5-week forecast (context only — DRR/reorder/production stay SKU-level). */
+  designForecast35: number;
   inventoryQty: number;
   wipQty: number;
   availableQty: number;
@@ -17,6 +19,7 @@ export interface PlanningRow {
   stockStatus: string; // "In Stock" | "Reorder"
   historicalLast10d: number;
   vertical: string;
+  price: number;
   tier: string;
   tierSuggestedProduction: number;
   tierPolicy: string;
@@ -32,6 +35,11 @@ export interface PlanningRow {
   riskScore: number;
   productionPriority: number;
   suggestedProduction: number;
+  festivalEvent: string;
+  festivalEventStart: string;
+  festivalEventEnd: string;
+  festivalQty: number;
+  festivalUpliftPct: number;
 }
 
 export interface TopRegionRow {
@@ -45,6 +53,12 @@ export interface TopRegionRow {
 }
 
 export type TopWarehouseRow = TopRegionRow;
+
+export interface SkuTopRegions {
+  topStates: TopRegionRow[];
+  topCities: TopRegionRow[];
+  topWarehouses: TopWarehouseRow[];
+}
 
 export interface NewDesignRow {
   designNo: string;
@@ -62,7 +76,8 @@ export interface SimilarDesignRef {
 export interface NewDesignFestivalSpike {
   designNo: string;
   event: string;
-  weekStart: string;
+  eventStart: string;
+  eventEnd: string;
   predictedQty: number;
   upliftPct: number;
   similarDesigns: SimilarDesignRef[];
@@ -91,3 +106,4 @@ export interface BreakdownResponse {
   historical: HistoricalPoint[];
   forecast: ForecastPoint[];
 }
+

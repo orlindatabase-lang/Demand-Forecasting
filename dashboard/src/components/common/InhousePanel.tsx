@@ -21,7 +21,7 @@ const PROCESS_COLOR: Record<string, string> = {
   Cutting: "#6366f1",
   Stitching: "#0d9488",
   "Thread Cutting Store": "#f59e0b",
-  "General Store Out": "#8b5cf6",
+  "General Store": "#8b5cf6",
   "Final Barcode Generator": "#22c55e",
 };
 
@@ -51,6 +51,7 @@ function DelayRiskCell({ prob, band, alreadyLate }: { prob: number | null; band:
 }
 
 const ALL = "All";
+const GENERAL_STORE = "General Store";
 // These processes have no downstream "receive" voucher in the ERP — Receive
 // Qty/Date are always empty for them, so hide those two columns instead of
 // showing dead cells, and "Issue Qty" is relabelled "Bal. Qty" since nothing
@@ -124,6 +125,15 @@ const BASE_COLUMNS: ColumnDef<IHFRow, any>[] = [
     cell: (c) => (c.getValue() as string) || <Typography variant="body2" sx={{ color: "text.disabled" }}>—</Typography>,
   },
   {
+    accessorKey: "balQty",
+    header: "Balance Qty",
+    size: 100,
+    cell: (c) => {
+      const v = c.getValue() as number;
+      return v > 0 ? formatNumber(v) : <Typography variant="body2" sx={{ color: "text.disabled" }}>—</Typography>;
+    },
+  },
+  {
     accessorKey: "ageDays",
     header: "Age / Exp.",
     size: 105,
@@ -142,7 +152,9 @@ const BASE_COLUMNS: ColumnDef<IHFRow, any>[] = [
   },
 ];
 
-const RECEIVE_COL_KEYS = new Set(["receiveQty", "receiveDate"]);
+// balQty is excluded alongside receive cols for no-receive processes since it's
+// redundant there — issueQty is already relabelled "Bal. Qty" for them (see below).
+const RECEIVE_COL_KEYS = new Set(["receiveQty", "receiveDate", "balQty"]);
 
 interface InhousePanelProps {
   /** Pre-select a process filter, e.g. when arriving from a Bottleneck Detection link. */
@@ -160,6 +172,20 @@ export default function InhousePanel({ initialProcess }: InhousePanelProps = {})
   const { data } = useInhouseLots(activeProcess === ALL ? undefined : activeProcess);
 
   const columns = useMemo(() => {
+    // General Store's "issue"/"receive" are really the store's own in/out
+    // vouchers (goods placed into the store vs. later taken out of it) —
+    // relabel to match that vocabulary instead of the generic issue/receive
+    // terms every other stage uses.
+    if (activeProcess === GENERAL_STORE) {
+      return BASE_COLUMNS.map((c) => {
+        if (!("accessorKey" in c)) return c;
+        if (c.accessorKey === "issueQty")   return { ...c, header: "Store In" };
+        if (c.accessorKey === "issueDate")  return { ...c, header: "In Date" };
+        if (c.accessorKey === "receiveQty") return { ...c, header: "Store Out" };
+        if (c.accessorKey === "receiveDate") return { ...c, header: "Out Date" };
+        return c;
+      });
+    }
     if (!NO_RECEIVE_PROCESSES.has(activeProcess)) return BASE_COLUMNS;
     // These two processes' "AI Delay Risk" is a plain age-vs-expected ramp,
     // not a real model prediction (too little history to train on) — hide

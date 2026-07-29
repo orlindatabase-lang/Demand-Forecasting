@@ -363,6 +363,7 @@ def refresh() -> None:
                 if proc_col is not None:
                     mask = df[proc_col].astype(str).str.strip().str.lower().str.contains("fob", na=False)
                     _RAW_FOB_ROWS = df[mask].copy()
+            _FETCHED_AT = time.time()
             _save_cache()
         else:
             # Empty result with good data already cached almost always means the
@@ -372,7 +373,7 @@ def refresh() -> None:
                 f"[fob] refresh returned 0 rows — keeping {len(_RAW_ROWS)} cached rows",
                 file=sys.stderr,
             )
-        _FETCHED_AT = time.time()
+            _FETCHED_AT = time.time()
     except Exception as exc:
         print(f"[fob] refresh failed: {exc!r}", file=sys.stderr)
     finally:

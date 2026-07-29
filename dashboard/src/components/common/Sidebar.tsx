@@ -14,9 +14,6 @@ import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import HomeIcon from "@mui/icons-material/Home";
 import FactoryIcon from "@mui/icons-material/Factory";
-import WarningAmberIcon from "@mui/icons-material/WarningAmber";
-import Inventory2Icon from "@mui/icons-material/Inventory2";
-import ConstructionIcon from "@mui/icons-material/Construction";
 
 export const DRAWER_WIDTH = 260;
 const SIDEBAR_BG = "#1c1a35";
@@ -41,7 +38,6 @@ const SECTIONS: NavSection[] = [
     label: "Production",
     icon: <FactoryIcon fontSize="small" />,
     items: [
-      { to: "/production", label: "Production Trackers" },
       { to: "/bottleneck", label: "Bottleneck Detection" },
       { to: "/inventory", label: "Inventory Planning" },
     ],

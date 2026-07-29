@@ -16,8 +16,8 @@ growing?". ``classify(rows, …)`` mutates the plan rows in place; all threshold
 are the named constants below.
 
 NOTE: this is a DECISION layer. Only the causal launch features (days_since_launch,
-launch_drr, launch_tier) may feed LightGBM training — the dynamic signals here
-would leak the future.
+launch_drr, launch_tier) may feed the weekly model's training. The dynamic
+signals here would leak the future.
 """
 from __future__ import annotations
 

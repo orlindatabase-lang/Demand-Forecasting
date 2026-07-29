@@ -56,13 +56,15 @@ VIEW_PRODUCTION = "View_Dboard_Trans_Production_Analysis_For_BI"
 # three *_WIP columns: open production order + in-house + job-work.
 _WIP_COLS = ["PRO_ORD_WIP_QTY", "IN_HOUSE_QTY_WIP", "JOB_WORK_QTY_WIP"]
 
-# Final column order, matching final_merged_data.csv.
+# Final column order, matching final_merged_data.csv. category_name/brand_name/
+# promo_discount added for the weekly demand-forecasting model (api/lgbm_forecast.py).
 _FINAL_COLS = [
     "product_sku_code", "listing_sku_code", "qty", "order_status", "order_date",
     "total", "settlement_amount", "buyer_city", "buyer_state", "channel_name",
     "warehouse_name", "delivery_date", "DESIGN_NO", "DESIGN_GROUP",
     "CATALOG_NAME", "COLOR", "LAUNCH_DATE", "SECTION",
     "TOTAL_WIP_QTY", "PENDING_QTY_PIECES",
+    "category_name", "brand_name", "promo_discount",
 ]
 
 
@@ -229,7 +231,7 @@ def fetch_sales_bigquery() -> pd.DataFrame:
         SELECT
             product_sku_code, listing_sku_code, qty, order_status, order_date,
             total, settlement_amount, buyer_city, buyer_state, channel_name,
-            warehouse_name, delivery_date
+            warehouse_name, delivery_date, category_name, brand_name, promo_discount
         FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}`
         WHERE DATE(order_date) >= '{SALES_START_DATE}'
         AND   DATE(order_date) <= CURRENT_DATE()

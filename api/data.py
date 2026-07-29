@@ -41,29 +41,28 @@ FORECAST_BLEND = float(os.getenv("FORECAST_BLEND", "0.5"))
 DAILY_REFRESH = os.getenv("DAILY_REFRESH", "on").strip().lower() != "off"
 REFRESH_HOUR = int(os.getenv("REFRESH_HOUR", "6"))
 REFRESH_MINUTE = int(os.getenv("REFRESH_MINUTE", "0"))
-# Inventory / production policy (Module 2+6: safety stock + reorder point + MOQ).
 # Replenishment lead time = how long a new production lot takes; the default is
 # the empirically-observed median (~12 weeks), overridden per-design by the
-# delay model's real lot lead times when available (see _lead_days).
+# delay model's real lot lead times when available (see _lead_days). Lead time
+# and safety stock are informational only (see _load_real_plan's 10-week policy).
 PROD_LEAD_DAYS = int(os.getenv("PROD_LEAD_DAYS", "84"))
 SERVICE_Z = float(os.getenv("SERVICE_Z", "1.65"))        # 1.65 ≈ 95% service level
-REVIEW_DAYS = int(os.getenv("REVIEW_DAYS", "7"))         # weekly planning cycle
-PRODUCTION_MOQ = int(os.getenv("PRODUCTION_MOQ", "50"))  # min production lot size
 # Local snapshot of the merged order history (fallback / DATA_SOURCE=csv).
 DATA_FILE = Path(__file__).resolve().parent.parent / "final_merged_data.csv"
-# Columns the plan + top tables need from the source frame.
+# Columns the plan + top tables need from the source frame. DESIGN_GROUP feeds
+# the "vertical" column (see verticals.py).
 _SOURCE_COLS = ["product_sku_code", "qty", "order_status", "order_date",
-                "DESIGN_NO", "TOTAL_WIP_QTY", "PENDING_QTY_PIECES",
+                "DESIGN_NO", "DESIGN_GROUP", "TOTAL_WIP_QTY", "PENDING_QTY_PIECES",
                 "buyer_state", "buyer_city", "warehouse_name", "total"]
-# Extra columns the LightGBM forecaster needs (product attributes for features).
-_FORECAST_COLS = ["listing_sku_code", "DESIGN_GROUP", "COLOR", "SECTION",
-                  "CATALOG_NAME", "LAUNCH_DATE"]
+# Extra columns the daily demand-forecasting model needs (api/lgbm_forecast.py).
+_FORECAST_COLS = ["listing_sku_code", "LAUNCH_DATE", "channel_name",
+                   "category_name", "brand_name", "promo_discount"]
 _FULL_COLS = _SOURCE_COLS + _FORECAST_COLS
-# Order statuses that count as realized demand (exclude cancellations & returns).
-_SOLD_STATUSES = {
-    "Delivered", "Shipped", "In Transit", "Ready to ship",
-    "Packed", "New", "Processing", "Pending",
-}
+# Order statuses that DON'T count as realized demand — everything else
+# (including Return Received / Cancel Init / Return Init / etc.) counts as a
+# real sale. Matched case-insensitively against a lowercased order_status
+# (matches lgbm_forecast.py's _EXCLUDED_NORM).
+_EXCLUDED_STATUSES = {"cancelled", "cancelled before shipping"}
 # Weeks of real weekly sales kept in memory for the drill-down history.
 _HIST_WEEKS = 8
 # Weeks forecast ahead (matches lgbm_forecast.HORIZON_WEEKS; 5 weeks ≈ 35-day plan).
@@ -157,6 +156,7 @@ def _build_plan() -> tuple[list[PlanRow], list[dict]]:
                 calculatedProductionSuggestion=calculated,
                 stockStatus="In Stock" if available >= total else "Produce",
                 historicalLast10d=hist10,
+                price=price,
             )
         )
     return rows, facts
@@ -347,7 +347,219 @@ def _adjusted_weekly(snap_date: date, lgbm_weekly: list[float] | None,
     return series
 
 
-def _load_real_plan(df, forecasts: dict | None = None) -> tuple[
+def _forecast_windows() -> tuple[list[tuple[date, date]], list[tuple[str, date, date, float]]]:
+    """(week_bounds, festival_windows) for the current ``_FC_WEEKS``-week
+    forecast horizon — ``week_bounds[w]`` is the (Monday, Sunday) span of
+    forecast week ``w``; ``festival_windows`` are the real named sale/festival
+    date ranges (see ``festival.windows_between``) overlapping that horizon."""
+    week_bounds = [
+        (_forecast_week_start(SNAPSHOT_DATE, w), _forecast_week_start(SNAPSHOT_DATE, w) + timedelta(days=6))
+        for w in range(_FC_WEEKS)
+    ]
+    windows = festival.windows_between(week_bounds[0][0], week_bounds[-1][1])
+    return week_bounds, windows
+
+
+def _design_festival_spike(
+    weekly: list[float],
+    week_bounds: list[tuple[date, date]],
+    windows: list[tuple[str, date, date, float]],
+) -> dict | None:
+    """The single best genuine festival/sale uplift (if any) in ``weekly``
+    (one design's aggregated per-week forecast, aligned to ``week_bounds``),
+    measured over each window's REAL calendar dates (e.g. "8-15 Aug" for
+    Independence Day Sale), not the Monday-anchored bucket that overlaps it.
+    Quantity is pro-rated across buckets by day-overlap; uplift compares
+    daily rates so windows of different lengths stay comparable. ``None`` if
+    nothing clears the 10%-uplift noise floor."""
+    horizon_start, horizon_end = week_bounds[0][0], week_bounds[-1][1]
+
+    def week_is_festival(ws: date, we: date) -> bool:
+        return any(not (we < w_start or ws > w_end) for _n, w_start, w_end, _p in windows)
+
+    def qty_for_range(r_start: date, r_end: date) -> float:
+        total = 0.0
+        for (ws, we), wk_qty in zip(week_bounds, weekly):
+            overlap_days = (min(we, r_end) - max(ws, r_start)).days + 1
+            if overlap_days > 0:
+                total += (wk_qty / 7) * overlap_days
+        return total
+
+    non_festival_vals = [wk for (ws, we), wk in zip(week_bounds, weekly) if not week_is_festival(ws, we)]
+    baseline_weekly = (sum(non_festival_vals) / len(non_festival_vals)) if non_festival_vals \
+        else (sum(weekly) / len(weekly) if weekly else 0.0)
+    if baseline_weekly <= 0:
+        return None
+    baseline_daily = baseline_weekly / 7
+
+    best = None
+    for name, w_start, w_end, _peak in windows:
+        clipped_start, clipped_end = max(w_start, horizon_start), min(w_end, horizon_end)
+        if clipped_start > clipped_end:
+            continue
+        window_days = (clipped_end - clipped_start).days + 1
+        qty = qty_for_range(clipped_start, clipped_end)
+        uplift_pct = round((qty / window_days / baseline_daily - 1) * 100)
+        if uplift_pct < 10:  # not a real spike, just noise around baseline
+            continue
+        if best is None or uplift_pct > best["upliftPct"]:
+            best = {
+                "event": name,
+                "eventStart": clipped_start.isoformat(),
+                "eventEnd": clipped_end.isoformat(),
+                "predictedQty": round(qty),
+                "upliftPct": uplift_pct,
+            }
+    return best
+
+
+def _design_weekly_series(skus: list[str], fc_weekly: dict[str, list[float]]) -> list[float] | None:
+    """Sum each SKU's festival-adjusted weekly forecast into one series, or
+    ``None`` if none of the SKUs have a cached forecast."""
+    weekly = [0.0] * _FC_WEEKS
+    has_series = False
+    for sku in skus:
+        series = fc_weekly.get(sku)
+        if not series:
+            continue
+        has_series = True
+        for i, v in enumerate(series[:_FC_WEEKS]):
+            weekly[i] += v
+    return weekly if has_series else None
+
+
+def _design_weekly_series_preferred(
+    design_no: str, skus: list[str], fc_weekly: dict[str, list[float]],
+    design_fc: dict[str, dict] | None, naive_week_map: dict[str, float] | None,
+) -> list[float] | None:
+    """Design-level weekly series for festival-spike detection: prefer
+    lgbm_forecast.compute_design()'s own trained forecast for this design
+    (measurably more accurate than summing SKU forecasts — see that
+    function's docstring) when it covers this design_no, else fall back to
+    summing each SKU's own festival-adjusted series (_design_weekly_series).
+
+    The design-level model's raw output isn't festival/naive-blended the way
+    each SKU's own series already is, so it gets the SAME _adjusted_weekly
+    treatment here (a design-level naive rate = sum of its SKUs' own naive
+    rates) to stay comparable in scale and festival-awareness."""
+    if design_fc and design_no in design_fc:
+        dseries = design_fc[design_no].get("weekly")
+        if dseries:
+            naive_d = sum((naive_week_map or {}).get(s, 0.0) for s in skus)
+            return _adjusted_weekly(SNAPSHOT_DATE, dseries, naive_d)
+    return _design_weekly_series(skus, fc_weekly)
+
+
+def attach_festival_spikes(
+    rows: list[PlanRow], fc_weekly: dict[str, list[float]],
+    design_fc: dict[str, dict] | None = None,
+    naive_week_map: dict[str, float] | None = None,
+) -> None:
+    """Populate every row's ``festivalEvent*``/``festivalQty``/
+    ``festivalUpliftPct`` from its design's aggregated forecast — ALL
+    designs, unlike ``get_new_design_festival_spikes`` (cold-start dialog
+    only, age-filtered). Powers the "Predicted Festival Spike" column.
+    Rows with no qualifying window keep the field defaults. Takes
+    ``fc_weekly`` explicitly, not the module-level ``_FC_WEEKLY``, since this
+    runs inside ``_load_real_plan`` before that global is published (same
+    reason ``design_fc``/``naive_week_map`` are passed explicitly here rather
+    than read from ``_FC_WEEKLY_DESIGN``/``_NAIVE_WEEK``)."""
+    week_bounds, windows = _forecast_windows()
+    if not windows:
+        return
+
+    by_design: dict[str, list[str]] = {}
+    for r in rows:
+        by_design.setdefault(r.designNo, []).append(r.skuCode)
+
+    spike_by_design: dict[str, dict] = {}
+    for design_no, skus in by_design.items():
+        weekly = _design_weekly_series_preferred(design_no, skus, fc_weekly, design_fc, naive_week_map)
+        if weekly is None:
+            continue
+        spike = _design_festival_spike(weekly, week_bounds, windows)
+        if spike:
+            spike_by_design[design_no] = spike
+
+    for r in rows:
+        spike = spike_by_design.get(r.designNo)
+        if spike:
+            r.festivalEvent = spike["event"]
+            r.festivalEventStart = spike["eventStart"]
+            r.festivalEventEnd = spike["eventEnd"]
+            r.festivalQty = spike["predictedQty"]
+            r.festivalUpliftPct = spike["upliftPct"]
+
+
+_JUNK_PLACE_NAMES = {"", "unknown", "nan", "na", "null", "none", "n/a", "-"}
+
+
+def _norm_place(s) -> str | None:
+    """Clean a state / city name: collapse whitespace, drop a trailing
+    pincode-like number ('Chennai 600081' -> 'Chennai'), reject placeholders."""
+    import pandas as pd
+
+    if pd.isna(s):
+        return None
+    t = re.sub(r"\s+", " ", str(s).strip())
+    t = re.sub(r"\s+\d+$", "", t)  # strip a trailing standalone number
+    if t.lower() in _JUNK_PLACE_NAMES or not any(c.isalpha() for c in t):
+        return None
+    return t.title()
+
+
+def _norm_warehouse(s) -> str | None:
+    """Keep real FC names / codes (BLR8, DEL5, Malur BTS) but drop blanks,
+    numeric-only values and the 'DEFAULT …' unassigned catch-all bucket."""
+    import pandas as pd
+
+    if pd.isna(s):
+        return None
+    t = re.sub(r"\s+", " ", str(s).strip())
+    tl = t.lower()
+    if tl in _JUNK_PLACE_NAMES or tl.startswith("default") or not any(c.isalpha() for c in t):
+        return None
+    return t
+
+
+def _geo_frame(sales) -> "pd.DataFrame":
+    """``sales`` (already status-filtered order rows) with normalized
+    _state/_city/_warehouse columns added — the shared input to ``_top_agg``,
+    used for both the plan-wide top tables and a single SKU's top regions."""
+    return sales.assign(
+        _state=sales["buyer_state"].map(_norm_place),
+        _city=sales["buyer_city"].map(_norm_place),
+        _warehouse=sales["warehouse_name"].map(_norm_warehouse),
+    )
+
+
+def _top_agg(geo, col: str, snap: "pd.Timestamp", cap: int = 100, sort_key: str = "units30") -> list[dict]:
+    """Revenue + sale quantity by ``col`` (_state/_city/_warehouse) over the
+    last 10/30/90 days, sorted by ``sort_key`` (default 30-day quantity), top
+    ``cap`` kept."""
+    import pandas as pd
+
+    g = geo.dropna(subset=[col])
+    acc: dict[str, dict] = {}
+    for days in _PERIODS:
+        lo = snap - pd.Timedelta(days=days - 1)
+        w = g[g["order_date"] >= lo]
+        rev = w.groupby(col)["total"].sum()
+        units = w.groupby(col)["qty"].sum()
+        for name in rev.index:
+            a = acc.setdefault(name, {})
+            a[f"revenue{days}"] = int(round(float(rev[name])))
+            a[f"units{days}"] = int(units[name])
+    out = [
+        {"name": name,
+         **{f"{m}{p}": a.get(f"{m}{p}", 0) for m in ("revenue", "units") for p in _PERIODS}}
+        for name, a in acc.items()
+    ]
+    out.sort(key=lambda r: r[sort_key], reverse=True)
+    return out[:cap]
+
+
+def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | None = None) -> tuple[
     list[PlanRow], dict[str, dict[str, int]], dict[str, list[float]], dict[str, float],
     list["TopRegion"], list["TopRegion"], list["TopWarehouse"],
 ]:
@@ -356,35 +568,87 @@ def _load_real_plan(df, forecasts: dict | None = None) -> tuple[
     each SKU's run-rate and the festival uplift into one weekly series
     (``_adjusted_weekly``); ``forecast7/10/35`` are its 1/≈2/5-week sums (the same
     series the drill-down shows). ``inventoryQty`` = PENDING_QTY_PIECES, ``wipQty``
-    = TOTAL_WIP_QTY, ``availableQty`` = inventory + WIP. Top tables = gross revenue
+    = TOTAL_WIP_QTY + this design's open Job Work + Inhouse pending quantity (see
+    job_inhouse_wip_by_design below), ``availableQty`` = inventory + WIP. Top tables = gross revenue
     + units per state/city/warehouse over 10/30/90 days (junk names dropped). Sets
     module-level ``SNAPSHOT_DATE`` and ``OVERALL_ACCURACY``."""
     global SNAPSHOT_DATE, OVERALL_ACCURACY, SKU_ACCURACY, SKU_MODEL_HIST
     import pandas as pd
 
     df = df.dropna(subset=["product_sku_code"])
-    # Match the LightGBM path (data_processing.clean_data) so the naive baseline
-    # and the model count the SAME rows: drop exact-duplicate order lines (the
-    # source has no order_id) and any future-dated orders.
+    # Drop exact-duplicate order lines (the source has no order_id) and any
+    # future-dated orders.
     df = df.drop_duplicates()
     df = df[df["order_date"] <= pd.Timestamp.today().normalize()]
 
     snap = pd.Timestamp(df["order_date"].max()).normalize()
     SNAPSHOT_DATE = snap.date()
-    sales = df[df["order_status"].isin(_SOLD_STATUSES)]
+    sales = df[~df["order_status"].astype(str).str.strip().str.lower().isin(_EXCLUDED_STATUSES)]
     # Return-status rows (for lifecycle return-rate); separate from sold demand.
     returns = df[df["order_status"].astype(str).str.contains("return", case=False, na=False)]
 
-    def window_sum(days: int):
+    def window_sum(days: int, col: str = "qty"):
         lo = snap - pd.Timedelta(days=days - 1)
-        return sales[sales["order_date"] >= lo].groupby("product_sku_code")["qty"].sum()
+        return sales[sales["order_date"] >= lo].groupby("product_sku_code")[col].sum()
 
     last10 = window_sum(10)
     last35 = window_sum(35)
+    # Realized avg selling price (revenue/qty) over the last 90 days.
+    qty90 = window_sum(90)
+    revenue90 = window_sum(90, col="total")
     wip = df.groupby("product_sku_code")["TOTAL_WIP_QTY"].max()
     # PENDING_QTY_PIECES is the on-hand inventory (denormalised per row -> max).
     inventory_by_sku = df.groupby("product_sku_code")["PENDING_QTY_PIECES"].max()
     design = df.groupby("product_sku_code")["DESIGN_NO"].first()
+
+    # Every tracked production-stage process's open lots are also genuine
+    # work-in-progress — goods currently issued to a job worker, a vendor, or
+    # mid-way through an Inhouse stage (Cutting/Stitching/...), not yet
+    # received back: Job Work, Inhouse, and FOB Issue. (Purchase Order is
+    # deliberately excluded — it tracks pending raw *fabric* receipt, not
+    # garment pieces in production, so it isn't WIP in this sense. Embroidery
+    # is also excluded — see below.) Adds to TOTAL_WIP_QTY above (which comes
+    # from a separate ERP view that has had real outages — see its own
+    # "planning view unavailable" fallback), not a replacement for it. All
+    # three trackers report at DESIGN grain only (none expose a SKU/size
+    # breakdown; inhouse's DESIGN_NAME needs the same suffix-stripping
+    # inhouse.py already uses for its own design-level rollups), so this is
+    # added per design, not per exact SKU/color/size.
+    job_inhouse_wip_by_design: dict[str, int] = {}
+    try:
+        import job_work
+        for r in job_work.get_data(limit=10000).get("items", []):
+            dn_jw = str(r.get("design", "")).strip().upper()
+            if dn_jw:
+                job_inhouse_wip_by_design[dn_jw] = (
+                    job_inhouse_wip_by_design.get(dn_jw, 0) + int(r.get("pending", 0) or 0)
+                )
+    except Exception as exc:  # noqa: BLE001 — WIP augmentation must never block the plan
+        print(f"[data] job_work WIP lookup failed: {exc!r}", file=sys.stderr)
+    try:
+        import inhouse
+        for r in inhouse.get_data(limit=10000).get("items", []):
+            dn_ih = inhouse._base_design(r.get("design", ""))
+            if dn_ih:
+                pending = max(0, int(r.get("issueQty", 0) or 0) - int(r.get("receiveQty", 0) or 0))
+                job_inhouse_wip_by_design[dn_ih] = job_inhouse_wip_by_design.get(dn_ih, 0) + pending
+    except Exception as exc:  # noqa: BLE001
+        print(f"[data] inhouse WIP lookup failed: {exc!r}", file=sys.stderr)
+    # Embroidery deliberately excluded: its GRN (receive) matching fails for
+    # ~99% of open lots (exact-match on (LOT_NO, ARTICLE_NAME), which rarely
+    # agrees between the issue and receive vouchers), so pendingQty is almost
+    # always the full original issueQty even when much of it was actually
+    # received — wildly overstating WIP (e.g. +39,339 on a single design).
+    # Re-add once embroidery.py's receive matching is fixed.
+    try:
+        import fob
+        for r in fob.get_data(limit=10000).get("items", []):
+            dn_fob = str(r.get("design", "")).strip().upper()
+            if dn_fob:
+                pending = max(0, int(r.get("issueQty", 0) or 0) - int(r.get("receiveQty", 0) or 0))
+                job_inhouse_wip_by_design[dn_fob] = job_inhouse_wip_by_design.get(dn_fob, 0) + pending
+    except Exception as exc:  # noqa: BLE001
+        print(f"[data] fob WIP lookup failed: {exc!r}", file=sys.stderr)
     design_group = (df.groupby("product_sku_code")["DESIGN_GROUP"].first()
                      if "DESIGN_GROUP" in df.columns else pd.Series(dtype="object"))
     # Earliest launch date per SKU -> drives days-since-launch / launch tier.
@@ -397,8 +661,7 @@ def _load_real_plan(df, forecasts: dict | None = None) -> tuple[
     # 417-04, whose real LAUNCH_DATE of 2024-06-25 is intact in the master
     # view fetched directly). Fetch the master view directly instead (one
     # row per DESIGN_NO, no join/collision) and map each SKU to its own
-    # design's launch date - the same source similar_design.py already uses
-    # successfully for cold-start donor-age gating.
+    # design's launch date.
     launched = pd.Series(dtype="datetime64[ns]")
     try:
         import live_source
@@ -415,11 +678,12 @@ def _load_real_plan(df, forecasts: dict | None = None) -> tuple[
     except Exception as exc:  # noqa: BLE001 — never let this block the plan rebuild
         print(f"[data] direct launch-date fetch failed: {exc!r}", file=sys.stderr)
 
-    # Per-SKU WEEKLY actual sales (Mon-anchored) for the drill-down history.
+    # Per-SKU WEEKLY actual sales (Mon-anchored), used below for the safety-stock
+    # demand-variance term (sigma_w).
     last_monday = pd.Timestamp(snap).normalize() - pd.Timedelta(days=pd.Timestamp(snap).weekday())
     wkrec = sales[sales["order_date"] >= last_monday - pd.Timedelta(weeks=_HIST_WEEKS)].copy()
-    # Monday week-start (matches the historical loop + _forecast_week_start). NOTE:
-    # to_period("W-MON").start_time would give TUESDAY (W-MON = weeks ENDING Monday).
+    # Monday week-start. NOTE: to_period("W-MON").start_time would give TUESDAY
+    # (W-MON = weeks ENDING Monday).
     wkrec["_wk"] = wkrec["order_date"] - pd.to_timedelta(wkrec["order_date"].dt.weekday, unit="D")
     wk_g = wkrec.groupby(["product_sku_code", "_wk"])["qty"].sum()
     week_actual: dict[str, dict[str, int]] = {}
@@ -434,6 +698,8 @@ def _load_real_plan(df, forecasts: dict | None = None) -> tuple[
         skey = str(sku)
         naive35 = int(last35.get(sku, 0))
         naive_week = naive35 / 5.0          # avg weekly run-rate (last 5 weeks ≈ 35 days)
+        q90 = float(qty90.get(sku, 0))
+        price = round(float(revenue90.get(sku, 0)) / q90, 2) if q90 > 0 else 0.0
         fc = forecasts.get(skey) if forecasts else None
         lgbm_weekly = fc.get("weekly") if fc else None
         # One festival-adjusted, LGBM+run-rate-blended WEEKLY series drives BOTH the
@@ -442,32 +708,26 @@ def _load_real_plan(df, forecasts: dict | None = None) -> tuple[
         wseries = _adjusted_weekly(SNAPSHOT_DATE, lgbm_weekly, naive_week)
         f7 = round(wseries[0])                       # week 1 ≈ 7 days
         f10 = round(wseries[0] + wseries[1] * (3 / 7))  # 1 week + 3 days
-        f35 = round(sum(wseries[:5]))               # 5 weeks ≈ 35 days
+        # Sum of each week ROUNDED first (not round-of-the-sum), matching how the
+        # drill-down graph rounds per week — so the two always tie out exactly.
+        f35 = sum(round(x) for x in wseries[:5])     # 5 weeks ≈ 35 days
         fc_weekly_adj[skey] = [round(x, 3) for x in wseries]
         naive_week_map[skey] = naive_week
         hist10 = int(last10.get(sku, 0))
+        dn = design.get(sku)
         w = wip.get(sku)
         wip_qty = 0 if pd.isna(w) else int(round(float(w)))
+        if pd.notna(dn):
+            wip_qty += job_inhouse_wip_by_design.get(str(dn).strip().upper(), 0)
         inv = inventory_by_sku.get(sku)
         inventory = 0 if pd.isna(inv) else int(round(float(inv)))
         available = inventory + wip_qty
-        dn = design.get(sku)
-        # (s, S) inventory policy: produce when on-hand + WIP falls below the
-        # reorder point (lead-time demand + safety stock), up to a target that also
-        # covers the weekly review cycle, rounded up to the MOQ. The lead time is
-        # the real per-design lot lead from the delay model (else the default).
+        # Lead time + safety stock kept as informational fields only (Produce
+        # Now is set below, after lifecycle.classify, from currentDrr).
         lead = _lead_days(None if pd.isna(dn) else dn)
-        drr = f35 / 35.0                                   # units/day (model run-rate)
         acts = list(week_actual.get(skey, {}).values())
         sigma_w = float(pd.Series(acts, dtype="float64").std()) if len(acts) >= 2 else 0.0
         safety = max(0, round(SERVICE_Z * sigma_w * (lead / 7.0) ** 0.5))
-        reorder = round(drr * lead + safety)
-        order_up_to = round(drr * (lead + REVIEW_DAYS) + safety)
-        if available <= reorder and order_up_to > available:
-            raw = order_up_to - available
-            calculated = int(-(-raw // PRODUCTION_MOQ) * PRODUCTION_MOQ) if PRODUCTION_MOQ > 0 else raw
-        else:
-            calculated = 0
         rows.append(
             PlanRow(
                 skuCode=str(sku),
@@ -481,16 +741,46 @@ def _load_real_plan(df, forecasts: dict | None = None) -> tuple[
                 availableQty=available,
                 leadTimeDays=int(round(lead)),
                 safetyStock=safety,
-                reorderPoint=reorder,
-                totalSuggestedProduction=order_up_to,
-                calculatedProductionSuggestion=calculated,
-                stockStatus="In Stock" if available > reorder else "Reorder",
+                reorderPoint=0,
+                totalSuggestedProduction=0,
+                calculatedProductionSuggestion=0,
+                stockStatus="In Stock",
                 historicalLast10d=hist10,
                 vertical=verticals.vertical_of(design_group.get(sku)),
+                price=price,
             )
         )
     rows.sort(key=lambda r: r.forecast35, reverse=True)
     lifecycle.classify(rows, sales, returns, launched, SNAPSHOT_DATE)
+    attach_festival_spikes(rows, fc_weekly_adj, design_forecasts, naive_week_map)
+
+    # Flat 10-week-demand production policy: Produce Now = (DRR * 10 weeks) -
+    # Available. Uses currentDrr — the HISTORICAL trailing-30-day actual sales
+    # rate set by lifecycle.classify above (same number shown in the dashboard's
+    # DRR column) — not the forward forecast, so the two reconcile. No floor/
+    # ceiling applied (can go negative when Available exceeds the target; the
+    # dashboard just blanks non-positive values).
+    for r in rows:
+        target = round(r.currentDrr * 10 * 7)
+        r.reorderPoint = target
+        r.totalSuggestedProduction = target
+        r.calculatedProductionSuggestion = target - r.availableQty
+        r.stockStatus = "In Stock" if r.availableQty > target else "Reorder"
+
+    # Design-level 5-week forecast, for context alongside each SKU's own
+    # forecast35 — this table's DRR/reorder/production math above stays
+    # driven by the SKU-level model; see get_breakdown()'s docstring for why
+    # redistributing a design-level total back down to SKU grain was tested
+    # and found worse for that kind of decision. Purely an extra column here.
+    by_design_rows: dict[str, list[PlanRow]] = {}
+    for r in rows:
+        by_design_rows.setdefault(r.designNo, []).append(r)
+    for design_no, drows in by_design_rows.items():
+        skus = [r.skuCode for r in drows]
+        dseries = _design_weekly_series_preferred(design_no, skus, fc_weekly_adj, design_forecasts, naive_week_map)
+        d_forecast35 = round(sum(dseries[:5])) if dseries else 0
+        for r in drows:
+            r.designForecast35 = d_forecast35
 
     # --- overall MODEL accuracy: genuine walk-forward backtest ---------------- #
     # This used to compare the seasonal-naive baseline against itself (naive_week
@@ -527,59 +817,13 @@ def _load_real_plan(df, forecasts: dict | None = None) -> tuple[
         print("[data] no scoreable snapshot yet — using naive-only proxy accuracy", file=sys.stderr)
 
     # --- top-selling state / city / warehouse (real revenue + quantity) ------ #
-    junk = {"", "unknown", "nan", "na", "null", "none", "n/a", "-"}
-
-    def norm_place(s) -> str | None:
-        """Clean a state / city name: collapse whitespace, drop a trailing
-        pincode-like number ('Chennai 600081' -> 'Chennai'), reject placeholders."""
-        if pd.isna(s):
-            return None
-        t = re.sub(r"\s+", " ", str(s).strip())
-        t = re.sub(r"\s+\d+$", "", t)  # strip a trailing standalone number
-        if t.lower() in junk or not any(c.isalpha() for c in t):
-            return None
-        return t.title()
-
-    def norm_warehouse(s) -> str | None:
-        """Keep real FC names / codes (BLR8, DEL5, Malur BTS) but drop blanks,
-        numeric-only values and the 'DEFAULT …' unassigned catch-all bucket."""
-        if pd.isna(s):
-            return None
-        t = re.sub(r"\s+", " ", str(s).strip())
-        tl = t.lower()
-        if tl in junk or tl.startswith("default") or not any(c.isalpha() for c in t):
-            return None
-        return t
-
-    geo = sales.assign(
-        _state=sales["buyer_state"].map(norm_place),
-        _city=sales["buyer_city"].map(norm_place),
-        _warehouse=sales["warehouse_name"].map(norm_warehouse),
-    )
-
-    def top_agg(col: str) -> list[dict]:
-        g = geo.dropna(subset=[col])
-        acc: dict[str, dict] = {}
-        for days in _PERIODS:
-            lo = snap - pd.Timedelta(days=days - 1)
-            w = g[g["order_date"] >= lo]
-            rev = w.groupby(col)["total"].sum()
-            units = w.groupby(col)["qty"].sum()
-            for name in rev.index:
-                a = acc.setdefault(name, {})
-                a[f"revenue{days}"] = int(round(float(rev[name])))
-                a[f"units{days}"] = int(units[name])
-        out = [
-            {"name": name,
-             **{f"{m}{p}": a.get(f"{m}{p}", 0) for m in ("revenue", "units") for p in _PERIODS}}
-            for name, a in acc.items()
-        ]
-        out.sort(key=lambda r: r["units30"], reverse=True)
-        return out[:100]  # cap the long noisy tail (buyer_city has ~9k variants)
-
-    top_states = [TopRegion(**d) for d in top_agg("_state")]
-    top_cities = [TopRegion(**d) for d in top_agg("_city")]
-    top_warehouses = [TopWarehouse(**d) for d in top_agg("_warehouse")]
+    geo = _geo_frame(sales)
+    # cap=100: the long noisy tail (buyer_city has ~9k variants) doesn't need
+    # to be shown on the plan-wide tables. get_sku_top_regions() below reuses
+    # this same _top_agg with a much smaller cap for a single SKU's drawer.
+    top_states = [TopRegion(**d) for d in _top_agg(geo, "_state", snap, cap=100)]
+    top_cities = [TopRegion(**d) for d in _top_agg(geo, "_city", snap, cap=100)]
+    top_warehouses = [TopWarehouse(**d) for d in _top_agg(geo, "_warehouse", snap, cap=100)]
 
     return (rows, week_actual, fc_weekly_adj, naive_week_map,
             top_states, top_cities, top_warehouses)
@@ -615,6 +859,13 @@ _WEEK_ACTUAL: dict[str, dict[str, int]] = {}
 # single series behind BOTH the headline horizons (forecast7/10/35) and the
 # drill-down chart, so they always reconcile.
 _FC_WEEKLY: dict[str, list[float]] = {}
+# Per-design RAW weekly forecast from lgbm_forecast.compute_design() — a
+# second, independently-trained model at DESIGN_NO grain (see that function's
+# docstring for why it's measurably more accurate than summing SKU forecasts
+# for a design's total demand). Used only to sharpen the Festival Spike
+# signal (_design_weekly_series_preferred); never redistributes back down to
+# SKU level. Empty until the background retrain covers a design.
+_FC_WEEKLY_DESIGN: dict[str, dict] = {}
 # Per-SKU seasonal-naive WEEKLY level (5-week run-rate); the drill-down back-test
 # baseline and the fallback when LightGBM doesn't cover a SKU.
 _NAIVE_WEEK: dict[str, float] = {}
@@ -671,7 +922,7 @@ def _upgrade_to_lgbm() -> None:
     Runs in a background thread so the seasonal-naive plan is served immediately.
     On any failure the naive plan is left in place.
     """
-    global ACTIVE_FORECAST_MODEL, _ACTIVE_FORECASTS
+    global ACTIVE_FORECAST_MODEL, _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN
     try:
         import lgbm_forecast
         snap = SNAPSHOT_DATE.isoformat()
@@ -684,10 +935,29 @@ def _upgrade_to_lgbm() -> None:
         if not forecasts:
             print("[data] XGBoost produced no forecasts; keeping naive", file=sys.stderr)
             return
+
+        # Design-level (style) model: a second, independently-trained model at
+        # DESIGN_NO grain, measurably more accurate than summing SKU-level
+        # forecasts for a design's total demand (see compute_design()'s
+        # docstring). Used only to sharpen the Festival Spike signal below —
+        # a failure here must never undo the SKU-level upgrade above.
+        try:
+            design_forecasts = lgbm_forecast.load_design_cache(snap)
+            if design_forecasts is None:
+                print("[data] training design-level model in background…", file=sys.stderr)
+                design_forecasts = lgbm_forecast.compute_design(_SOURCE_DF)
+                if design_forecasts:
+                    lgbm_forecast.save_design_cache(snap, design_forecasts)
+            _FC_WEEKLY_DESIGN = design_forecasts or {}
+            print(f"[data] design-level model active ({len(_FC_WEEKLY_DESIGN):,} designs)", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 — design-level is a bonus signal, not required
+            print(f"[data] design-level model failed ({exc!r}); design forecasts unavailable", file=sys.stderr)
+            _FC_WEEKLY_DESIGN = {}
+
         # _load_real_plan folds the model's weekly series into the published plan
         # (headline horizons + drill-down chart both come from it).
         _ACTIVE_FORECASTS = forecasts
-        _set_plan(_load_real_plan(_SOURCE_DF, forecasts=forecasts))
+        _set_plan(_load_real_plan(_SOURCE_DF, forecasts=forecasts, design_forecasts=_FC_WEEKLY_DESIGN))
         ACTIVE_FORECAST_MODEL = "xgboost"
         print(f"[data] XGBoost active ({len(forecasts):,} SKUs)", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 — never let forecasting kill the API
@@ -908,15 +1178,15 @@ def get_new_designs(max_age_days: int = 90) -> list[dict]:
 
 def get_new_design_festival_spikes(max_age_days: int = 90) -> list[dict]:
     """Newly-launched designs (<=max_age_days old) whose 6-week forecast shows
-    a genuine uplift in a festival/sale week.
+    a genuine uplift over the REAL calendar dates of a festival/sale (e.g.
+    "8-15 Aug" for Independence Day Sale), not the Monday-anchored bucket
+    that happens to overlap it.
 
-    A design this young hasn't lived through ``_REQUIRED_WEEKS`` (13, in
-    lgbm_forecast's cold-start blend) of its own history, let alone an actual
-    festival — so any predicted spike here leans heavily on the confidence-
-    weighted demand-CURVE borrowed from material-similar designs at the same
-    weeks-since-launch offset (see similar_design.similar_design_curve),
-    rather than the design's own observed seasonal response. Attaches the
-    design's top similar-design neighbors so the UI can show why."""
+    A design this young hasn't lived through ``_REQUIRED_WEEKS`` (13) of its
+    own history, let alone an actual festival, so any spike here leans on the
+    confidence-weighted curve borrowed from material-similar designs at the
+    same weeks-since-launch offset (similar_design.similar_design_curve).
+    Attaches the top similar-design neighbors so the UI can show why."""
     import similar_design
 
     by_design_skus: dict[str, list[str]] = {}
@@ -924,52 +1194,60 @@ def get_new_design_festival_spikes(max_age_days: int = 90) -> list[dict]:
         if 0 <= r.daysSinceLaunch <= max_age_days:
             by_design_skus.setdefault(r.designNo, []).append(r.skuCode)
 
+    week_bounds, windows = _forecast_windows()
+
     out: list[dict] = []
     for design_no, skus in by_design_skus.items():
-        weekly = [0.0] * _FC_WEEKS
-        has_series = False
-        for sku in skus:
-            series = _FC_WEEKLY.get(sku)
-            if not series:
-                continue
-            has_series = True
-            for i, v in enumerate(series[:_FC_WEEKS]):
-                weekly[i] += v
-        if not has_series:
+        weekly = _design_weekly_series_preferred(design_no, skus, _FC_WEEKLY, _FC_WEEKLY_DESIGN, _NAIVE_WEEK)
+        if weekly is None:
             continue
-
-        weeks_info = []
-        for w in range(_FC_WEEKS):
-            ws = _forecast_week_start(SNAPSHOT_DATE, w)
-            mult, event = _week_festival(ws)
-            weeks_info.append((ws, event, weekly[w]))
-
-        non_festival_vals = [v for _, ev, v in weeks_info if not ev]
-        baseline = (sum(non_festival_vals) / len(non_festival_vals)) if non_festival_vals \
-            else (sum(weekly) / len(weekly) if weekly else 0.0)
-        if baseline <= 0:
-            continue
-
-        festival_weeks = [(ws, ev, v) for ws, ev, v in weeks_info if ev]
-        if not festival_weeks:
-            continue
-        ws, event, qty = max(festival_weeks, key=lambda t: t[2])
-        uplift_pct = round((qty / baseline - 1) * 100)
-        if uplift_pct < 10:  # not a real spike, just noise around baseline
+        spike = _design_festival_spike(weekly, week_bounds, windows)
+        if not spike:
             continue
 
         out.append({
             "designNo": design_no,
-            "event": event,
-            "weekStart": ws.isoformat(),
-            "predictedQty": round(qty),
-            "upliftPct": uplift_pct,
+            **spike,
             "similarDesigns": similar_design.get_similar_designs(
                 design_no, top_k=3, eligible_donors_only=True),
         })
 
     out.sort(key=lambda d: d["upliftPct"], reverse=True)
     return out
+
+
+def get_sku_top_regions(sku: str, cap: int = 10) -> dict | None:
+    """This one SKU's own top-selling states/cities/warehouses (10/30/90-day
+    revenue + units) — same shape and same ``_top_agg`` math as the plan-wide
+    top tables, just filtered down to this SKU's own order history first.
+    Powers the SKU detail drawer's per-SKU geography breakdown. ``None`` if
+    the SKU isn't in the current plan; empty lists if it has no sales."""
+    if sku not in PLAN_BY_SKU or _SOURCE_DF is None:
+        return None
+    import pandas as pd
+
+    sku_df = _SOURCE_DF[_SOURCE_DF["product_sku_code"].astype(str) == sku]
+    if sku_df.empty:
+        return {"topStates": [], "topCities": [], "topWarehouses": []}
+
+    # Same prep as _load_real_plan's `sales`: drop exact-duplicate order
+    # lines, exclude future-dated orders, keep only realized-demand statuses.
+    sku_df = sku_df.drop_duplicates()
+    sku_df = sku_df[sku_df["order_date"] <= pd.Timestamp.today().normalize()]
+    sales = sku_df[~sku_df["order_status"].astype(str).str.strip().str.lower().isin(_EXCLUDED_STATUSES)]
+    if sales.empty:
+        return {"topStates": [], "topCities": [], "topWarehouses": []}
+
+    geo = _geo_frame(sales)
+    snap = pd.Timestamp(SNAPSHOT_DATE)
+    # Ranked by 90-day units (not the plan-wide tables' 30-day default) — a
+    # single SKU's sales are sparse enough that the last 90 days is the more
+    # meaningful window for "where does this SKU actually sell".
+    return {
+        "topStates": [TopRegion(**d) for d in _top_agg(geo, "_state", snap, cap=cap, sort_key="units90")],
+        "topCities": [TopRegion(**d) for d in _top_agg(geo, "_city", snap, cap=cap, sort_key="units90")],
+        "topWarehouses": [TopWarehouse(**d) for d in _top_agg(geo, "_warehouse", snap, cap=cap, sort_key="units90")],
+    }
 
 
 def get_breakdown(sku: str, weeks: int) -> BreakdownResponse | None:

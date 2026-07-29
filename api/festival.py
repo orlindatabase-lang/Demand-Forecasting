@@ -1,9 +1,9 @@
 """
-India festival / end-of-season-sale demand uplifts for the daily forecast.
+India festival / end-of-season-sale demand uplifts for the weekly forecast.
 
 Apparel demand in India spikes around festival and sale seasons (EOSS, the
 pre-Diwali festive sale, Diwali itself, etc.). The base forecast — LightGBM's
-recursive daily prediction, or the seasonal-naive fallback — does not model
+recursive weekly prediction, or the seasonal-naive fallback — does not model
 these calendar events, so we layer a multiplicative uplift on top of it.
 
 ``festival_factor(d)`` returns ``(multiplier, name)`` for a date: ``1.0, None``
@@ -86,6 +86,18 @@ def _nearest_peak_distance(d: date, max_days: int = 999) -> int:
             if abs(dist) < abs(best):
                 best = dist
     return best
+
+
+def windows_between(start: date, end: date) -> list[tuple[str, date, date, float]]:
+    """Every named festival/sale window overlapping ``[start, end]`` (inclusive),
+    across every year touched by the range (a range spanning New Year's needs
+    both years' windows)."""
+    out: list[tuple[str, date, date, float]] = []
+    for y in range(start.year, end.year + 1):
+        for name, w_start, w_end, peak in _windows_for_year(y):
+            if w_start <= end and w_end >= start:
+                out.append((name, w_start, w_end, peak))
+    return out
 
 
 def week_signal(week_start: date) -> tuple[float, str | None, int]:

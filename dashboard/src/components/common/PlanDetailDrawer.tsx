@@ -14,8 +14,8 @@ import {
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import { LineChart } from "@mui/x-charts/LineChart";
-import { useSkuBreakdown } from "@/hooks/useDashboardData";
-import type { PlanningRow } from "@/types";
+import { useSkuBreakdown, useSkuTopRegions } from "@/hooks/useDashboardData";
+import type { PlanningRow, TopRegionRow } from "@/types";
 import { formatNumber } from "@/utils/format";
 
 function SummaryChip({ label, value, color }: { label: string; value: string; color?: string }) {
@@ -40,6 +40,44 @@ function SummaryChip({ label, value, color }: { label: string; value: string; co
   );
 }
 
+function MiniRegionTable({ title, rows }: { title: string; rows: TopRegionRow[] }) {
+  return (
+    <Box sx={{ flex: 1, minWidth: 0, width: "100%" }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
+        {title}
+      </Typography>
+      <Box sx={{ overflowX: "auto" }}>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>{title}</TableCell>
+              <TableCell align="right">Units (90d)</TableCell>
+              <TableCell align="right">Revenue (90d)</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {rows.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={3} sx={{ textAlign: "center", color: "text.disabled" }}>
+                  No sales data
+                </TableCell>
+              </TableRow>
+            ) : (
+              rows.map((r) => (
+                <TableRow key={r.name}>
+                  <TableCell>{r.name}</TableCell>
+                  <TableCell align="right">{formatNumber(r.units90)}</TableCell>
+                  <TableCell align="right">₹{formatNumber(r.revenue90)}</TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </Box>
+    </Box>
+  );
+}
+
 interface PlanDetailDrawerProps {
   sku: string | null;
   row: PlanningRow | null;
@@ -47,11 +85,11 @@ interface PlanDetailDrawerProps {
 }
 
 export default function PlanDetailDrawer({ sku, row, onClose }: PlanDetailDrawerProps) {
-  const { data: bd, isLoading } = useSkuBreakdown(sku, 6);
+  const { data: bd, isLoading } = useSkuBreakdown(sku, 5);
+  const { data: topRegions, isLoading: topRegionsLoading } = useSkuTopRegions(sku);
   const theme = { palette: { success: { main: "#22c55e" }, warning: { main: "#f97316" }, error: { main: "#ef4444" } } };
 
   const accuracy = bd?.overallAccuracyPct ?? 0;
-  const skuAccuracy = bd?.accuracyPct ?? 0;
   const actualTotal = (bd?.historical ?? []).reduce((a, p) => a + p.actual, 0);
   const fcTotal = (bd?.forecast ?? []).reduce((a, p) => a + p.qty, 0);
 
@@ -89,7 +127,7 @@ export default function PlanDetailDrawer({ sku, row, onClose }: PlanDetailDrawer
 
         {row && (
           <Typography variant="body2" sx={{ color: "text.secondary", mb: 2 }}>
-            Design {row.designNo} · {row.lifecycleStage} · {row.currentTier}
+            Design {row.designNo} · {row.lifecycleStage}
           </Typography>
         )}
 
@@ -100,14 +138,19 @@ export default function PlanDetailDrawer({ sku, row, onClose }: PlanDetailDrawer
         ) : (
           <>
             <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap sx={{ mb: 3 }}>
-              <SummaryChip label="Forecast (6w)" value={formatNumber(fcTotal)} color={theme.palette.warning.main} />
+              <SummaryChip label="Forecast (5w)" value={formatNumber(fcTotal)} color={theme.palette.warning.main} />
               <SummaryChip label="Actual (recent)" value={formatNumber(actualTotal)} />
               <SummaryChip
                 label="Model Accuracy"
                 value={`${accuracy}%`}
                 color={accuracy >= 85 ? theme.palette.success.main : accuracy >= 70 ? theme.palette.warning.main : theme.palette.error.main}
               />
-              <SummaryChip label="This SKU" value={`${skuAccuracy}%`} />
+              {row && (
+                <SummaryChip
+                  label="Price"
+                  value={row.price > 0 ? `₹${formatNumber(row.price)}` : "—"}
+                />
+              )}
               {row && <SummaryChip label="Inventory" value={formatNumber(row.inventoryQty)} />}
               {row && <SummaryChip label="WIP" value={formatNumber(row.wipQty)} />}
             </Stack>
@@ -138,96 +181,64 @@ export default function PlanDetailDrawer({ sku, row, onClose }: PlanDetailDrawer
               </Box>
             )}
 
-            <Stack direction={{ xs: "column", md: "row" }} spacing={3} sx={{ alignItems: "flex-start" }}>
-              <Box sx={{ flex: 1, minWidth: 0, width: "100%" }}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
-                  Recent weeks: forecast vs actual
-                </Typography>
-                <Box sx={{ overflowX: "auto" }}>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Week</TableCell>
-                        <TableCell align="right">Forecast</TableCell>
-                        <TableCell align="right">Actual</TableCell>
-                        <TableCell align="right">Variance</TableCell>
+            <Box>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
+                Recent weeks: forecast vs actual
+              </Typography>
+              <Box sx={{ overflowX: "auto" }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Week</TableCell>
+                      <TableCell align="right">Forecast</TableCell>
+                      <TableCell align="right">Actual</TableCell>
+                      <TableCell align="right">Variance</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {bd.historical.map((p) => (
+                      <TableRow key={p.date}>
+                        <TableCell>
+                          {p.date}
+                          {p.partial && (
+                            <Typography component="span" variant="caption" sx={{ color: "text.secondary", ml: 0.5 }}>
+                              (this week, so far)
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell align="right">{formatNumber(p.forecast)}</TableCell>
+                        <TableCell align="right">{formatNumber(p.actual)}</TableCell>
+                        <TableCell
+                          align="right"
+                          sx={
+                            p.partial
+                              ? { color: "text.secondary", fontWeight: 600 }
+                              : { color: p.variance >= 0 ? "#22c55e" : "#ef4444", fontWeight: 600 }
+                          }
+                        >
+                          {p.partial ? "—" : `${p.variance >= 0 ? "+" : ""}${formatNumber(p.variance)}`}
+                        </TableCell>
                       </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {bd.historical.map((p) => (
-                        <TableRow key={p.date}>
-                          <TableCell>
-                            {p.date}
-                            {p.partial && (
-                              <Typography component="span" variant="caption" sx={{ color: "text.secondary", ml: 0.5 }}>
-                                (this week, so far)
-                              </Typography>
-                            )}
-                          </TableCell>
-                          <TableCell align="right">{formatNumber(p.forecast)}</TableCell>
-                          <TableCell align="right">{formatNumber(p.actual)}</TableCell>
-                          <TableCell
-                            align="right"
-                            sx={
-                              p.partial
-                                ? { color: "text.secondary", fontWeight: 600 }
-                                : { color: p.variance >= 0 ? "#22c55e" : "#ef4444", fontWeight: 600 }
-                            }
-                          >
-                            {p.partial ? "—" : `${p.variance >= 0 ? "+" : ""}${formatNumber(p.variance)}`}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </Box>
+                    ))}
+                  </TableBody>
+                </Table>
               </Box>
+            </Box>
 
-              <Box sx={{ flex: 1, minWidth: 0, width: "100%" }}>
-                <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>
-                  Next {bd.forecast.length} weeks
-                </Typography>
-                <Box sx={{ overflowX: "auto" }}>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Week</TableCell>
-                        <TableCell align="right">Forecast</TableCell>
-                        <TableCell>Event</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {bd.forecast.map((p) => (
-                        <TableRow key={p.date}>
-                          <TableCell>{p.date}</TableCell>
-                          <TableCell align="right">{formatNumber(p.qty)}</TableCell>
-                          <TableCell>
-                            {p.event ? (
-                              <Box
-                                component="span"
-                                sx={{
-                                  fontSize: "0.68rem",
-                                  fontWeight: 700,
-                                  color: "#f97316",
-                                  bgcolor: "#f9731622",
-                                  borderRadius: 0.75,
-                                  px: 0.75,
-                                  py: 0.1,
-                                }}
-                              >
-                                {p.event}
-                              </Box>
-                            ) : (
-                              <Typography variant="body2" sx={{ color: "text.disabled" }}>—</Typography>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </Box>
-              </Box>
-            </Stack>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700, mt: 3, mb: 1 }}>
+              Where this SKU sells
+            </Typography>
+            {topRegionsLoading ? (
+              <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                Loading regional breakdown…
+              </Typography>
+            ) : (
+              <Stack direction={{ xs: "column", md: "row" }} spacing={3} sx={{ alignItems: "flex-start" }}>
+                <MiniRegionTable title="Top States" rows={topRegions?.topStates ?? []} />
+                <MiniRegionTable title="Top Cities" rows={topRegions?.topCities ?? []} />
+                <MiniRegionTable title="Top Warehouses" rows={topRegions?.topWarehouses ?? []} />
+              </Stack>
+            )}
           </>
         )}
       </DialogContent>

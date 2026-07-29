@@ -522,6 +522,7 @@ def refresh() -> None:
             _merge_delay_scores(lots, po, grn)
             with _LOCK:
                 _LOTS = lots
+            _FETCHED_AT = time.time()
             _save_cache()
         else:
             # Empty result with good data already cached almost always means the
@@ -531,7 +532,7 @@ def refresh() -> None:
                 f"[po] refresh returned 0 lots — keeping {len(_LOTS)} cached lots",
                 file=sys.stderr,
             )
-        _FETCHED_AT = time.time()
+            _FETCHED_AT = time.time()
     except Exception as exc:
         print(f"[po] refresh failed: {exc!r}", file=sys.stderr)
     finally:
