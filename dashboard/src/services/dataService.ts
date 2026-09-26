@@ -1,206 +1,18 @@
-import { apiGet } from "./api";
+import { apiGet, apiPost } from "./api";
 import type {
-  PlanningRow,
-  TopRegionRow,
-  TopWarehouseRow,
-  SkuTopRegions,
-  BreakdownResponse,
-  NewDesignRow,
-  NewDesignFestivalSpike,
+  WeeklyGridResponse,
+  ChannelSourceWeeklyResponse,
+  CatalogStyleTiersResponse,
+  StyleLifecycleResponse,
 } from "@/types";
 
-interface PlanResponse {
-  total: number;
-  items: PlanningRow[];
-  newDesignCount: number;
-}
-
-interface NewDesignsResponse {
-  total: number;
-  items: NewDesignRow[];
-}
-
-interface NewDesignFestivalSpikesResponse {
-  total: number;
-  items: NewDesignFestivalSpike[];
-}
-
-// --- Inhouse / FOB (shared row shape) ---------------------------------------- //
-export interface IHFRow {
-  lotNo: string;
-  design: string;
-  section: string;
-  vendor: string;
-  process: string;
-  issueQty: number;
-  issueDate: string;
-  receiveQty: number;
-  receiveDate: string;
-  balQty: number;
-  balMtr: number;
-  ageDays: number;
-  riskLevel: string; // "Delayed" | "At Risk" | "On Track" | "Completed"
-  expectedDays: number;
-  lotStatus: string; // "Open" | "Completed"
-  delayProb: number | null;
-  riskBand: string | null;
-  alreadyLate: boolean;
-  debitNotes?: { voucherNo: string; voucherDate: string; partyName: string; article: string; qty: number; rate: number; amount: number; netAmount: number }[];
-  debitNoteCount?: number;
-  debitNoteAmount?: number;
-}
-
-export interface IHFResponse {
-  available: boolean;
-  total: number;
-  delayed: number;
-  atRisk: number;
-  onTrack: number;
-  completed: number;
-  processes: string[];
-  counts: Record<string, number>;
-  asOf: string;
-  items: IHFRow[];
-}
-
-// --- Job Work ----------------------------------------------------------------- //
-export interface JWRawRow {
-  lotNo: string;
-  design: string;
-  section: string;
-  vendor: string;
-  process: string;
-  issueQty: number;
-  issueDate: string;
-  receiveQty: number;
-  receiveDate: string;
-  pending: number;
-  ageDays: number;
-  riskLevel: string;
-  expectedDays: number;
-  lotStatus: string;
-  delayProb: number | null;
-  riskBand: string | null;
-  alreadyLate: boolean;
-}
-
-export interface JWFlatResponse {
-  available: boolean;
-  total: number;
-  processes: string[];
-  counts: Record<string, number>;
-  asOf: string;
-  items: JWRawRow[];
-}
-
-// --- Purchase Order ------------------------------------------------------------ //
-export interface POLot {
-  lotNo: string;
-  design: string;
-  section: string;
-  articleGroup: string;
-  vendor: string;
-  issueQty: number;
-  issueDate: string;
-  receiveQty: number;
-  receiveDate: string;
-  pendingQty: number;
-  fcmStatus: string;
-  fcmQty: number;
-  allocQty: number;
-  allocDate: string;
-  estDelivery: string;
-  delayStatus: string; // "On Track" | "At Risk" | "Delayed" | "Received"
-  riskLevel: string; // "Delayed" | "At Risk" | "On Track" | "Completed"
-  lotStatus: string;
-  ageDays: number;
-  delayProb: number | null;
-  riskBand: string | null;
-  alreadyLate: boolean;
-}
-
-export interface POResponse {
-  available: boolean;
-  total: number;
-  items: POLot[];
-}
-
-// --- Embroidery ----------------------------------------------------------------- //
-export interface EmbLot {
-  lotNo: string;
-  design: string;
-  section: string;
-  vendor: string;
-  issueQty: number;
-  issueDate: string;
-  receiveQty: number;
-  receiveDate: string;
-  pendingQty: number;
-  ageDays: number;
-  riskLevel: string;
-  lotStatus: string;
-  delayProb: number | null;
-  riskBand: string | null;
-  alreadyLate: boolean;
-}
-
-export interface EmbResponse {
-  available: boolean;
-  total: number;
-  over30: number;
-  delayed: number;
-  atRisk: number;
-  onTrack: number;
-  completed: number;
-  asOf: string;
-  items: EmbLot[];
-}
-
-// --- Bottleneck ------------------------------------------------------------------ //
-export interface BottleneckLot {
-  lotNo: string;
-  design: string;
-  process: string;
-  section: string;
-  vendor: string;
-  riskLevel: string;
-  ageDays: number;
-  expectedDays: number;
-  overrunDays: number;
-  issueQty: number;
-  pendingPieces: number;
-  issueDate: string;
-  delayProb: number | null;
-  riskBand: string | null;
-  /** This design's summed SKU-level daily run-rate (units/day, all sizes). */
-  designDrr: number;
-  /** This design's summed 35-day forecast (units, all sizes). */
-  designForecast35: number;
-  /** Per-LOT priority score: designDrr × this lot's own pendingPieces. */
-  lotDemandImpact: number;
-}
-
-export interface BottleneckProcessStats {
-  process: string;
-  severity: string; // High | Medium | Low
-  bottleneckScore: number;
-  openLots: number;
-  delayedLots: number;
-  atRiskLots: number;
-  onTrackLots: number;
-  pendingPieces: number;
-  avgAgeDays: number;
-  avgExpectedDays: number;
-  avgOverrunDays: number;
-  delayRate: number;
-}
-
-export interface BottleneckResponse {
-  available: boolean;
-  asOf: string;
-  worstProcess: string | null;
-  processes: BottleneckProcessStats[];
-  lots: BottleneckLot[];
+export interface AdminRefreshResponse {
+  status: string;
+  source: string; // "live" | "csv" | "mock"
+  rows: number;
+  snapshot: string;
+  forecastModel: string;
+  lgbmPending: boolean;
 }
 
 // --- Inventory Planning ----------------------------------------------------------- //
@@ -219,93 +31,78 @@ export interface InventoryPlanningResponse {
 }
 
 export const dataService = {
-  /** Main SKU Production Plan + top-selling tables (parallel fetch). */
-  async planningTables() {
-    const [plan, topStates, topCities, topWarehouses] = await Promise.all([
-      apiGet<PlanResponse>("/api/sku-production-plan?limit=1000"),
-      apiGet<TopRegionRow[]>("/api/top-states"),
-      apiGet<TopRegionRow[]>("/api/top-cities"),
-      apiGet<TopWarehouseRow[]>("/api/top-warehouses"),
-    ]);
-    return {
-      planningRows: plan.items,
-      newDesignCount: plan.newDesignCount,
-      topStates,
-      topCities,
-      topWarehouses,
-    };
-  },
-
-  /** All newly-launched designs (not just the count) for the KPI drill-down. */
-  async newDesigns(maxAgeDays = 90) {
-    return apiGet<NewDesignsResponse>(`/api/new-designs?maxAgeDays=${maxAgeDays}`);
-  },
-
-  /** Newly-launched designs predicted to spike at a specific festival/sale,
-   * based on the demand shape borrowed from material-similar designs. */
-  async newDesignFestivalSpikes(maxAgeDays = 90) {
-    return apiGet<NewDesignFestivalSpikesResponse>(`/api/new-designs/festival-outlook?maxAgeDays=${maxAgeDays}`);
-  },
-
-  /** Server-side SKU/design search across the FULL plan (not just the
-   * top-1000-by-forecast page the table fetches by default) — otherwise
-   * low-forecast rows (e.g. newly-launched designs) are unsearchable. */
-  async searchPlan(query: string) {
-    const plan = await apiGet<PlanResponse>(
-      `/api/sku-production-plan?search=${encodeURIComponent(query)}&limit=1000`,
-    );
-    return plan.items;
-  },
-
-  /** Per-SKU week-wise breakdown for the drill-down popup. */
-  async skuBreakdown(sku: string, weeks: number) {
-    return apiGet<BreakdownResponse>(
-      `/api/sku-production-plan/${encodeURIComponent(sku)}/breakdown?weeks=${weeks}`,
-    );
-  },
-
-  /** This SKU's own top-selling states/cities/warehouses (same shape as the
-   * plan-wide top tables, filtered to just this SKU's order history). */
-  async skuTopRegions(sku: string, limit = 10) {
-    return apiGet<SkuTopRegions>(
-      `/api/sku-production-plan/${encodeURIComponent(sku)}/top-regions?limit=${limit}`,
-    );
-  },
-
-  /** Inhouse production rows (Cutting/Stitching/Thread Cutting/General Store/Barcode). */
-  async inhouseLots(limit = 5000, process?: string) {
-    const qs = process ? `&process=${encodeURIComponent(process)}` : "";
-    return apiGet<IHFResponse>(`/api/production/inhouse?limit=${limit}${qs}`);
-  },
-
-  /** Job Work flat rows: one row per process event, optional process filter. */
-  async jobWorkLots(limit = 5000, process?: string) {
-    const qs = process ? `&process=${encodeURIComponent(process)}` : "";
-    return apiGet<JWFlatResponse>(`/api/production/job-work?limit=${limit}${qs}`);
-  },
-
-  /** Purchase Order lots: Issue / Receive / FCM / Allocation per lot. */
-  async purchaseOrderLots(limit = 5000) {
-    return apiGet<POResponse>(`/api/production/purchase-order?limit=${limit}`);
-  },
-
-  /** Embroidery lots (Issue enriched with GRN receive data). */
-  async embroideryLots(limit = 5000) {
-    return apiGet<EmbResponse>(`/api/production/embroidery?limit=${limit}`);
-  },
-
-  /** FOB production rows (FOB Issue enriched with FOB Receive data). */
-  async fobLots(limit = 5000) {
-    return apiGet<IHFResponse>(`/api/production/fob?limit=${limit}`);
-  },
-
-  /** Per-process bottleneck ranking (Inhouse + Job Work combined). */
-  async bottlenecks() {
-    return apiGet<BottleneckResponse>("/api/production/bottlenecks");
+  /** Forecasted + Actual sales pivoted by week/month, one row per Sub
+   * Category or Style — the Weekly Sales Report page's data source. */
+  async weeklyGrid(
+    groupBy: "subCategory" | "style",
+    opts: {
+      weeks?: number; limit?: number; offset?: number; search?: string;
+      subCategory?: string; category?: string;
+    } = {},
+  ) {
+    // 9 weeks =~ 2 months forward horizon (2026-09-14, user-requested; matches
+    // the same ~30.4-day/month rounding this endpoint's 13-week/~3-month cap
+    // already used elsewhere).
+    const { weeks = 9, limit = 50, offset = 0, search = "", subCategory = "", category = "" } = opts;
+    const params = new URLSearchParams({
+      groupBy,
+      weeks: String(weeks),
+      limit: String(limit),
+      offset: String(offset),
+    });
+    if (search.trim()) params.set("search", search.trim());
+    if (subCategory.trim()) params.set("subCategory", subCategory.trim());
+    if (category.trim()) params.set("category", category.trim());
+    return apiGet<WeeklyGridResponse>(`/api/reports/weekly-grid?${params.toString()}`);
   },
 
   /** Finished-goods inventory planning by design. */
   async inventoryPlanning(limit = 500) {
     return apiGet<InventoryPlanningResponse>(`/api/inventory/planning?limit=${limit}`);
+  },
+
+  /** Per-marketplace week-wise Gross Sale for one Style, on the same week
+   * axis as the Weekly Sales Report's own cells — the inline expandable-row
+   * drill-down behind the Demand Forecasting page's per-Style rows. */
+  async channelSourceWeekly(style: string, weeks = 9) {
+    return apiGet<ChannelSourceWeeklyResponse>(
+      `/api/reports/channel-source/${encodeURIComponent(style)}/weekly?weeks=${weeks}`,
+    );
+  },
+
+  /** Same per-marketplace breakdown as channelSourceWeekly(), summed across
+   * EVERY Style currently matching the Weekly Sales Report's own search/Sub
+   * Category filter — the TOTAL row's own expandable channel breakdown. */
+  async channelSourceWeeklyTotal(weeks = 9, search = "", subCategory = "", category = "") {
+    const params = new URLSearchParams({ weeks: String(weeks) });
+    if (search.trim()) params.set("search", search.trim());
+    if (subCategory.trim()) params.set("subCategory", subCategory.trim());
+    if (category.trim()) params.set("category", category.trim());
+    return apiGet<ChannelSourceWeeklyResponse>(
+      `/api/reports/channel-source-total/weekly?${params.toString()}`,
+    );
+  },
+
+  /** Every active catalog Style's image + externally-maintained forecast
+   * tier (Cloud SQL CatalogStyle.forecastStatus), grouped by tier — powers
+   * the Style Tier Gallery page. */
+  async catalogStyleTiers() {
+    return apiGet<CatalogStyleTiersResponse>("/api/catalog/style-tiers");
+  },
+
+  /** Styles present (sold) last calendar year vs newly launched this one,
+   * for one Sub Category — the Weekly Sales Report's style-lifecycle panel
+   * (2026-09-22, user-requested). */
+  async styleLifecycle(subCategory: string) {
+    const params = new URLSearchParams({ subCategory });
+    return apiGet<StyleLifecycleResponse>(`/api/catalog/style-lifecycle?${params.toString()}`);
+  },
+
+  /** Re-fetch the source data (live BigQuery + ERP, or CSV) and rebuild every
+   * in-memory table — the "Refresh" button in the top bar. Does not restart
+   * the actual API process (that's watchdog-managed); this is the safe,
+   * no-downtime equivalent an admin can trigger from the UI at any time. */
+  async adminRefresh() {
+    return apiPost<AdminRefreshResponse>("/admin/refresh");
   },
 };

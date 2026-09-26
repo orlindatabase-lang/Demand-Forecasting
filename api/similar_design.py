@@ -37,7 +37,7 @@ import threading
 import time
 from pathlib import Path
 
-import verticals
+import design_attributes
 
 _VIEW = "View_Dboard_Trans_Article_Master_Details_Test_BI"
 
@@ -47,6 +47,33 @@ _TOP_K = 6                    # neighbors kept per design
 # festival-spike prediction) so a design still counted as newly launched
 # itself can never be used as a donor for an even-younger design.
 _MIN_DONOR_AGE_DAYS = 90
+# Exception to the age gate above (2026-09-22, user-requested diagnostic):
+# a near-identical material match - the same fabric/print collection
+# launched as several SKUs at once - is worth borrowing from even before
+# the normal age gate clears. Diagnosed against live data: 22.7% of T0
+# ("new launch") designs had ZERO eligible donor despite averaging 5-6
+# neighbors each, almost entirely because an entire collection launched
+# together is mutually under-90-days and so can never help itself for its
+# first 3 months - even though same-collection siblings are each other's
+# highest-confidence similarity match (1.0). The alternative (no donor at
+# all) is worse than a same-collection sibling's own thin early data - and
+# if that sibling has no real sales yet either, borrow_design_level()/
+# similar_design_curve() already skip it for having nothing to lend, so
+# this exception can't introduce a donor with zero information either way.
+_SAME_COLLECTION_SIMILARITY = 0.9
+
+
+def _donor_eligible(other: str, sim: float, launch: dict, as_of) -> bool:
+    """Is ``other`` old enough (or similar enough) to lend its demand level/
+    curve as of ``as_of``? See _SAME_COLLECTION_SIMILARITY above for why a
+    near-identical match bypasses the normal age gate. An unknown launch
+    date is treated as eligible (existing behaviour, unchanged) - most
+    designs missing a launch date are legacy stock predating this app's
+    2015+ plausibility floor, not recent unproven ones."""
+    dt = launch.get(other)
+    if dt is None or (as_of - dt).days >= _MIN_DONOR_AGE_DAYS:
+        return True
+    return sim >= _SAME_COLLECTION_SIMILARITY
 
 _DESIGN_SECTION_SUFFIXES = (
     "-DUPATTA", "-PLAZZO", "-PALAZZO", "-BOTTOM", "-PANT", "-TROUSER",
@@ -73,7 +100,7 @@ _REFRESHING = False
 _DESIGN_MATERIALS: dict[str, set[str]] = {}
 _NEIGHBORS: dict[str, list[tuple[str, float]]] = {}
 _LAUNCH_DATES: dict = {}  # design -> pandas.Timestamp
-_DESIGN_VERTICAL: dict[str, str] = {}  # design -> vertical (see verticals.py)
+_DESIGN_SUBCATEGORY: dict[str, str] = {}  # design -> SUB CATEGORY (see design_attributes.sub_category_of)
 
 _CACHE_DIR = Path(__file__).resolve().parent / ".cache"
 _CACHE_FILE = _CACHE_DIR / "similar_design.json"
@@ -88,7 +115,8 @@ def _save_cache() -> None:
             "materials": {d: sorted(g) for d, g in _DESIGN_MATERIALS.items()},
             "neighbors": _NEIGHBORS,
             "launchDates": {d: ts.isoformat() for d, ts in _LAUNCH_DATES.items()},
-            "designVertical": _DESIGN_VERTICAL,
+            "designSubCategory": _DESIGN_SUBCATEGORY,
+            "attrFallback": True,
         }
         _CACHE_FILE.write_text(json.dumps(payload))
         print(f"[similar_design] cache saved ({len(_DESIGN_MATERIALS)} designs)", file=sys.stderr)
@@ -97,7 +125,7 @@ def _save_cache() -> None:
 
 
 def _load_cache() -> bool:
-    global _DESIGN_MATERIALS, _NEIGHBORS, _LAUNCH_DATES, _DESIGN_VERTICAL, _FETCHED_AT
+    global _DESIGN_MATERIALS, _NEIGHBORS, _LAUNCH_DATES, _DESIGN_SUBCATEGORY, _FETCHED_AT
     if not _CACHE_FILE.exists():
         return False
     try:
@@ -108,16 +136,25 @@ def _load_cache() -> bool:
         if age > _CACHE_MAX_AGE:
             print(f"[similar_design] disk cache too old ({age / 3600:.1f}h), ignoring", file=sys.stderr)
             return False
-        # No "designVertical" key means this cache predates same-vertical donor
-        # gating - ignore it so a stale, ungated neighbor graph isn't reused.
-        if "designVertical" not in payload:
-            print("[similar_design] disk cache predates vertical gating, ignoring", file=sys.stderr)
+        # No "designSubCategory" key means this cache predates same-sub-category
+        # donor gating (either the pre-vertical version, or the older
+        # vertical-based "designVertical" key) - ignore it so a stale/wrongly-
+        # gated neighbor graph isn't reused.
+        if "designSubCategory" not in payload:
+            print("[similar_design] disk cache predates sub-category gating, ignoring", file=sys.stderr)
+            return False
+        # No "attrFallback" key means this cache predates the design_attributes
+        # gap-filling fallback (see refresh()) - ignore it so designs with no
+        # BOM/USED_IN history don't sit with zero neighbors until the next
+        # scheduled 6h background refresh.
+        if not payload.get("attrFallback"):
+            print("[similar_design] disk cache predates attribute fallback, ignoring", file=sys.stderr)
             return False
         with _LOCK:
             _DESIGN_MATERIALS = {d: set(g) for d, g in payload.get("materials", {}).items()}
             _NEIGHBORS = {d: [tuple(p) for p in neigh] for d, neigh in payload.get("neighbors", {}).items()}
             _LAUNCH_DATES = {d: pd.Timestamp(ts) for d, ts in payload.get("launchDates", {}).items()}
-            _DESIGN_VERTICAL = dict(payload.get("designVertical", {}))
+            _DESIGN_SUBCATEGORY = dict(payload.get("designSubCategory", {}))
             _FETCHED_AT = cached_at
         print(f"[similar_design] loaded {len(_DESIGN_MATERIALS)} designs from disk cache "
               f"({age / 60:.0f}m old)", file=sys.stderr)
@@ -128,9 +165,11 @@ def _load_cache() -> bool:
 
 
 def _fetch_design_meta() -> tuple[dict, dict]:
-    """(launch_dates, verticals) per base design, from the same master view
-    lifecycle.py/data.py already read LAUNCH_DATE from — it also carries
-    DESIGN_GROUP, which we map to a vertical for same-vertical donor gating."""
+    """(launch_dates, sub_categories) per base design. Launch dates come from
+    the same master view lifecycle.py/data.py already read LAUNCH_DATE from;
+    SUB CATEGORY (used for same-sub-category donor gating) comes from
+    design_attributes.py's SKU_Master_Data_Final_Cleaned.csv-backed lookup,
+    not from any ERP master-view column."""
     import pandas as pd
     import live_source
 
@@ -138,9 +177,8 @@ def _fetch_design_meta() -> tuple[dict, dict]:
     if master.empty or "DESIGN_NO" not in master.columns:
         return {}, {}
     launch = pd.to_datetime(master.get("LAUNCH_DATE"), errors="coerce")
-    groups = master.get("DESIGN_GROUP")
     launch_dates: dict = {}
-    design_vertical: dict[str, str] = {}
+    design_subcat: dict[str, str] = {}
     _min_plausible = pd.Timestamp("2015-01-01")
     for i, design in enumerate(master["DESIGN_NO"].astype(str)):
         base = _base_design(design)
@@ -150,13 +188,13 @@ def _fetch_design_meta() -> tuple[dict, dict]:
         # data.py's `launched` computation for the full explanation.
         if not pd.isna(dt) and dt >= _min_plausible and (base not in launch_dates or dt < launch_dates[base]):
             launch_dates[base] = dt
-        if groups is not None and base not in design_vertical:
-            design_vertical[base] = verticals.vertical_of(groups.iloc[i])
-    return launch_dates, design_vertical
+        if base not in design_subcat:
+            design_subcat[base] = design_attributes.sub_category_of(base)
+    return launch_dates, design_subcat
 
 
 def _build_neighbors(
-    design_materials: dict, design_vertical: dict | None = None, top_k: int = _TOP_K
+    design_materials: dict, design_subcat: dict | None = None, top_k: int = _TOP_K
 ) -> dict:
     """Top-K neighbors per design by IDF-weighted-Jaccard over material sets.
 
@@ -164,18 +202,18 @@ def _build_neighbors(
     designs that actually share >=1 material are ever compared, instead of
     the full O(n^2) pairwise scan.
 
-    ``design_vertical`` (design -> vertical, see verticals.py), if given,
-    restricts candidates to the SAME vertical as the query design: a shared
-    fabric between, say, a Kurti and an unrelated Top shouldn't make them
-    demand-similar just because both happen to use that fabric. A design on
-    EITHER side with an unknown/missing vertical is exempt from this
-    restriction (missing category data shouldn't block an otherwise-good
-    material match).
+    ``design_subcat`` (design -> SUB CATEGORY, see design_attributes.py), if
+    given, restricts candidates to the SAME sub-category as the query design:
+    a shared fabric between, say, a Kurti and an unrelated Top shouldn't make
+    them demand-similar just because both happen to use that fabric. A
+    design on EITHER side with an unknown/missing sub-category is exempt
+    from this restriction (missing category data shouldn't block an
+    otherwise-good material match).
     """
     n_designs = len(design_materials)
     if n_designs < 2:
         return {}
-    dv = design_vertical or {}
+    dv = design_subcat or {}
 
     group_doc_count: dict[str, int] = {}
     for groups in design_materials.values():
@@ -190,16 +228,16 @@ def _build_neighbors(
 
     neighbors: dict[str, list[tuple[str, float]]] = {}
     for d, groups in design_materials.items():
-        d_vert = dv.get(d, verticals.VERTICAL_UNKNOWN)
+        d_sc = dv.get(d, design_attributes.SUB_CATEGORY_UNKNOWN)
         candidates: dict[str, float] = {}
         for g in groups:
             w = idf.get(g, 1.0)
             for other in inv.get(g, ()):
                 if other == d:
                     continue
-                if d_vert != verticals.VERTICAL_UNKNOWN:
-                    other_vert = dv.get(other, verticals.VERTICAL_UNKNOWN)
-                    if other_vert != verticals.VERTICAL_UNKNOWN and other_vert != d_vert:
+                if d_sc != design_attributes.SUB_CATEGORY_UNKNOWN:
+                    other_sc = dv.get(other, design_attributes.SUB_CATEGORY_UNKNOWN)
+                    if other_sc != design_attributes.SUB_CATEGORY_UNKNOWN and other_sc != d_sc:
                         continue
                 candidates[other] = candidates.get(other, 0.0) + w
         scored: list[tuple[str, float]] = []
@@ -213,9 +251,10 @@ def _build_neighbors(
 
 
 def refresh() -> None:
-    """Fetch the article-master view + launch dates/verticals, rebuild the
-    similarity graph, and cache to disk. Safe to call from a background thread."""
-    global _DESIGN_MATERIALS, _NEIGHBORS, _LAUNCH_DATES, _DESIGN_VERTICAL, _FETCHED_AT, _REFRESHING
+    """Fetch the article-master view + launch dates/sub-categories, rebuild
+    the similarity graph, and cache to disk. Safe to call from a background
+    thread."""
+    global _DESIGN_MATERIALS, _NEIGHBORS, _LAUNCH_DATES, _DESIGN_SUBCATEGORY, _FETCHED_AT, _REFRESHING
     _REFRESHING = True
     try:
         import live_source
@@ -239,17 +278,34 @@ def refresh() -> None:
                 base = _base_design(token)
                 design_materials.setdefault(base, set()).add(grp)
 
-        launch_dates, design_vertical = _fetch_design_meta()
-        neighbors = _build_neighbors(design_materials, design_vertical)
+        launch_dates, design_subcat = _fetch_design_meta()
+        neighbors = _build_neighbors(design_materials, design_subcat)
+
+        # Gap-filling fallback: a design with no USED_IN records yet (never
+        # been through production) has no entry in `neighbors` at all, so it
+        # would borrow nothing from borrow_design_level()/similar_design_curve()
+        # forever. design_attributes.py builds a second similarity graph from
+        # the pre-production SKU design sheet (fabric/color/embroidery/neck/
+        # sleeve) - use it ONLY where the BOM graph is empty, so a design that
+        # already has real neighbors is completely unaffected.
+        filled_from_attrs = 0
+        try:
+            for design, attr_neigh in design_attributes.get_all_neighbors().items():
+                if not neighbors.get(design) and attr_neigh:
+                    neighbors[design] = attr_neigh
+                    filled_from_attrs += 1
+        except Exception as exc:  # noqa: BLE001
+            print(f"[similar_design] design_attributes fallback failed: {exc!r}", file=sys.stderr)
 
         with _LOCK:
             _DESIGN_MATERIALS = design_materials
             _NEIGHBORS = neighbors
             _LAUNCH_DATES = launch_dates
-            _DESIGN_VERTICAL = design_vertical
+            _DESIGN_SUBCATEGORY = design_subcat
             _FETCHED_AT = time.time()
         print(f"[similar_design] built {len(design_materials)} design material fingerprints, "
-              f"{len(launch_dates)} launch dates, {len(design_vertical)} verticals", file=sys.stderr)
+              f"{len(launch_dates)} launch dates, {len(design_subcat)} sub-categories, "
+              f"{filled_from_attrs} filled from design_attributes fallback", file=sys.stderr)
         _save_cache()
     except Exception as exc:  # noqa: BLE001
         print(f"[similar_design] refresh failed: {exc!r}", file=sys.stderr)
@@ -291,10 +347,7 @@ def get_similar_designs(
     if eligible_donors_only:
         import pandas as pd
         as_of = pd.Timestamp(as_of) if as_of is not None else pd.Timestamp.today().normalize()
-        neigh = [
-            (other, sim) for other, sim in neigh
-            if other not in launch or (as_of - launch[other]).days >= _MIN_DONOR_AGE_DAYS
-        ]
+        neigh = [(other, sim) for other, sim in neigh if _donor_eligible(other, sim, launch, as_of)]
     neigh = neigh[:top_k]
     return [
         {
@@ -334,8 +387,7 @@ def borrow_design_level(dlevel: dict, as_of=None) -> dict:
             v = dlevel.get(other)
             if not v or v <= 0:
                 continue
-            dt = launch.get(other)
-            if dt is not None and (as_of - dt).days < _MIN_DONOR_AGE_DAYS:
+            if not _donor_eligible(other, sim, launch, as_of):
                 continue
             num += sim * v
             den += sim
@@ -399,8 +451,7 @@ def similar_design_curve(
     curve = [0.0] * horizon_weeks
     weight = [0.0] * horizon_weeks
     for other, sim in neigh:
-        dt = launch.get(other)
-        if dt is not None and (as_of - dt).days < _MIN_DONOR_AGE_DAYS:
+        if not _donor_eligible(other, sim, launch, as_of):
             continue
         other_curve = weekly_by_design.get(other)
         if not other_curve:

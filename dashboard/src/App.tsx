@@ -1,14 +1,9 @@
-import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Box, CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 
-import Sidebar, { DRAWER_WIDTH } from "@/components/common/Sidebar";
-import TopBar from "@/components/common/TopBar";
-import Dashboard from "@/pages/Dashboard";
 import InventoryPlanning from "@/pages/InventoryPlanning";
-import Bottleneck from "@/pages/Bottleneck";
-import ProductionTrackers from "@/pages/ProductionTrackers";
+import WeeklySalesGrid from "@/pages/WeeklySalesGrid";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -32,30 +27,18 @@ const theme = createTheme({
 });
 
 export default function App() {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <BrowserRouter>
           <Box sx={{ display: "flex" }}>
-            <Sidebar open={sidebarOpen} />
-            <Box
-              sx={{
-                flexGrow: 1,
-                minWidth: 0,
-                transition: "margin 0.2s",
-                ml: sidebarOpen ? 0 : `-${DRAWER_WIDTH}px`,
-              }}
-            >
-              <TopBar onToggleSidebar={() => setSidebarOpen((o) => !o)} />
+            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
               <Box component="main" sx={{ p: 3 }}>
                 <Routes>
-                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/" element={<WeeklySalesGrid />} />
                   <Route path="/inventory" element={<InventoryPlanning />} />
-                  <Route path="/bottleneck" element={<Bottleneck />} />
-                  <Route path="/production" element={<ProductionTrackers />} />
+                  <Route path="/reports/weekly-sales" element={<WeeklySalesGrid />} />
                 </Routes>
               </Box>
             </Box>

@@ -6,7 +6,7 @@ interface ExportButtonProps {
   filename: string;
 }
 
-function toCsv(rows: Record<string, unknown>[]): string {
+export function rowsToCsv(rows: Record<string, unknown>[]): string {
   if (rows.length === 0) return "";
   const headers = Object.keys(rows[0]);
   const escape = (v: unknown) => {
@@ -20,16 +20,19 @@ function toCsv(rows: Record<string, unknown>[]): string {
   return lines.join("\n");
 }
 
+export function downloadCsv(csv: string, filename: string): void {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${filename}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function ExportButton({ rows, filename }: ExportButtonProps) {
   const handleExport = () => {
-    const csv = toCsv(rows);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${filename}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(rowsToCsv(rows), filename);
   };
 
   return (

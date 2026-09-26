@@ -1,102 +1,23 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { dataService } from "@/services/dataService";
 
 const REFRESH_MS = 60_000;
 
-export function usePlanningTables() {
+export function useWeeklyGrid(
+  groupBy: "subCategory" | "style",
+  opts: { limit?: number; offset?: number; search?: string; subCategory?: string; category?: string } = {},
+) {
+  const { limit = 50, offset = 0, search = "", subCategory = "", category = "" } = opts;
   return useQuery({
-    queryKey: ["planningTables"],
-    queryFn: () => dataService.planningTables(),
+    queryKey: ["weeklyGrid", groupBy, limit, offset, search, subCategory, category],
+    queryFn: () => dataService.weeklyGrid(groupBy, { limit, offset, search, subCategory, category }),
     refetchInterval: REFRESH_MS,
-  });
-}
-
-export function useSkuBreakdown(sku: string | null, weeks: number) {
-  return useQuery({
-    queryKey: ["breakdown", sku, weeks],
-    queryFn: () => dataService.skuBreakdown(sku as string, weeks),
-    enabled: !!sku,
-  });
-}
-
-export function useSkuTopRegions(sku: string | null) {
-  return useQuery({
-    queryKey: ["skuTopRegions", sku],
-    queryFn: () => dataService.skuTopRegions(sku as string),
-    enabled: !!sku,
-  });
-}
-
-export function usePlanSearch(query: string) {
-  const q = query.trim();
-  return useQuery({
-    queryKey: ["planSearch", q],
-    queryFn: () => dataService.searchPlan(q),
-    enabled: q.length > 0,
-  });
-}
-
-export function useNewDesigns(enabled: boolean, maxAgeDays = 90) {
-  return useQuery({
-    queryKey: ["newDesigns", maxAgeDays],
-    queryFn: () => dataService.newDesigns(maxAgeDays),
-    enabled,
-  });
-}
-
-export function useNewDesignFestivalSpikes(enabled: boolean, maxAgeDays = 90) {
-  return useQuery({
-    queryKey: ["newDesignFestivalSpikes", maxAgeDays],
-    queryFn: () => dataService.newDesignFestivalSpikes(maxAgeDays),
-    enabled,
-  });
-}
-
-export function useInhouseLots(process?: string) {
-  return useQuery({
-    queryKey: ["inhouseLots", process],
-    queryFn: () => dataService.inhouseLots(5000, process),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function useJobWorkLots(process?: string) {
-  return useQuery({
-    queryKey: ["jobWorkLots", process],
-    queryFn: () => dataService.jobWorkLots(10000, process),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function usePurchaseOrderLots() {
-  return useQuery({
-    queryKey: ["purchaseOrderLots"],
-    queryFn: () => dataService.purchaseOrderLots(5000),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function useEmbroideryLots() {
-  return useQuery({
-    queryKey: ["embroideryLots"],
-    queryFn: () => dataService.embroideryLots(5000),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function useFobLots() {
-  return useQuery({
-    queryKey: ["fobLots"],
-    queryFn: () => dataService.fobLots(5000),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
-export function useBottlenecks() {
-  return useQuery({
-    queryKey: ["bottlenecks"],
-    queryFn: () => dataService.bottlenecks(),
-    refetchInterval: REFRESH_MS,
+    // Keep showing the last page's rows while a new limit/offset/filter
+    // combination loads (2026-09-21, found while adding the tier filter -
+    // switching it jumps the fetch size from 200 to 2000 rows, and without
+    // this the whole page briefly blanked to a full loading skeleton on
+    // every tier click instead of just the table refreshing in place).
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -105,5 +26,46 @@ export function useInventoryPlanning() {
     queryKey: ["inventoryPlanning"],
     queryFn: () => dataService.inventoryPlanning(500),
     refetchInterval: REFRESH_MS,
+  });
+}
+
+export function useChannelSourceWeekly(style: string | null, weeks = 9) {
+  return useQuery({
+    queryKey: ["channelSourceWeekly", style, weeks],
+    queryFn: () => dataService.channelSourceWeekly(style as string, weeks),
+    enabled: !!style,
+  });
+}
+
+/** Same per-marketplace breakdown as useChannelSourceWeekly(), summed across
+ * every Style currently matching the Weekly Sales Report's own filter — the
+ * TOTAL row's own expandable channel breakdown. Only fetches while
+ * ``enabled`` (the TOTAL row's own expand toggle) is true. */
+export function useChannelSourceWeeklyTotal(
+  enabled: boolean, weeks = 9, search = "", subCategory = "", category = "",
+) {
+  return useQuery({
+    queryKey: ["channelSourceWeeklyTotal", weeks, search, subCategory, category],
+    queryFn: () => dataService.channelSourceWeeklyTotal(weeks, search, subCategory, category),
+    enabled,
+  });
+}
+
+export function useCatalogStyleTiers() {
+  return useQuery({
+    queryKey: ["catalogStyleTiers"],
+    queryFn: () => dataService.catalogStyleTiers(),
+    refetchInterval: REFRESH_MS,
+  });
+}
+
+/** Styles present last calendar year vs newly launched this one, for one
+ * Sub Category — only fetches once a specific Sub Category is selected
+ * (blank/"all" has nothing meaningful to show). */
+export function useStyleLifecycle(subCategory: string) {
+  return useQuery({
+    queryKey: ["styleLifecycle", subCategory],
+    queryFn: () => dataService.styleLifecycle(subCategory),
+    enabled: !!subCategory,
   });
 }

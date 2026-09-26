@@ -3,8 +3,10 @@ __pycache__/
 .venv/
 venv/
 api/.cache/
+api/.env
 dashboard/node_modules/
 dashboard/dist/
+dashboard/.env
 
 # Large/legacy data exports kept locally but not tracked in history
 # (scratch pulls from earlier debugging, not referenced by any live code).

@@ -58,13 +58,33 @@ _WIP_COLS = ["PRO_ORD_WIP_QTY", "IN_HOUSE_QTY_WIP", "JOB_WORK_QTY_WIP"]
 
 # Final column order, matching final_merged_data.csv. category_name/brand_name/
 # promo_discount added for the weekly demand-forecasting model (api/lgbm_forecast.py).
+# source (2026-09-16, user-requested Style x Channel x Source x Month report) -
+# the raw table's own OMS/WEBSITE discriminator, a coarser grouping on top of
+# channel_name (every channel_name maps to exactly one source value - verified
+# no overlap: WEBSITE is only "mokosh.in"/"colorsofearth.in", everything else
+# is OMS).
+# channel_order_id/channel_sub_order_id (2026-09-16, CRITICAL FIX - found
+# investigating a user-reported August total discrepancy): every
+# .drop_duplicates() call downstream (_load_real_plan, festival outlook,
+# spike detection, the Channel & Source drill-down) compares the FULL row
+# across every _FINAL_COLS column - and until now that never included a true
+# order identifier. The source table has ZERO real duplicate rows (verified:
+# 2,503,935 rows = 2,503,935 distinct (channel_order_id, channel_sub_order_id)
+# pairs, both columns 100% non-null) - two genuinely different orders (e.g.
+# same SKU/qty=1/status/date/channel, different customers) were being
+# wrongly collapsed into one, SILENTLY UNDERCOUNTING real sales (August 2026
+# alone: 1,851 units / 1,667 orders dropped this way). Including these two
+# columns makes every existing drop_duplicates() call correct with no other
+# code change needed, since two rows can now only be identical if their real
+# order IDs also match (which never happens for genuine orders).
 _FINAL_COLS = [
     "product_sku_code", "listing_sku_code", "qty", "order_status", "order_date",
     "total", "settlement_amount", "buyer_city", "buyer_state", "channel_name",
     "warehouse_name", "delivery_date", "DESIGN_NO", "DESIGN_GROUP",
     "CATALOG_NAME", "COLOR", "LAUNCH_DATE", "SECTION",
     "TOTAL_WIP_QTY", "PENDING_QTY_PIECES",
-    "category_name", "brand_name", "promo_discount",
+    "category_name", "brand_name", "promo_discount", "source",
+    "channel_order_id", "channel_sub_order_id",
 ]
 
 
@@ -227,24 +247,73 @@ def fetch_sales_bigquery() -> pd.DataFrame:
     from google.cloud import bigquery  # imported lazily so the API starts without the lib
 
     client = bigquery.Client(project=BQ_PROJECT)
+    where = f"DATE(order_date) >= '{SALES_START_DATE}' AND DATE(order_date) <= CURRENT_DATE()"
     query = f"""
         SELECT
             product_sku_code, listing_sku_code, qty, order_status, order_date,
             total, settlement_amount, buyer_city, buyer_state, channel_name,
-            warehouse_name, delivery_date, category_name, brand_name, promo_discount
+            warehouse_name, delivery_date, category_name, brand_name, promo_discount, source,
+            channel_order_id, channel_sub_order_id
         FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}`
-        WHERE DATE(order_date) >= '{SALES_START_DATE}'
-        AND   DATE(order_date) <= CURRENT_DATE()
+        WHERE {where}
     """
-    return client.query(query).to_dataframe()
+    df = client.query(query).to_dataframe()
+
+    # Sanity-check against a cheap server-side COUNT(*) - the BQ Storage Read
+    # API (used by to_dataframe() by default) has been observed on this
+    # network to silently return a truncated dataframe from a failed/short-
+    # circuited parallel stream, with no exception raised (found 2026-09-16
+    # investigating a Style/Channel/Source report; a standalone diagnostic
+    # script lost ~33% of one month's rows this way). One retry via the
+    # slower but reliable REST row iterator before giving up and returning
+    # whatever was fetched (never block API startup on this).
+    try:
+        expected_n = list(client.query(
+            f"SELECT COUNT(*) AS n FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}` WHERE {where}"
+        ).result())[0]["n"]
+        if len(df) != expected_n:
+            print(f"[live_source] sales fetch returned {len(df):,} rows but {expected_n:,} exist "
+                  f"— retrying via REST row iterator", flush=True)
+            df = client.query(query).to_dataframe(create_bqstorage_client=False)
+            if len(df) != expected_n:
+                print(f"[live_source] retry still short: {len(df):,}/{expected_n:,} rows — proceeding anyway",
+                      flush=True)
+    except Exception as exc:  # noqa: BLE001 — the count check itself must never block startup
+        print(f"[live_source] sales row-count sanity check failed ({exc!r}) — skipping", flush=True)
+
+    return df
 
 
 # --------------------------------------------------------------------------- #
 # Assembly
 # --------------------------------------------------------------------------- #
+# Standard size tokens that sometimes show up as a SKU's SECOND segment
+# instead of a real sub-design number - e.g. "6302-L"/"6302-M"/"6302-S" is a
+# flat design series with no sub-design at all, just DESIGN-SIZE. Without
+# stripping these, _design_key() below would treat "6302-L" as the design
+# key, fragmenting one real design into five that can never match the ERP
+# master's own (sizeless) "6302" record (2026-09-15, user-requested design-
+# master-join coverage audit found 72 SKUs / 34K+ units of real sales
+# silently invisible in the Weekly Sales Report purely because of this).
+_SIZE_TOKENS = {"S", "M", "L", "XL", "XXL", "XXXL", "2XL", "3XL", "4XL", "5XL", "FREE SIZE", "FREESIZE"}
+
+
 def _design_key(s: pd.Series) -> pd.Series:
-    """First two numeric segments, e.g. '417-03' from '417-03-XL'."""
-    return s.astype(str).str.strip().str.upper().str.extract(r"^(\d+-\d+)")[0]
+    """First two hyphen-separated segments, e.g. '417-03' from '417-03-XL' or
+    'K-7504' from 'K-7504-34'. Was digit-only (``^(\\d+-\\d+)``), which returned
+    NaN for every letter-prefixed design (the whole K-series, ~726 SKUs) —
+    silently dropping their WIP/inventory/master-view join, since the sales
+    side's own design key (a plain hyphen-split below) has no such
+    restriction and matched fine.
+
+    If that second segment is actually just a size token (see _SIZE_TOKENS),
+    drop it and use only the first segment - see _SIZE_TOKENS' comment for
+    why (a flat "DESIGN-SIZE" series has no real second design segment)."""
+    two_seg = s.astype(str).str.strip().str.upper().str.extract(r"^([A-Za-z0-9]+-[A-Za-z0-9]+)")[0]
+    split = two_seg.str.split("-", n=1)
+    first = split.str[0]
+    second = split.str[1]
+    return two_seg.where(~second.isin(_SIZE_TOKENS), first)
 
 
 def assemble() -> pd.DataFrame:
@@ -256,12 +325,83 @@ def assemble() -> pd.DataFrame:
     sales = fetch_sales_bigquery()
     sales["order_date"] = pd.to_datetime(sales["order_date"], errors="coerce")
 
+    # Exclude combo-SKU order lines (2026-09-16, user-requested) - a bundle of
+    # two physical designs sold as one order line, e.g. "001-03-XL & K-9301-34"
+    # or "412-03--423-03-S" (the same combo, just without a literal "&" in
+    # product_sku_code - listing_sku_code always keeps the "&"). _design_key()
+    # below only captures the FIRST design in the pair, so a combo's qty was
+    # being credited entirely to that one style while its partner design got
+    # none of the credit - a real (if small, ~0.06% of Gross Sale) attribution
+    # error. Dropped here, before any design-key/master join, so every
+    # downstream consumer (Weekly Sales Report, festival outlook, channel
+    # breakdown, model training) is consistent automatically.
+    is_combo = (
+        sales["product_sku_code"].astype(str).str.contains("&", regex=False)
+        | sales["product_sku_code"].astype(str).str.contains("--", regex=False)
+        | sales["listing_sku_code"].astype(str).str.contains("&", regex=False)
+    )
+    sales = sales.loc[~is_combo].copy()
+
+    # Exclude "INACTIVE*"-coded order lines (2026-09-17, user-requested,
+    # re-applied after a brief revert-and-reinstate cycle) - a placeholder
+    # product_sku_code (e.g. "INACTIVE-04", "Inactive -02") used when the
+    # OMS/channel integration couldn't resolve a real SKU. Has a hyphen, so
+    # _design_key() below was resolving it to a literal "INACTIVE-04" style
+    # - pooling together whatever real designs (up to hundreds, per
+    # listing_sku_code) happened to share that placeholder code, both
+    # fabricating a fake style AND crediting it instead of the real ones.
+    # Dropped here rather than reattributed via listing_sku_code -
+    # user-specified simple exclusion, same treatment as the combo-SKU rows
+    # above.
+    is_inactive_placeholder = sales["product_sku_code"].astype(str).str.strip().str.upper().str.startswith("INACTIVE")
+    sales = sales.loc[~is_inactive_placeholder].copy()
+
+    # Exclude "Freebie-Pouch-1" (2026-09-17, user-requested) - a promotional
+    # giveaway pouch, not a garment design. Has a hyphen, so _design_key()
+    # below was resolving it to its own fake "FREEBIE-POUCH" style (532
+    # Gross units, one uniform SKU - unlike INACTIVE* above, not pooling any
+    # real designs' sales, just a single non-garment item miscounted as one).
+    is_freebie = sales["product_sku_code"].astype(str).str.strip().str.upper().str.startswith("FREEBIE-POUCH")
+    sales = sales.loc[~is_freebie].copy()
+
+    # Exclude "CTA-K*"-coded order lines (2026-09-17, user-requested) - e.g.
+    # "CTA-K-8002-11-12-30". "CTA"/"CT" are channel/marketplace listing-name
+    # prefixes (see the design-master join comment below), not part of the
+    # real design number - _design_key() below was capturing "CTA-K" (the
+    # prefix + the generic "K" series marker) as the design key instead of
+    # the real design that follows ("K-8002"), fabricating a fake "CTA-K"
+    # style (5 Gross units, one SKU).
+    is_cta_k = sales["product_sku_code"].astype(str).str.strip().str.upper().str.startswith("CTA-K")
+    sales = sales.loc[~is_cta_k].copy()
+
+    # Exclude the Shopify direct-to-consumer channel entirely (2026-09-18,
+    # user-requested) - channel_name "ORLIN APPAREL PRIVATE LIMITED -
+    # Shopify" (2,199 Gross units, 750 distinct real SKUs). Unlike the
+    # combo/INACTIVE/Freebie-Pouch/CTA-K filters above, this isn't a junk-SKU
+    # data-quality fix - these are real designs' real orders, dropped only
+    # because the user doesn't want this channel counted in Actual Sale
+    # totals or forecasts at all.
+    is_shopify = sales["channel_name"].astype(str).str.contains("shopify", case=False, regex=False)
+    sales = sales.loc[~is_shopify].copy()
+
     # 2) Design master (ERP) -> merge on design key --------------------------- #
     # fetch_master() returns MASTER_-prefixed columns (e.g. MASTER_DESIGN_NO).
+    # Keyed off product_sku_code, NOT listing_sku_code: listing_sku_code is
+    # the channel/marketplace listing name (varies per platform — channel
+    # prefixes like "CT-"/"CTA-", kids' "9-10 Years" sizing instead of a
+    # plain size, underscores instead of hyphens), so only ~55.4% of rows
+    # split cleanly into the assumed DESIGN-DESIGN-SIZE shape. product_sku_code
+    # is the internal canonical code and splits cleanly 97.8% of the time
+    # (verified 2026-08-17). 2026-08-22: briefly switched the whole SKU
+    # identity (this join included) to listing_sku_code, user-requested —
+    # reverted the same day after a live retrain showed real damage (WAPE
+    # ~45-50 -> ~65, cold-start blending 495 -> 1,209 SKUs, since one
+    # physical SKU splits across several per-channel listing codes). See
+    # lgbm_forecast.py's COL_SKU comment for the full numbers.
     master = fetch_master()
     master_cols = ["MASTER_DESIGN_NO", "MASTER_DESIGN_GROUP", "MASTER_CATALOG_NAME",
                    "MASTER_COLOR", "MASTER_LAUNCH_DATE", "MASTER_SECTION"]
-    merged = sales.assign(design_key=_design_key(sales["listing_sku_code"]))
+    merged = sales.assign(design_key=_design_key(sales["product_sku_code"]))
     if "MASTER_DESIGN_NO" in master.columns:
         master = master[[c for c in master_cols if c in master.columns]].copy()
         master["design_key"] = _design_key(master["MASTER_DESIGN_NO"])
@@ -270,10 +410,26 @@ def assemble() -> pd.DataFrame:
         # canonical column names (DESIGN_NO, DESIGN_GROUP, …).
         master = strip_prefix(master, "MASTER_")
         merged = merged.merge(master, on="design_key", how="left")
+    # Fall back to the sales-side design_key itself wherever the ERP master
+    # join found no match (or the master fetch failed/returned no
+    # MASTER_DESIGN_NO column at all) - 2026-09-15, user-requested fix for a
+    # design-master-join coverage audit: 72 SKUs / 34K+ units of real sales
+    # had a null DESIGN_NO and were being silently excluded from the Weekly
+    # Sales Report's style grouping (get_weekly_grid() skips any row with no
+    # design key). A design with no master-catalog metadata (sub-category,
+    # color, etc.) is still a real design that sold real units - it should
+    # show up under its own derived key, not disappear entirely. Genuinely
+    # missing ERP master records (not every gap is fixable here - see
+    # design_key's own comment) will still show up with blank/derived
+    # DESIGN_GROUP/CATALOG_NAME/COLOR/SECTION rather than none at all.
+    if "DESIGN_NO" not in merged.columns:
+        merged["DESIGN_NO"] = pd.NA
+    merged["DESIGN_NO"] = merged["DESIGN_NO"].fillna(merged["design_key"])
     merged["LAUNCH_DATE"] = pd.to_datetime(merged.get("LAUNCH_DATE"), errors="coerce")
 
-    # design + size keys from the listing SKU, e.g. '417-03-XL' -> ('417-03','XL')
-    parts = merged["listing_sku_code"].astype(str).str.strip().str.upper().str.split("-")
+    # design + size keys from product_sku_code (not listing_sku_code — see
+    # the design-master join above for why), e.g. '417-03-XL' -> ('417-03','XL')
+    parts = merged["product_sku_code"].astype(str).str.strip().str.upper().str.split("-")
     merged["_design"] = parts.str[:2].str.join("-")
     merged["_size"] = parts.str[2].fillna("").str.strip()
 

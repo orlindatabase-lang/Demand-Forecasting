@@ -1,109 +1,158 @@
-// --- SKU Production Plan ---------------------------------------------------- //
-export interface PlanningRow {
-  skuCode: string;
-  designNo: string;
-  date: string;
-  forecast7: number;
-  forecast10: number;
-  forecast35: number;
-  /** This SKU's parent design's own 5-week forecast (context only — DRR/reorder/production stay SKU-level). */
-  designForecast35: number;
-  inventoryQty: number;
-  wipQty: number;
-  availableQty: number;
-  leadTimeDays: number;
-  safetyStock: number;
-  reorderPoint: number;
-  totalSuggestedProduction: number;
-  calculatedProductionSuggestion: number;
-  stockStatus: string; // "In Stock" | "Reorder"
-  historicalLast10d: number;
-  vertical: string;
-  price: number;
-  tier: string;
-  tierSuggestedProduction: number;
-  tierPolicy: string;
-  launchTier: string;
-  currentTier: string;
-  lifecycleStage: string;
-  daysSinceLaunch: number;
-  launchDate: string;
-  launchDrr: number;
-  currentDrr: number;
-  growthRate: number;
-  healthScore: number;
-  riskScore: number;
-  productionPriority: number;
-  suggestedProduction: number;
-  festivalEvent: string;
-  festivalEventStart: string;
-  festivalEventEnd: string;
-  festivalQty: number;
-  festivalUpliftPct: number;
-}
 
-export interface TopRegionRow {
-  name: string;
-  revenue10: number;
-  revenue30: number;
-  revenue90: number;
-  units10: number;
-  units30: number;
-  units90: number;
-}
-
-export type TopWarehouseRow = TopRegionRow;
-
-export interface SkuTopRegions {
-  topStates: TopRegionRow[];
-  topCities: TopRegionRow[];
-  topWarehouses: TopWarehouseRow[];
-}
-
-export interface NewDesignRow {
-  designNo: string;
-  launchDate: string;
-  daysSinceLaunch: number;
-  skuCount: number;
-}
-
-export interface SimilarDesignRef {
-  design: string;
-  similarity: number;
-  sharedMaterials: string[];
-}
-
-export interface NewDesignFestivalSpike {
-  designNo: string;
-  event: string;
-  eventStart: string;
-  eventEnd: string;
-  predictedQty: number;
-  upliftPct: number;
-  similarDesigns: SimilarDesignRef[];
-}
-
-export interface HistoricalPoint {
-  date: string;
+// --- Weekly Sales Report (Style / Sub Category pivot grid) ------------------ //
+export interface WeeklyGridCell {
+  actual: number | null; // null = future/forecast-only week
   forecast: number;
-  actual: number;
-  variance: number;
   partial: boolean;
 }
 
-export interface ForecastPoint {
-  date: string;
-  qty: number;
-  event: string | null;
+export interface WeeklyGridEvent {
+  name: string;
+  category: string; // "festival" | "sale"
+  start: string; // ISO date - the event's OWN real start date, not the week's
+  end: string; // ISO date - the event's OWN real end date, not the week's
 }
 
-export interface BreakdownResponse {
-  sku: string;
-  snapshotDate: string;
-  periodWeeks: number;
-  accuracyPct: number;
-  overallAccuracyPct: number;
-  historical: HistoricalPoint[];
-  forecast: ForecastPoint[];
+export interface WeeklyGridWeek {
+  weekStart: string; // ISO Monday date - key into each row's `cells`
+  label: string; // "W1", "W2", ...
+  eventCategory: string; // "festival" | "sale" | "both" | "" - see api/festival_calendar.py (2026-09-24)
+  eventName: string; // overlapping event name(s), joined with " + " if more than one; "" if none
+  events: WeeklyGridEvent[]; // per-event exact start/end dates, shown when the W1..W4 header is clicked (2026-09-24)
+}
+
+export interface WeeklyGridMonth {
+  label: string; // e.g. "March 2025"
+  weeks: WeeklyGridWeek[];
+}
+
+export interface WeeklyGridRow {
+  key: string; // Sub Category name, or Style/DESIGN_NO
+  subCategory: string; // this row's Sub Category (== key when groupBy is "subCategory")
+  category: string; // this row's top-level Category
+  skuCount: number; // distinct SKU (size/color variant) codes pooled into this row
+  styleCount: number; // distinct Style/DESIGN_NO codes pooled into this row (== 1 for a "style" row)
+  launchDate: string; // ISO date of this row's earliest-launched SKU, "" if unknown/a Sub Category row
+  daysSinceLaunch: number; // days since that earliest launch, -1 if unknown
+  cells: Record<string, WeeklyGridCell>; // weekStart (ISO) -> cell
+  monthActualTotal: Record<string, number>;
+  monthForecastTotal: Record<string, number>;
+  grandActualTotal: number;
+  grandForecastTotal: number;
+  futureForecastTotal: number; // forward-only forecast (excludes historical backtested figures)
+  availableQty: number; // inventory + WIP summed across this row's SKUs
+  suggestedProduction: number; // max(0, futureForecastTotal - availableQty)
+  festivalBoosted: boolean; // true if the upcoming festival's weeks were raised above the base forecast
+}
+
+export interface FestivalSubCategorySales {
+  subCategory: string;
+  qty: number; // real actual units sold during the historical festival window
+  upliftPct: number | null; // vs. an equal-length pre-event control period; null = no baseline to compare
+}
+
+export interface FestivalColorSales {
+  color: string; // design's primary garment color (Top_Color in the SKU master sheet)
+  qty: number; // real actual units sold during the historical festival window
+  upliftPct: number | null; // vs. an equal-length pre-event control period; null = no baseline to compare
+}
+
+export interface UpcomingEventOutlook {
+  eventName: string;
+  eventStart: string; // ISO date, the UPCOMING occurrence
+  eventEnd: string;
+  historicalYear: number | null; // null if no real data covers a past occurrence
+  historicalStart: string;
+  historicalEnd: string;
+  spikeLeadDays: number | null; // days before the historical occurrence real demand started rising
+  topSubCategories: FestivalSubCategorySales[];
+  topColors: FestivalColorSales[];
+}
+
+export interface FestivalOutlook {
+  upcomingFestival: UpcomingEventOutlook | null;
+  upcomingSale: UpcomingEventOutlook | null;
+}
+
+export interface WeeklyGridTotals {
+  cells: Record<string, WeeklyGridCell>; // weekStart (ISO) -> cell, summed across every matching group
+  monthActualTotal: Record<string, number>;
+  monthForecastTotal: Record<string, number>;
+}
+
+export interface WeeklyGridResponse {
+  groupBy: "subCategory" | "style";
+  total: number;
+  totalForecast: number; // sum of futureForecastTotal across EVERY matching group, not just this page
+  totalActual: number;   // sum of grandActualTotal across EVERY matching group, not just this page (GROSS: the
+  // user's own explicit status allowlist, see api/data.py's _GROSS_SALE_STATUSES - includes returns/RTO)
+  currentWeekForecast: number; // current (possibly still in-progress) week's forecast, ALL groups
+  currentWeekActual: number;   // current week's actual-so-far, ALL groups
+  currentWeekLabel: string;    // ISO week number of the current week, e.g. "W37"
+  totalSuggestedProduction: number; // sum of suggestedProduction across EVERY matching group, not just this page
+  subCategoryOptions: string[]; // every distinct Sub Category in the current plan, for the filter dropdown
+  categoryOptions: string[]; // every distinct top-level Category in the current plan, for the filter dropdown
+  categorySubCategoryMap: Record<string, string[]>; // category -> its own Sub Categories, for the cascading filter
+  festivalOutlook: FestivalOutlook | null;
+  months: WeeklyGridMonth[];
+  rows: WeeklyGridRow[];
+  weeklyTotals: WeeklyGridTotals; // grand-total row, every matching group (not just this page)
+}
+
+// --- Catalog Style tier + image gallery (Cloud SQL CatalogStyle) ------------ //
+export interface CatalogStyleImage {
+  name: string; // Style/DESIGN_NO, e.g. "417-03"
+  tier: string; // "T0".."T3"/"T11"/"T12" as found in the source, "" if unclassified
+  imageUrl: string; // public GCS URL, "" if no image on file
+}
+
+export interface CatalogStyleTierGroup {
+  tier: string; // tier label, or "Unclassified" for a null forecastStatus
+  count: number;
+  styles: CatalogStyleImage[];
+}
+
+export interface CatalogStyleTiersResponse {
+  tiers: CatalogStyleTierGroup[]; // natural tier order, Unclassified last
+}
+
+// --- Style lifecycle: per-Sub-Category style counts (2026-09-22,
+// user-requested) — styles present (sold) last calendar year vs newly
+// launched this one. -------------------------------------------------- //
+export interface StyleLifecycleEntry {
+  presentCount: number;
+  presentStyles: string[]; // sorted DESIGN_NO list
+  addedCount: number;
+  addedStyles: string[]; // sorted DESIGN_NO list
+}
+
+export interface StyleLifecycleResponse {
+  lastYear: number;
+  thisYear: number;
+  bySubCategory: Record<string, StyleLifecycleEntry>;
+}
+
+// --- Channel & Source drill-down (per-Style, week-wise, by marketplace) ----- //
+export interface ChannelSourceWeeklySeries {
+  // Marketplace/site name, e.g. "Amazon", "Flipkart", "Meesho", "Myntra",
+  // "Nykaa" (OMS) or "MOKOSH", "Color's Of Earth" (WEBSITE) — several raw
+  // internal channel names (different legal entities, same platform) rolled
+  // up into one row.
+  marketplace: string;
+  source: string;  // "OMS" | "WEBSITE"
+  totalQty: number; // summed across every week in the response's weekStarts
+  cells: Record<string, number>; // weekStart (ISO) -> Gross qty, sparse (only weeks with any qty)
+  // weekStart (ISO) -> this channel's forecasted qty for that week. Not an
+  // independently-modeled number — a top-down split of the row's own
+  // already-computed forecast, allocated by this channel's historical share
+  // of the row's real actual sales (see api/data.py's
+  // _channel_source_forecast_by_chunk()).
+  forecastCells: Record<string, number>;
+}
+
+export interface ChannelSourceWeeklyResponse {
+  style: string;
+  weekStarts: string[]; // ISO dates, oldest to newest — same axis as WeeklyGridRow.cells keys
+  series: ChannelSourceWeeklySeries[]; // one per marketplace with any sales, sorted by totalQty descending
 }
 

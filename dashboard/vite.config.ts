@@ -10,4 +10,10 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  // Bind to all interfaces (not just loopback) so colleagues on the same
+  // office network can reach this dev server via this machine's LAN IP.
+  server: {
+    host: true,
+    port: 5180,
+  },
 })
