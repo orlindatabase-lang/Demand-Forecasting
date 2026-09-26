@@ -1,0 +1,19 @@
+# Build context root is the project root (see api/Dockerfile) - exclude
+# everything not needed to build the api image, especially the multi-hundred-
+# MB local data snapshots that only exist as a local-dev CSV fallback and
+# would otherwise balloon every Cloud Build upload.
+.git
+.claude
+.pytest_cache
+venv
+api/venv
+api/.venv
+api/__pycache__
+api/.cache
+api/.env
+dashboard
+archive
+final_merged_data.csv
+merged_sales_erp.csv
+*.md
+*.ipynb

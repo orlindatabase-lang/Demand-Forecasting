@@ -95,10 +95,16 @@ app = FastAPI(
 # (192.168.x.x / 10.x.x.x / 172.16-31.x.x) so colleagues on the same office
 # network can load the dashboard from this machine's LAN IP (see run.py's
 # ALLOW_LAN socket and dashboard/.env's VITE_API_URL) — still bounded to
-# private address space, not the open internet.
+# private address space, not the open internet. ALSO allow any deployed
+# Cloud Run service's *.run.app origin (2026-09-26, user-requested GCP
+# deployment) - sidesteps the chicken-and-egg problem of the frontend's exact
+# Cloud Run URL not being known until after it's first deployed. This adds no
+# real exposure beyond what's already decided: both services are deployed
+# with unauthenticated access, so an arbitrary script (not just a browser
+# bound by CORS) could call this API regardless of this regex.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+):\d+",
+    allow_origin_regex=r"https://[a-z0-9-]+-[a-z0-9]+\.[a-z0-9-]+\.run\.app|http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+):\d+",
     allow_methods=["GET"],
     allow_headers=["*"],
 )
