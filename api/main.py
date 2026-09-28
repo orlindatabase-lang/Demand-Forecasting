@@ -117,8 +117,7 @@ def health() -> dict:
         "rows": len(data.PLAN_ROWS),
         "snapshot": data.SNAPSHOT_DATE.isoformat(),
         "dataSource": data.DATA_SOURCE,
-        "forecastModel": data.ACTIVE_FORECAST_MODEL,
-        "lgbmPending": data.FORECAST_MODEL == "lgbm" and data.ACTIVE_FORECAST_MODEL != "xgboost",
+        **data.model_status(),
     }
 
 
@@ -164,6 +163,18 @@ def get_channel_source_weekly_total(
     (2026-09-18, user-requested), same rollup as the per-Style endpoint
     below just pooled across every matching Style instead of one."""
     return data.get_channel_source_weekly_total(weeks, search, subCategory, category)
+
+
+@app.get("/api/reports/weekly-production-log", tags=["plan"])
+def get_weekly_production_log(
+    style: str = Query("", description="One Style (DESIGN_NO); blank = all"),
+    status: str = Query("", pattern="^(|open|completed)$", description="'open' (week still running), 'completed', or blank for both"),
+) -> list[dict]:
+    """Weekly production log (api/weekly_log.py): per Style and report week,
+    the forecast and ~2-month suggested production captured when the week
+    started, and the actual sale once it finished. Latest 8 completed weeks
+    plus the running week (2026-09-28, user-requested)."""
+    return data.get_weekly_production_log(style, status)
 
 
 @app.get("/api/catalog/style-tiers", response_model=CatalogStyleTiersResponse, tags=["plan"])

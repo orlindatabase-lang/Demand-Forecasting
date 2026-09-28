@@ -156,3 +156,24 @@ export interface ChannelSourceWeeklyResponse {
   series: ChannelSourceWeeklySeries[]; // one per marketplace with any sales, sorted by totalQty descending
 }
 
+
+// --- Weekly production log (api/weekly_log.py) ------------------------------ //
+export interface WeeklyProductionLogRow {
+  style: string;
+  sub_category: string | null;
+  category: string | null;
+  month: string; // e.g. "September 2026"
+  week: string; // "W1".."W4"
+  week_start: string; // ISO date
+  week_end: string; // ISO date
+  forecast_qty: number; // forecast for this week, as of week start
+  forecast_2m_qty: number; // forecast for the ~2 months from the week (live until completed)
+  available_qty: number; // stock + WIP (live until completed)
+  suggested_production_qty: number; // max(0, forecast_2m - available) (live until completed)
+  captured_on: string; // data date of the week-start capture
+  updated_on: string | null; // data date of the last live update
+  actual_qty: number | null; // gross units sold in the week (null until completed)
+  actual_so_far: number | null; // running week only: units sold so far (live), null once completed
+  completed_on: string | null;
+  status: "open" | "completed";
+}

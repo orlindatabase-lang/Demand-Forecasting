@@ -54,7 +54,10 @@ def classify(rows, sales, returns, launch_ts, snap) -> None:
     s = sales[["product_sku_code", "order_date", "qty"]].copy()
     s["qty"] = pd.to_numeric(s["qty"], errors="coerce").fillna(0.0)
     s["dtt"] = (snap_ts - s["order_date"]).dt.days                              # days-to-today
-    s["dal"] = (s["order_date"] - s["product_sku_code"].map(launch_ts)).dt.days  # days-after-launch
+    # Empty launch_ts (ERP master unavailable): pandas 3's map() casts an
+    # empty mapper to float64, which fails on a datetime Series - use NaT.
+    launch_of = s["product_sku_code"].map(launch_ts) if len(launch_ts) else pd.Series(pd.NaT, index=s.index, dtype="datetime64[ns]")
+    s["dal"] = (s["order_date"] - launch_of).dt.days  # days-after-launch
 
     def win(mask) -> "pd.Series":
         return s.loc[mask].groupby("product_sku_code")["qty"].sum().reindex(idx).fillna(0.0).astype(float)

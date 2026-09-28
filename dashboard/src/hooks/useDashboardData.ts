@@ -69,3 +69,13 @@ export function useStyleLifecycle(subCategory: string) {
     enabled: !!subCategory,
   });
 }
+
+/** Production Log popup - only fetches while it's open. */
+export function useWeeklyProductionLog(enabled: boolean) {
+  return useQuery({
+    queryKey: ["weeklyProductionLog"],
+    queryFn: () => dataService.weeklyProductionLog(),
+    refetchInterval: REFRESH_MS,
+    enabled,
+  });
+}

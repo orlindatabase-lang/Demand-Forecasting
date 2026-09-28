@@ -4,6 +4,7 @@ import type {
   ChannelSourceWeeklyResponse,
   CatalogStyleTiersResponse,
   StyleLifecycleResponse,
+  WeeklyProductionLogRow,
 } from "@/types";
 
 export interface AdminRefreshResponse {
@@ -12,6 +13,8 @@ export interface AdminRefreshResponse {
   rows: number;
   snapshot: string;
   forecastModel: string;
+  forecastSnapshot: string; // snapshot the served model was trained on ("" = none)
+  modelTraining: boolean;
   lgbmPending: boolean;
 }
 
@@ -54,6 +57,13 @@ export const dataService = {
     if (subCategory.trim()) params.set("subCategory", subCategory.trim());
     if (category.trim()) params.set("category", category.trim());
     return apiGet<WeeklyGridResponse>(`/api/reports/weekly-grid?${params.toString()}`);
+  },
+
+  /** Weekly production log: per Style and report week, the forecast and
+   * ~2-month suggested production captured at week start, plus the actual
+   * sale once the week finished (latest 8 completed weeks + the running one). */
+  async weeklyProductionLog() {
+    return apiGet<WeeklyProductionLogRow[]>("/api/reports/weekly-production-log");
   },
 
   /** Finished-goods inventory planning by design. */

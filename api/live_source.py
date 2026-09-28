@@ -6,8 +6,8 @@ from the source systems instead of reading ``final_merged_data.csv``:
 
     1. BigQuery  `orlinappareldataset.oms_sale_us.sales_orders`   -> sales orders
     2. ERP view  View_Dboard_Master_Design_Wise_Fabric_Detail...  -> design master
-    3. ERP view  View_Program_Planning_For_BI                     -> WIP quantities
-    4. ERP view  View_Dboard_Trans_Final_Inventory_Data_For_BI    -> pending pieces
+    3. ERP view  View_Program_Planning_For_Rdp                    -> WIP quantities
+    4. ERP view  View_Dboard_Trans_Final_Inventory_Data_For_Rdp   -> pending pieces
 
 ``assemble()`` merges these into a single DataFrame with the same columns as
 ``final_merged_data.csv``, which the rest of the pipeline consumes unchanged.
@@ -37,24 +37,24 @@ SALES_START_DATE = os.getenv("SALES_START_DATE", "2025-03-18")
 
 ERP_URL = os.getenv(
     "ERP_URL",
-    "http://190.92.175.131:8080/DigiBizzErpApi/api/UnknownCallerApi/GetPowerBiReports",
+    "http://195.250.31.101/DigiBizzErpApi/api/UnknownCallerApi/GetPowerBiReports",
 )
 ERP_TOKEN = os.getenv("ERP_TOKEN", "aaaqqqwww111")
 ERP_COMPANY_YEAR_ID = os.getenv("ERP_COMPANY_YEAR_ID", "83")
 ERP_TIMEOUT = int(os.getenv("ERP_TIMEOUT", "120"))
 
 VIEW_MASTER = "View_Dboard_Master_Design_Wise_Fabric_Detail_For_BI"
-VIEW_PLANNING = "View_Program_Planning_For_BI"
-VIEW_INVENTORY = "View_Dboard_Trans_Final_Inventory_Data_For_BI"
+VIEW_PLANNING = "View_Program_Planning_For_Rdp"
+VIEW_INVENTORY = "View_Dboard_Trans_Final_Inventory_Data_For_Rdp"
 # Lot-journey: one row per (lot, process) with entry/exit dates + vendor.
 VIEW_PRODUCTION = "View_Dboard_Trans_Production_Analysis_For_BI"
 
-# WIP = the genuine work-in-progress columns only. The planning view also has
-# ALLO_CALC / ALLOCATION_QTY (allocations, and fractional — not physical pieces)
-# and PRO_ORD_PCS_WEEK_WISE (a week-wise production-order schedule); summing all
-# of those (as the original notebook did) inflated WIP ~3-4x. Real WIP is the
-# three *_WIP columns: open production order + in-house + job-work.
-_WIP_COLS = ["PRO_ORD_WIP_QTY", "IN_HOUSE_QTY_WIP", "JOB_WORK_QTY_WIP"]
+# WIP = in-house WIP + job-work WIP + allocation (2026-09-28, user-specified;
+# replaces open production order + in-house + job-work). ALLOCATION_QTY is
+# fractional per size (e.g. 20.155); it is summed per design+size and rounded
+# to whole pieces per SKU downstream. Not used: PRO_ORD_WIP_QTY, ALLO_CALC,
+# PRO_ORD_PCS_WEEK_WISE (a week-wise production-order schedule).
+_WIP_COLS = ["IN_HOUSE_QTY_WIP", "JOB_WORK_QTY_WIP", "ALLOCATION_QTY"]
 
 # Final column order, matching final_merged_data.csv. category_name/brand_name/
 # promo_discount added for the weekly demand-forecasting model (api/lgbm_forecast.py).
@@ -93,8 +93,13 @@ _FINAL_COLS = [
 # --------------------------------------------------------------------------- #
 ERP_RETRIES = int(os.getenv("ERP_RETRIES", "3"))
 
-# Views that returned HTTP 500 — skipped silently on subsequent refresh cycles.
-_UNAVAILABLE_VIEWS: set[str] = set()
+# Views that returned HTTP 500 -> time of that failure. Skipped for
+# _UNAVAILABLE_TTL_S only (the rest of the same rebuild), then retried: the
+# ERP also returns 500 transiently (2026-09-28: master + inventory 500'd at
+# one startup and worked minutes later), and a permanent skip left the API
+# without any ERP data until the next restart.
+_UNAVAILABLE_VIEWS: dict[str, float] = {}
+_UNAVAILABLE_TTL_S = 15 * 60
 
 
 def fetch_erp_view(
@@ -106,8 +111,8 @@ def fetch_erp_view(
 ) -> pd.DataFrame:
     """Fetch one ERP PowerBI view as a DataFrame (stdlib urllib, no auth key).
 
-    Retries on empty response or transient errors. HTTP 500 = view not found,
-    logged once then permanently skipped.
+    Retries on empty response or transient errors. HTTP 500 (view missing,
+    or a transient ERP error) skips the view for _UNAVAILABLE_TTL_S.
 
     Args:
         view_name:        The ERP view/report name.
@@ -116,7 +121,8 @@ def fetch_erp_view(
         retries:          Max attempts (default: ERP_RETRIES).
         company_year_id:  Override CompanyYearId header (default: ERP_COMPANY_YEAR_ID).
     """
-    if view_name in _UNAVAILABLE_VIEWS:
+    failed_at = _UNAVAILABLE_VIEWS.get(view_name)
+    if failed_at is not None and time.time() - failed_at < _UNAVAILABLE_TTL_S:
         return pd.DataFrame()
 
     _url     = url             or ERP_URL
@@ -144,8 +150,8 @@ def fetch_erp_view(
             last = df
         except urllib.error.HTTPError as exc:
             if exc.code == 500:
-                _UNAVAILABLE_VIEWS.add(view_name)
-                print(f"[live_source] {view_name}: not found in ERP (HTTP 500) — skipping")
+                _UNAVAILABLE_VIEWS[view_name] = time.time()
+                print(f"[live_source] {view_name}: HTTP 500 from ERP - skipping for {_UNAVAILABLE_TTL_S // 60} min")
                 return pd.DataFrame()
             print(f"[live_source] {view_name} attempt {attempt}/{_retries} failed: {exc!r}")
         except Exception as exc:  # noqa: BLE001 — retry on transient errors
@@ -219,10 +225,10 @@ def fetch_master() -> pd.DataFrame:
 def fetch_planning() -> pd.DataFrame:
     """Fetch the WIP / program-planning view (open production orders by design+size).
 
-    Raw ERP columns: DESIGN_NAME, SIZE, PRO_ORD_WIP_QTY,
-                     IN_HOUSE_QTY_WIP, JOB_WORK_QTY_WIP, ...
+    Raw ERP columns: DESIGN_NAME, SIZE, IN_HOUSE_QTY_WIP,
+                     JOB_WORK_QTY_WIP, ALLOCATION_QTY, ...
     Returned columns (PLAN_ prefix): PLAN_DESIGN_NAME, PLAN_SIZE,
-        PLAN_PRO_ORD_WIP_QTY, PLAN_IN_HOUSE_QTY_WIP, PLAN_JOB_WORK_QTY_WIP, ...
+        PLAN_IN_HOUSE_QTY_WIP, PLAN_JOB_WORK_QTY_WIP, PLAN_ALLOCATION_QTY, ...
     """
     df = fetch_erp_view(VIEW_PLANNING)
     return prefix_cols(df, "PLAN_", keep=frozenset()) if not df.empty else df
@@ -314,6 +320,20 @@ def _design_key(s: pd.Series) -> pd.Series:
     first = split.str[0]
     second = split.str[1]
     return two_seg.where(~second.isin(_SIZE_TOKENS), first)
+
+
+# Letter-series designs carry a colour segment: SKU "K-108-01-32" is design
+# "K-108-01" (colour 01), size "32", and the ERP stock/WIP views list it
+# under DESIGN_NO "K-108-01" (109 such designs in the master, 2026-09-28).
+_COLOUR_DESIGN_RE = r"^([A-Z]+-\d+-\d{2})"
+
+
+def _stock_design(s: pd.Series) -> pd.Series:
+    """ERP design code -> stock/WIP join key: the full colour-level design for
+    letter-series codes (K-108-01), else _design_key() as before."""
+    up = s.astype(str).str.strip().str.upper()
+    colour = up.str.extract(_COLOUR_DESIGN_RE + "$")[0]
+    return colour.fillna(_design_key(s))
 
 
 def assemble() -> pd.DataFrame:
@@ -428,10 +448,15 @@ def assemble() -> pd.DataFrame:
     merged["LAUNCH_DATE"] = pd.to_datetime(merged.get("LAUNCH_DATE"), errors="coerce")
 
     # design + size keys from product_sku_code (not listing_sku_code — see
-    # the design-master join above for why), e.g. '417-03-XL' -> ('417-03','XL')
-    parts = merged["product_sku_code"].astype(str).str.strip().str.upper().str.split("-")
-    merged["_design"] = parts.str[:2].str.join("-")
-    merged["_size"] = parts.str[2].fillna("").str.strip()
+    # the design-master join above for why), e.g. '417-03-XL' -> ('417-03','XL'),
+    # and for letter-series colour designs 'K-108-01-32' -> ('K-108-01','32')
+    # (was ('K-108','01'), which matched no ERP row, so none of those
+    # styles' stock or WIP was counted - 2026-09-28 Available Qty audit).
+    code = merged["product_sku_code"].astype(str).str.strip().str.upper()
+    parts = code.str.split("-")
+    colour = code.str.match(_COLOUR_DESIGN_RE + "-")
+    merged["_design"] = parts.str[:3].str.join("-").where(colour, parts.str[:2].str.join("-"))
+    merged["_size"] = parts.str[3].where(colour, parts.str[2]).fillna("").str.strip()
 
     # 3) WIP (planning view), aggregated by design+size ----------------------- #
     # fetch_planning() returns PLAN_-prefixed columns (e.g. PLAN_DESIGN_NAME).
@@ -444,7 +469,7 @@ def assemble() -> pd.DataFrame:
         plan["PLAN_TOTAL_WIP_QTY"] = plan[_WIP_COLS_PLAN].sum(axis=1)
         wip = (
             plan.assign(
-                _design=_design_key(plan["PLAN_DESIGN_NAME"]),
+                _design=_stock_design(plan["PLAN_DESIGN_NAME"]),
                 _size=plan["PLAN_SIZE"].astype(str).str.strip().str.upper(),
             )
             .groupby(["_design", "_size"], as_index=False)["PLAN_TOTAL_WIP_QTY"]
@@ -464,7 +489,7 @@ def assemble() -> pd.DataFrame:
         ).fillna(0)
         pend = (
             inv.assign(
-                _design=_design_key(inv["INV_DESIGN_NO"]),
+                _design=_stock_design(inv["INV_DESIGN_NO"]),
                 _size=inv["INV_SIZE"].astype(str).str.strip().str.upper(),
             )
             .groupby(["_design", "_size"], as_index=False)["INV_PENDING_QTY_PIECES"]
@@ -482,6 +507,19 @@ def assemble() -> pd.DataFrame:
     final[["TOTAL_WIP_QTY", "PENDING_QTY_PIECES"]] = final[
         ["TOTAL_WIP_QTY", "PENDING_QTY_PIECES"]
     ].fillna(0)
+    # One design+size's stock/WIP belongs to ONE SKU: when several SKU codes
+    # share the key (case variants like '057-03-S' / '057-03-s', suffixes
+    # like '474-05-XS-A'), each used to carry the full quantity, so a Style
+    # total counted it more than once. Keep it on the SKU with the most
+    # order rows and zero it on the others.
+    sku_rows = final.groupby(["_design", "_size", "product_sku_code"]).size().rename("_n").reset_index()
+    primary = (sku_rows.sort_values(["_n", "product_sku_code"], ascending=[False, True])
+               .drop_duplicates(["_design", "_size"])[["_design", "_size", "product_sku_code"]]
+               .rename(columns={"product_sku_code": "_primary_sku"}))
+    final = final.merge(primary, on=["_design", "_size"], how="left")
+    not_primary = final["product_sku_code"] != final["_primary_sku"]
+    final.loc[not_primary, ["TOTAL_WIP_QTY", "PENDING_QTY_PIECES"]] = 0
+    final = final.drop(columns=["_primary_sku"])
 
     # tidy: drop helpers, guarantee the expected columns/order
     final = final.drop(columns=["design_key", "_design", "_size"], errors="ignore")

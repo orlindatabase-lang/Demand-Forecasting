@@ -6,15 +6,9 @@ windows as the source for the Weekly Sales Report's "Upcoming Festival" /
 "Upcoming Sale" outlook card (and the festival-aware production boost that
 reads from it, see data.py's _event_boost_windows()).
 
-Deliberately NOT wired into festival.py's own per-day demand MULTIPLIER
-system (festival_factor()/week_signal(), used as an actual feature/uplift by
-the trained forecasting model) - that system's peak multipliers were
-individually verified against real order data (see festival.py's own
-comments), and swapping its date source would mean re-verifying every one of
-them against this sheet instead. This module only answers "what's the next
-festival/sale, and when did it last happen" for display + the optimistic
-production-boost heuristic, not "how much should today's demand be
-multiplied by".
+Also the date source for festival.py's per-day demand MULTIPLIERS
+(2026-09-28, user-requested: one calendar for both) - festival.py re-fits
+each event's multiplier against real sales, see festival.calibrate().
 
 Each CSV row is (name, start, end); the name always ends in a parenthetical
 tag - "(Festival)" for a religious/cultural event, or the platform name
@@ -162,3 +156,10 @@ def is_event_day(d: date, exclude_name: str | None = None) -> bool:
     with _LOCK:
         events = _EVENTS
     return any(s <= d <= e for n, s, e, _c in events if n != exclude_name)
+
+
+def all_events() -> list[tuple[str, date, date, str]]:
+    """Every (name, start, end, category) row in the sheet, sorted by start."""
+    _ensure_loaded()
+    with _LOCK:
+        return list(_EVENTS)

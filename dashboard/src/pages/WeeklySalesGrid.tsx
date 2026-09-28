@@ -31,12 +31,14 @@ import SellIcon from "@mui/icons-material/Sell";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import DownloadIcon from "@mui/icons-material/Download";
+import EventNoteIcon from "@mui/icons-material/EventNote";
 import CloseIcon from "@mui/icons-material/Close";
 import ImageNotSupportedIcon from "@mui/icons-material/ImageNotSupported";
 import PageHeader from "@/components/common/PageHeader";
 import RefreshButton from "@/components/common/RefreshButton";
 import { LoadingSkeleton, ErrorState } from "@/components/common/StateViews";
 import { rowsToCsv, downloadCsv } from "@/components/common/ExportButton";
+import ProductionLogDialog from "@/components/tables/ProductionLogDialog";
 import {
   useWeeklyGrid,
   useChannelSourceWeeklyTotal,
@@ -735,6 +737,7 @@ export default function WeeklySalesGrid() {
     return new Set(group?.styles.map((s) => s.name) ?? []);
   }, [catalogQuery.data, tierFilter]);
   const [lightboxStyle, setLightboxStyle] = useState<CatalogStyleImage | null>(null);
+  const [productionLogOpen, setProductionLogOpen] = useState(false);
   // Clicking a W1..W4 header on a highlighted week shows each overlapping
   // event's own real start/end date (2026-09-24, user-requested) - distinct
   // from the calendar chunk's dates, since a chunk can be a partial slice
@@ -1163,12 +1166,21 @@ export default function WeeklySalesGrid() {
         </FormControl>
 
         <Button
+          onClick={() => setProductionLogOpen(true)}
+          size="small"
+          variant="outlined"
+          startIcon={<EventNoteIcon fontSize="small" />}
+          sx={{ ml: "auto" }}
+        >
+          Production Log
+        </Button>
+
+        <Button
           size="small"
           variant="outlined"
           startIcon={<DownloadIcon fontSize="small" />}
           onClick={handleExportAll}
           disabled={exporting || data.total === 0}
-          sx={{ ml: "auto" }}
         >
           {exporting ? "Exporting…" : "Export Full Report"}
         </Button>
@@ -1986,6 +1998,8 @@ export default function WeeklySalesGrid() {
           )}
         </Box>
       </Paper>
+
+      <ProductionLogDialog open={productionLogOpen} onClose={() => setProductionLogOpen(false)} />
 
       <Dialog
         open={lightboxStyle !== null}

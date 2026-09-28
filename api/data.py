@@ -44,8 +44,9 @@ NUM_SKUS = 1000
 # Data source: "live" fetches fresh from BigQuery + ERP (see live_source.py),
 # "csv" reads the local snapshot. Live falls back to the CSV on any failure.
 DATA_SOURCE = os.getenv("DATA_SOURCE", "live").strip().lower()
-# "lgbm" trains the model in the background (seasonal-naive serves until ready);
-# "naive" uses the baseline only.
+# "lgbm" serves the saved model forecasts (this snapshot's, else the newest
+# previous one) and trains any missing ones in the background; "naive" uses
+# the baseline only.
 FORECAST_MODEL = os.getenv("FORECAST_MODEL", "lgbm").strip().lower()
 # Final weekly forecast = FORECAST_BLEND * model + (1 - blend) * SKU run-rate,
 # anchoring the global model to each SKU's own level. 1.0 = pure model, 0 = naive.
@@ -1271,7 +1272,9 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
     _last_year = _this_year - 1
     _gross_dates = pd.to_datetime(gross_sales["order_date"], errors="coerce")
     _gross_design = gross_sales["DESIGN_NO"].astype(str).str.strip().str.upper()
-    _present_designs = set(_gross_design[_gross_dates.dt.year == _last_year].unique())
+    # dropna(): pandas 3's astype(str) keeps blank DESIGN_NO as NaN (not
+    # "nan"), which would put a float into the set and crash sorted() below.
+    _present_designs = set(_gross_design[_gross_dates.dt.year == _last_year].dropna().unique())
     _added_designs = {
         str(dn).strip().upper() for dn, dt in master_launch.items() if dt.year == _this_year
     }
@@ -1713,8 +1716,11 @@ _CHANNEL_SOURCE_BASE_CACHE: tuple[int, object] | None = None
 # click.
 _FESTIVAL_OUTLOOK_CACHE: tuple[int, date, int, "FestivalOutlook"] | None = None
 
-# Forecast-model status: "naive" until LightGBM has been swapped in.
+# Forecast-model status: "xgboost" once model forecasts are folded into the
+# plan, "naive" only on a cold start with no saved model.
 ACTIVE_FORECAST_MODEL = "naive"
+# Snapshot date (ISO) of the model forecasts currently served ("" = none).
+FORECAST_SNAPSHOT = ""
 _SOURCE_DF = None              # cached source frame for the background LGBM step
 _LGBM_THREAD: threading.Thread | None = None
 # Per-design replenishment lead times (days). Empty → _lead_days falls back to PROD_LEAD_DAYS.
@@ -1753,84 +1759,153 @@ def _set_plan(result) -> None:
     _WEEKLY_GRID_CACHE.clear()
 
 
-def _upgrade_to_lgbm() -> None:
-    """Train LightGBM (or load the cached forecasts) and swap it into the plan.
+def _snapshot_of(df) -> date:
+    """The SNAPSHOT_DATE _load_real_plan() will publish for ``df`` (latest real
+    order date, capped at today), computed up-front so rebuild() can look up
+    that snapshot's saved model forecasts BEFORE building the plan."""
+    import pandas as pd
+    od = df.loc[df["product_sku_code"].notna(), "order_date"]
+    od = od[od <= pd.Timestamp.today().normalize()]
+    return pd.Timestamp(od.max()).normalize().date()
 
-    Runs in a background thread so the seasonal-naive plan is served immediately.
-    On any failure the naive plan is left in place.
-    """
-    global ACTIVE_FORECAST_MODEL, _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN, _FC_WEEKLY_CHANNEL
+
+def _daily_gross_units(df):
+    """Total GROSS units per calendar day (the model's own training target,
+    see lgbm_forecast._GROSS_SALE_NORM) - festival.calibrate()'s input."""
+    import lgbm_forecast
+    rows = df.dropna(subset=["product_sku_code", "order_date"]).drop_duplicates()
+    rows = rows[rows["order_status"].astype(str).str.strip().str.lower().isin(lgbm_forecast._GROSS_SALE_NORM)]
+    return rows.groupby(rows["order_date"].dt.normalize())["qty"].sum().astype(float)
+
+
+def _shift_weekly(obj, weeks: int):
+    """Drop the first ``weeks`` entries of every "weekly" list in a saved
+    forecast (SKU/design ``{key: {"weekly": [...]}}`` or channel
+    ``{design: {marketplace: {"weekly": [...], ...}}}``), so an OLDER
+    snapshot's week 0 lines up with the current snapshot's week 0. Weeks
+    past the shortened series fall back to the naive run-rate in
+    _adjusted_weekly()."""
+    if not weeks or not isinstance(obj, dict):
+        return obj
+    return {
+        k: (v[weeks:] if k == "weekly" and isinstance(v, list) else _shift_weekly(v, weeks))
+        for k, v in obj.items()
+    }
+
+
+# How old a previous snapshot's saved model forecast may be and still be
+# served while the current snapshot's model trains (older -> naive instead).
+_PREVIOUS_MODEL_MAX_AGE_DAYS = 28
+
+
+def _load_saved_forecasts(kind: str, snap: date) -> tuple[dict | None, str, bool]:
+    """(forecasts, source snapshot ISO, up_to_date) for ``kind``
+    ("sku"/"design"/"channel") from disk: the newest saved forecast with
+    snapshot <= ``snap`` and within _PREVIOUS_MODEL_MAX_AGE_DAYS, of any
+    cache version, week-shifted to line up with ``snap``. ``up_to_date`` is
+    True only for ``snap``'s own forecast of the CURRENT cache version -
+    anything else is served as a stand-in while the model retrains.
+    (None, "", False) when nothing usable is saved."""
+    import json as _json
+    import lgbm_forecast
+    found = lgbm_forecast.latest_cached_file(kind, snap.isoformat())
+    if found is None:
+        return None, "", False
+    src, path, current_version = found
+    src_date = date.fromisoformat(src)
+    if (snap - src_date).days > _PREVIOUS_MODEL_MAX_AGE_DAYS:
+        return None, "", False
+    try:
+        forecasts = _json.loads(path.read_text())
+    except Exception:  # noqa: BLE001 — a corrupt file is just "nothing saved"
+        return None, "", False
+    if not forecasts:
+        return None, "", False
+    shift = (_forecast_week_start(snap, 0) - _forecast_week_start(src_date, 0)).days // 7
+    return _shift_weekly(forecasts, shift), src, (current_version and src == snap.isoformat())
+
+
+def _publish_model_plan(df, forecasts: dict, design_forecasts: dict | None,
+                        channel_forecasts: dict | None, forecast_snapshot: str) -> None:
+    """Fold the model's forecasts into the published plan. The model and the
+    naive run-rate are never shown as two competing numbers: every SKU's
+    weekly forecast is FORECAST_BLEND * model + (1 - blend) * its own naive
+    run-rate (_adjusted_weekly()), and naive alone only fills in SKUs/weeks
+    the model doesn't cover."""
+    global ACTIVE_FORECAST_MODEL, _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN, _FC_WEEKLY_CHANNEL, FORECAST_SNAPSHOT
+    _FC_WEEKLY_DESIGN = design_forecasts or {}
+    _FC_WEEKLY_CHANNEL = channel_forecasts or {}
+    _ACTIVE_FORECASTS = forecasts
+    _set_plan(_load_real_plan(df, forecasts=forecasts, design_forecasts=_FC_WEEKLY_DESIGN))
+    ACTIVE_FORECAST_MODEL = "xgboost"
+    FORECAST_SNAPSHOT = forecast_snapshot
+
+
+def _train_and_publish(df, snap: date) -> None:
+    """Background step: train whichever of the SKU / design / channel models
+    has no saved forecast for ``snap`` yet, save it, then publish. Whatever
+    rebuild() already published (the previous snapshot's model, or naive on
+    a cold start) keeps serving until this finishes, and stays in place on
+    any failure.
+
+    Design-level (style) model: a second, independently-trained model at
+    DESIGN_NO grain, measurably more accurate than summing SKU-level
+    forecasts for a design's total demand (see compute_design()'s
+    docstring). Channel-level (Style x Marketplace) model: a THIRD one at
+    (DESIGN_NO, marketplace) grain (2026-09-18, user-requested) - only
+    covers pairs with enough of their own history; every thinner pair falls
+    back to the proportional split of the pooled design forecast. A failure
+    in either keeps the design/channel forecasts already being served, and
+    never undoes the SKU-level model."""
     try:
         import lgbm_forecast
-        snap = SNAPSHOT_DATE.isoformat()
-        forecasts = lgbm_forecast.load_cache(snap)
+        s = snap.isoformat()
+        forecasts = lgbm_forecast.load_cache(s)
         if forecasts is None:
             print("[data] training XGBoost in background…", file=sys.stderr)
-            forecasts = lgbm_forecast.compute(_SOURCE_DF)
+            forecasts = lgbm_forecast.compute(df)
             if forecasts:
-                lgbm_forecast.save_cache(snap, forecasts)
+                lgbm_forecast.save_cache(s, forecasts)
         if not forecasts:
-            print("[data] XGBoost produced no forecasts; keeping naive", file=sys.stderr)
+            print("[data] XGBoost produced no forecasts; keeping current plan", file=sys.stderr)
             return
 
-        # Design-level (style) model: a second, independently-trained model at
-        # DESIGN_NO grain, measurably more accurate than summing SKU-level
-        # forecasts for a design's total demand (see compute_design()'s
-        # docstring). Used only to sharpen the Festival Spike signal below —
-        # a failure here must never undo the SKU-level upgrade above.
+        design_forecasts = _FC_WEEKLY_DESIGN
         try:
-            design_forecasts = lgbm_forecast.load_design_cache(snap)
-            if design_forecasts is None:
+            fresh = lgbm_forecast.load_design_cache(s)
+            if fresh is None:
                 print("[data] training design-level model in background…", file=sys.stderr)
-                design_forecasts = lgbm_forecast.compute_design(_SOURCE_DF)
-                if design_forecasts:
-                    lgbm_forecast.save_design_cache(snap, design_forecasts)
-            _FC_WEEKLY_DESIGN = design_forecasts or {}
-            print(f"[data] design-level model active ({len(_FC_WEEKLY_DESIGN):,} designs)", file=sys.stderr)
+                fresh = lgbm_forecast.compute_design(df)
+                if fresh:
+                    lgbm_forecast.save_design_cache(s, fresh)
+            design_forecasts = fresh or design_forecasts
+            print(f"[data] design-level model active ({len(design_forecasts):,} designs)", file=sys.stderr)
         except Exception as exc:  # noqa: BLE001 — design-level is a bonus signal, not required
-            print(f"[data] design-level model failed ({exc!r}); design forecasts unavailable", file=sys.stderr)
-            _FC_WEEKLY_DESIGN = {}
+            print(f"[data] design-level model failed ({exc!r}); keeping current design forecasts", file=sys.stderr)
 
-        # Channel-level (Style x Marketplace) model: a THIRD, independently
-        # trained model at (DESIGN_NO, marketplace) grain (2026-09-18,
-        # user-requested) - previously the Channel & Source drill-down's
-        # per-channel forecast was only ever a top-down proportional SPLIT of
-        # the pooled design forecast (_apply_channel_forecast_share()), never
-        # its own learned signal. Only covers (design, marketplace) pairs
-        # with enough of their own history (compute_channel()'s
-        # _MIN_CHANNEL_ACTIVE_WEEKS gate) - get_channel_source_weekly() falls
-        # back to the proportional split for every thinner pair, and for
-        # every HISTORICAL week regardless (no backtested channel-level
-        # history exists yet). A failure here must never undo the SKU/design
-        # upgrades above.
+        channel_forecasts = _FC_WEEKLY_CHANNEL
         try:
-            channel_forecasts = lgbm_forecast.load_channel_cache(snap)
-            if channel_forecasts is None:
+            fresh = lgbm_forecast.load_channel_cache(s)
+            if fresh is None:
                 print("[data] training channel-level model in background…", file=sys.stderr)
-                channel_forecasts = lgbm_forecast.compute_channel(_SOURCE_DF)
-                if channel_forecasts:
-                    lgbm_forecast.save_channel_cache(snap, channel_forecasts)
-            _FC_WEEKLY_CHANNEL = channel_forecasts or {}
-            pair_count = sum(len(v) for v in _FC_WEEKLY_CHANNEL.values())
-            print(f"[data] channel-level model active ({len(_FC_WEEKLY_CHANNEL):,} designs, "
+                fresh = lgbm_forecast.compute_channel(df)
+                if fresh:
+                    lgbm_forecast.save_channel_cache(s, fresh)
+            channel_forecasts = fresh or channel_forecasts
+            pair_count = sum(len(v) for v in channel_forecasts.values())
+            print(f"[data] channel-level model active ({len(channel_forecasts):,} designs, "
                   f"{pair_count:,} design-channel pairs)", file=sys.stderr)
         except Exception as exc:  # noqa: BLE001 — channel-level is a bonus signal, not required
-            print(f"[data] channel-level model failed ({exc!r}); channel forecasts unavailable", file=sys.stderr)
-            _FC_WEEKLY_CHANNEL = {}
+            print(f"[data] channel-level model failed ({exc!r}); keeping current channel forecasts", file=sys.stderr)
 
-        # _load_real_plan folds the model's weekly series into the published plan
-        # (headline horizons + drill-down chart both come from it).
-        _ACTIVE_FORECASTS = forecasts
-        _set_plan(_load_real_plan(_SOURCE_DF, forecasts=forecasts, design_forecasts=_FC_WEEKLY_DESIGN))
-        ACTIVE_FORECAST_MODEL = "xgboost"
-        # Re-warm (2026-09-26, user-requested) - this _set_plan() bumped
-        # _DATA_VERSION again and evicted the naive-model warm-up rebuild()
-        # already did, so without this the first real request after the
-        # model swap would pay the cold-cache cost again.
+        _publish_model_plan(df, forecasts, design_forecasts, channel_forecasts, s)
+        # Re-warm (2026-09-26, user-requested) - _set_plan() bumped
+        # _DATA_VERSION and evicted rebuild()'s warm-up.
         _warm_caches()
-        print(f"[data] XGBoost active ({len(forecasts):,} SKUs)", file=sys.stderr)
+        _record_weekly_production()
+        print(f"[data] XGBoost active ({len(forecasts):,} SKUs, snapshot {s})", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 — never let forecasting kill the API
-        print(f"[data] XGBoost upgrade failed ({exc!r}); keeping naive", file=sys.stderr)
+        print(f"[data] model training failed ({exc!r}); keeping current plan", file=sys.stderr)
 
 
 _BOTTOM_KEYWORDS = frozenset({"PANT", "PLAZZO", "PALAZZO", "SHARARA", "LEHENGA", "DHOTI", "SALWAR", "SLAWAR", "CHURIDAR", "LEGGING"})
@@ -1937,20 +2012,49 @@ def _warm_caches() -> None:
 def rebuild() -> dict:
     """Fetch the source data and rebuild every in-memory table.
 
-    Serves the seasonal-naive plan immediately; if ``FORECAST_MODEL='lgbm'`` it
-    then trains LightGBM in the background and swaps it in. Called once at import
-    and again by ``POST /admin/refresh``. Falls back to mock data on failure.
+    Model-first (2026-09-28, user-requested: the dashboard showed the naive
+    number for a few minutes after every restart/refresh, then jumped to
+    the model's): the plan is published ONCE, with model forecasts already
+    folded in, whenever any are saved on disk - this snapshot's own, or the
+    newest previous one (week-shifted, see _load_saved_forecasts()) while
+    this snapshot's model trains in the background and replaces it. Naive
+    alone is served only on a genuine cold start (no saved model at all).
+    Called once at import, by the daily auto-refresh, and by
+    ``POST /admin/refresh``. Falls back to mock data on failure.
     """
-    global _SOURCE_DF, ACTIVE_FORECAST_MODEL, _LGBM_THREAD
+    global _SOURCE_DF, ACTIVE_FORECAST_MODEL, _LGBM_THREAD, FORECAST_SNAPSHOT
+    global _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN, _FC_WEEKLY_CHANNEL
     try:
         df = _source_dataframe()
         _SOURCE_DF = df
-        _set_plan(_load_real_plan(df))
         source = "live" if DATA_SOURCE == "live" else "csv"
-        ACTIVE_FORECAST_MODEL = "naive"
-        _warm_caches()
+        # Re-fit festival/sale multipliers on the latest sales BEFORE the
+        # plan (and any training) reads them - see festival.calibrate().
+        festival.calibrate(_daily_gross_units(df))
+        forecasts = None
+        needs_training = False
         if FORECAST_MODEL == "lgbm":
-            _LGBM_THREAD = threading.Thread(target=_upgrade_to_lgbm, daemon=True)
+            snap = _snapshot_of(df)
+            forecasts, sku_snap, sku_ok = _load_saved_forecasts("sku", snap)
+            design_forecasts, _design_snap, design_ok = _load_saved_forecasts("design", snap)
+            channel_forecasts, _channel_snap, channel_ok = _load_saved_forecasts("channel", snap)
+            needs_training = not (sku_ok and design_ok and channel_ok)
+            if forecasts:
+                _publish_model_plan(df, forecasts, design_forecasts, channel_forecasts, sku_snap)
+                print(f"[data] model forecasts from snapshot {sku_snap} active "
+                      f"({len(forecasts):,} SKUs)", file=sys.stderr)
+        if not forecasts:
+            # Clear any previous run's model state so a stale design/channel
+            # forecast can't leak into the naive plan.
+            _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN, _FC_WEEKLY_CHANNEL = None, {}, {}
+            _set_plan(_load_real_plan(df))
+            ACTIVE_FORECAST_MODEL = "naive"
+            FORECAST_SNAPSHOT = ""
+        _warm_caches()
+        if forecasts and not needs_training:
+            _record_weekly_production()
+        if needs_training and not (_LGBM_THREAD and _LGBM_THREAD.is_alive()):
+            _LGBM_THREAD = threading.Thread(target=_train_and_publish, args=(df, snap), daemon=True)
             _LGBM_THREAD.start()
     except Exception as exc:  # noqa: BLE001 — never let data issues kill startup
         print(f"[data] real load failed ({exc!r}); falling back to mock", file=sys.stderr)
@@ -1966,7 +2070,18 @@ def rebuild() -> dict:
         "source": source,
         "rows": len(PLAN_ROWS),
         "snapshot": SNAPSHOT_DATE.isoformat(),
+        **model_status(),
+    }
+
+
+def model_status() -> dict:
+    """Forecast-model fields shared by rebuild()'s result and GET /health."""
+    return {
         "forecastModel": ACTIVE_FORECAST_MODEL,
+        # Snapshot the served model was trained on - older than "snapshot"
+        # while that snapshot's own model is still training.
+        "forecastSnapshot": FORECAST_SNAPSHOT,
+        "modelTraining": bool(_LGBM_THREAD and _LGBM_THREAD.is_alive()),
         "lgbmPending": FORECAST_MODEL == "lgbm" and ACTIVE_FORECAST_MODEL != "xgboost",
     }
 
@@ -2042,104 +2157,6 @@ def get_category_subcategory_map() -> dict[str, list[str]]:
     return {cat: sorted(subs) for cat, subs in out.items()}
 
 
-# Frozen forecast value for a (group, week) pair - persisted to disk so a
-# week's displayed forecast, once shown, never silently changes again just
-# because a LIVE, today-anchored input it was built from happened to drift.
-# Originally (2026-09-21, user-reported) only covered the naive*festival
-# FALLBACK used when no real backtested model_hist prediction exists yet - a
-# fully COMPLETED month's own forecast total moved ~6% over a single
-# weekend (195,000 -> 183,022) with zero change to its real actual sales,
-# purely because `naive_week` is recalculated fresh on every rebuild.
-# Extended (2026-09-24, user-reported: an UPCOMING month, October, moved
-# 206,000 -> 198,485 overnight with no code change at all) to ALSO cover the
-# PRIMARY blended model+naive series value for future weeks - same root
-# cause (the naive component blended into every week's forecast is a live,
-# today-anchored trailing average, recomputed on every daily rebuild), just
-# previously only fixed for the narrower "no prediction at all" fallback
-# case, not the everyday case every normal forecast row actually uses.
-#
-# Keyed by MODEL EPOCH (lgbm_forecast's SKU + design cache versions) as well
-# as (key, week) - a genuine model retrain (a real cache-version bump, e.g.
-# fixing an actual bug) naturally invalidates old frozen values instead of
-# permanently locking in a stale or since-corrected forecast; only the
-# day-to-day naive-baseline noise WITHIN the same model version gets frozen.
-_NAIVE_SNAPSHOT_FILE = Path(__file__).resolve().parent / ".cache" / "naive_forecast_snapshot.json"
-_NAIVE_SNAPSHOT: dict[str, dict[str, dict]] = {}
-_NAIVE_SNAPSHOT_LOADED = False
-_NAIVE_SNAPSHOT_DIRTY = False
-
-
-def _ensure_naive_snapshot_loaded() -> None:
-    global _NAIVE_SNAPSHOT, _NAIVE_SNAPSHOT_LOADED
-    if _NAIVE_SNAPSHOT_LOADED:
-        return
-    _NAIVE_SNAPSHOT_LOADED = True
-    try:
-        import json as _json
-        _NAIVE_SNAPSHOT = _json.loads(_NAIVE_SNAPSHOT_FILE.read_text())
-    except Exception:
-        _NAIVE_SNAPSHOT = {}
-
-
-def _model_epoch() -> str:
-    """Identifies the currently-deployed SKU + design model version, so a
-    genuine retrain (cache-version bump) naturally invalidates old frozen
-    forecast values instead of permanently locking them in. Lazily imported
-    to avoid a circular import with lgbm_forecast (same reason every other
-    lgbm_forecast import in this file is inside a function, not at module
-    scope)."""
-    import lgbm_forecast
-    return f"{lgbm_forecast._CACHE_VERSION}|{lgbm_forecast._DESIGN_CACHE_VERSION}"
-
-
-def _frozen_value(key: str, week_iso: str, value: float) -> float:
-    """Freeze ANY per-(key, week) forecast value the first time it's
-    computed under the CURRENT model epoch, then always return that same
-    frozen value afterward - regardless of what live, today-anchored inputs
-    the caller would otherwise recompute it from. A different model epoch
-    (a genuine retrain) computes and freezes its own fresh value instead of
-    reusing a prior epoch's. Generic primitive behind _frozen_expected()
-    (the naive-fallback case) and _build_week_points()'s primary blended-
-    forecast case."""
-    global _NAIVE_SNAPSHOT_DIRTY
-    _ensure_naive_snapshot_loaded()
-    epoch = _model_epoch()
-    bucket = _NAIVE_SNAPSHOT.setdefault(key, {})
-    cached = bucket.get(week_iso)
-    if isinstance(cached, dict) and cached.get("epoch") == epoch:
-        return cached["value"]
-    bucket[week_iso] = {"epoch": epoch, "value": value}
-    _NAIVE_SNAPSHOT_DIRTY = True
-    return value
-
-
-def _frozen_expected(key: str, week_iso: str, naive_week: float, mult: float) -> float:
-    """The naive*festival fallback value for one (key, week) pair - computed
-    once per model epoch, then always read back from the persisted snapshot
-    afterward, so it can't silently drift just because `naive_week` (a live,
-    today-anchored trailing average) has moved since the last time this week
-    was shown. ``key`` must uniquely identify the series this week belongs
-    to (a Style, a Sub Category, or a channel breakdown - see call sites)."""
-    return _frozen_value(key, week_iso, max(0.0, naive_week * mult))
-
-
-def _flush_naive_snapshot_if_dirty() -> None:
-    """Batched disk write - called once per request/response build rather
-    than once per (key, week), since a single Weekly Sales Report page can
-    freeze thousands of new entries in one pass."""
-    global _NAIVE_SNAPSHOT_DIRTY
-    if not _NAIVE_SNAPSHOT_DIRTY:
-        return
-    try:
-        import json as _json
-        _NAIVE_SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _NAIVE_SNAPSHOT_FILE.write_text(_json.dumps(_NAIVE_SNAPSHOT))
-        _NAIVE_SNAPSHOT_DIRTY = False
-    except Exception:
-        pass
-
-
-
 def _week_axis(weeks: int) -> tuple[list[date], list[date]]:
     """(historical Mondays, forecast Mondays) - the date grid every row of a
     breakdown/grid shares, independent of any particular SKU/group's own
@@ -2170,7 +2187,7 @@ def _week_axis(weeks: int) -> tuple[list[date], list[date]]:
 
 def _build_week_points(
     weeks: int, naive_week: float, wk_actual: dict[str, int], series: list[float] | None,
-    model_hist: dict[str, float], snapshot_key: str,
+    model_hist: dict[str, float],
 ) -> tuple[list[ForecastPoint], list[HistoricalPoint]]:
     """Shared week-wise forecast + historical construction for get_breakdown()
     (one SKU), get_subcategory_breakdown() (a Sub Category's SKUs pooled),
@@ -2183,27 +2200,16 @@ def _build_week_points(
     the headline reconcile (and both reflect festival / sale spikes). Each point's
     date is the Monday start of its week.
 
-    ``snapshot_key`` uniquely identifies the series this call is building
-    (a Style/Sub Category key, or a channel breakdown key - see call sites)
-    - every week whose value falls back to the naive*festival proxy (no real
-    model series/model_hist for it) is frozen the first time it's computed
-    under this key, via _frozen_expected(), so it can't keep silently
-    drifting on every later page load just because `naive_week` (today's
-    live trailing average) has moved since."""
+    Always live (2026-09-28, user-requested): values are recomputed from the
+    current model + data on every rebuild - no frozen snapshot."""
     historical_mondays, forecast_mondays = _week_axis(weeks)
 
     # --- future forecast (weekly) ------------------------------------------- #
-    # Both branches are frozen per model epoch (see _frozen_value()) - an
-    # upcoming week's forecast, once shown, stays fixed until a genuine
-    # retrain changes the model, instead of drifting day-to-day purely
-    # because the live naive baseline blended into it moved (2026-09-24,
-    # user-reported: October's total moved 206,000 -> 198,485 overnight with
-    # no code change at all).
     forecast: list[ForecastPoint] = []
     for w, ws in enumerate(forecast_mondays):
         mult, event = _week_festival(ws)
-        qty = max(0, round(_frozen_value(snapshot_key, ws.isoformat(), series[w]))) if (series is not None and w < len(series)) \
-            else max(0, round(_frozen_expected(snapshot_key, ws.isoformat(), naive_week, mult)))
+        qty = max(0, round(series[w])) if (series is not None and w < len(series)) \
+            else max(0, round(naive_week * mult))
         forecast.append(ForecastPoint(date=ws.isoformat(), qty=qty, event=event))
 
     # --- historical: real weekly units vs what was actually predicted -------- #
@@ -2228,7 +2234,7 @@ def _build_week_points(
             exp = max(0, round(model_hist[ws.isoformat()]))
         else:
             mult, _ = _week_festival(ws)
-            exp = max(0, round(_frozen_expected(snapshot_key, ws.isoformat(), naive_week, mult)))
+            exp = max(0, round(naive_week * mult))
         # A week is only genuinely partial if SNAPSHOT_DATE falls BEFORE its
         # last day (Sunday) — not just "is this the newest bucket" (k == 0).
         # Those usually coincide, but not when SNAPSHOT_DATE (the latest
@@ -2670,7 +2676,7 @@ def _current_boost_windows(weeks: int) -> list[tuple[set[str], list[str], list[s
 
 
 def _apply_festival_boost(
-    snapshot_key: str, forecast: list[ForecastPoint], naive_week: float, wk_actual: dict[str, int],
+    forecast: list[ForecastPoint], naive_week: float, wk_actual: dict[str, int],
     boost_windows: list[tuple[set[str], list[str], list[str]]],
 ) -> tuple[list[ForecastPoint], bool]:
     """Optimistic festival-aware forecast boost (2026-09-12, user-requested;
@@ -2688,24 +2694,9 @@ def _apply_festival_boost(
     actually proven to spike harder than the generic multiplier assumes
     doesn't get under-forecast (and therefore under-produced) for it.
 
-    The final per-week decision (boosted or not, and by how much) is frozen
-    per model epoch via _frozen_value() under a `|boost` sub-key, separate
-    from _build_week_points()'s own freeze for the same (snapshot_key, week)
-    (2026-09-24, user-reported: this boost recomputes ``ratio`` from a live
-    `naive_week`/`wk_actual` on every call, so a week inside an ACTIVE
-    upcoming-festival/sale boost window kept drifting day-to-day even after
-    the base forecast was frozen - e.g. October, whose early weeks fall
-    inside the Sep19-Oct5 "upcoming sale" boost window as of 2026-09-23).
-
-    Every window's candidate for a given week is computed FIRST, and the
-    largest one is frozen ONCE per week - not once per window (2026-09-24,
-    user-reported: a week can fall inside BOTH an upcoming Festival's and an
-    upcoming Sale's window at once). Freezing per-window instead would let
-    whichever window happens to be processed first silently win regardless
-    of which one's own candidate was actually larger, since _frozen_value()
-    short-circuits on (key, week) alone with no per-window distinction -
-    the SECOND window's real, possibly-stronger candidate would just get
-    thrown away rather than correctly taking the max of the two.
+    Every window's candidate for a given week is computed FIRST and the
+    largest one wins (2026-09-24, user-reported: a week can fall inside BOTH
+    an upcoming Festival's and an upcoming Sale's window at once).
 
     Returns (possibly-boosted forecast, whether anything was actually
     raised)."""
@@ -2731,9 +2722,8 @@ def _apply_festival_boost(
     for p in forecast:
         if p.date in best_candidate:
             candidate = max(round(best_candidate[p.date]), p.qty)
-            frozen_qty = round(_frozen_value(f"{snapshot_key}|boost", p.date, candidate))
-            if frozen_qty != p.qty:
-                p = ForecastPoint(date=p.date, qty=frozen_qty, event=p.event)
+            if candidate != p.qty:
+                p = ForecastPoint(date=p.date, qty=candidate, event=p.event)
                 festival_boosted = True
         boosted.append(p)
     return boosted, festival_boosted
@@ -2846,7 +2836,7 @@ def _week_qty_to_chunks(week_qty: dict[str, float], chunks) -> dict[str, float]:
     return out
 
 
-def _channel_source_forecast_by_chunk(skus: list[str], chunks, weeks: int, snapshot_key: str) -> dict[str, float]:
+def _channel_source_forecast_by_chunk(skus: list[str], chunks, weeks: int) -> dict[str, float]:
     """Per-calendar-chunk forecast total for ``skus``, pooled the exact same
     way a Style/Sub Category row's own cells are (design-level-preferred
     series, backtested-or-naive historical comparison, PLUS the same
@@ -2872,9 +2862,9 @@ def _channel_source_forecast_by_chunk(skus: list[str], chunks, weeks: int, snaps
         return {}
     naive_week, wk_actual, series, model_hist = _aggregate_group_series(skus, gross=True)
     forecast, historical = _build_week_points(
-        weeks, naive_week, wk_actual, series, model_hist, f"channel:{snapshot_key}",
+        weeks, naive_week, wk_actual, series, model_hist,
     )
-    forecast, _ = _apply_festival_boost(f"channel:{snapshot_key}", forecast, naive_week, wk_actual, _current_boost_windows(weeks))
+    forecast, _ = _apply_festival_boost(forecast, naive_week, wk_actual, _current_boost_windows(weeks))
     week_qty: dict[str, float] = {p.date: float(p.forecast) for p in historical}
     week_qty.update({p.date: float(p.qty) for p in forecast})
     return _week_qty_to_chunks(week_qty, chunks)
@@ -3131,12 +3121,11 @@ def get_channel_source_weekly(style: str, weeks: int = 9) -> ChannelSourceWeekly
     sub = df[df["DESIGN_NO"].astype(str) == style]
     series = _channel_source_series(sub, chunks)
     skus = [r.skuCode for r in PLAN_ROWS if r.designNo == style]
-    forecast_by_chunk = _channel_source_forecast_by_chunk(skus, chunks, weeks, style) if skus else {}
+    forecast_by_chunk = _channel_source_forecast_by_chunk(skus, chunks, weeks) if skus else {}
     series = _apply_channel_forecast_with_cold_start(style, series, forecast_by_chunk, df, chunks)
     _apply_channel_model_overrides(style, series, chunks)
     _reconcile_channel_forecast_to_pooled(series, forecast_by_chunk)
 
-    _flush_naive_snapshot_if_dirty()
     return ChannelSourceWeeklyResponse(style=style, weekStarts=week_starts_iso, series=series)
 
 
@@ -3189,19 +3178,14 @@ def _pooled_forecast_by_chunk_per_style(matching_designs: set[str], chunks, week
         if not skus:
             continue
         naive_week, wk_actual, series, model_hist = _aggregate_group_series(skus, gross=True)
-        # Same snapshot key as _compute_weekly_grid()'s group_by="style" row
-        # for this same design - one shared frozen record per Style, not two
-        # independently-drifting ones between the main grid and this TOTAL
-        # row's own channel breakdown.
         forecast, historical = _build_week_points(
-            weeks, naive_week, wk_actual, series, model_hist, f"grid:style:{design_no}",
+            weeks, naive_week, wk_actual, series, model_hist,
         )
-        forecast, _ = _apply_festival_boost(f"grid:style:{design_no}", forecast, naive_week, wk_actual, boost_windows)
+        forecast, _ = _apply_festival_boost(forecast, naive_week, wk_actual, boost_windows)
         week_qty: dict[str, float] = {p.date: float(p.forecast) for p in historical}
         week_qty.update({p.date: float(p.qty) for p in forecast})
         for wk, v in _week_qty_to_chunks(week_qty, chunks).items():
             total[wk] = total.get(wk, 0.0) + v
-    _flush_naive_snapshot_if_dirty()
     return total
 
 
@@ -3247,6 +3231,69 @@ def get_style_lifecycle(sub_category: str = "") -> dict:
         "thisYear": STYLE_LIFECYCLE.get("thisYear"),
         "bySubCategory": {sub_category: entry},
     }
+
+
+# Forward horizon of the Weekly Sales Report (dataService.weeklyGrid's
+# default, ~2 months) - the suggestion the weekly production log records.
+_LOG_WEEKS = 9
+
+
+def _record_weekly_production() -> None:
+    """Weekly production log (weekly_log.py), run after every up-to-date
+    model publish: first completes (and locks) every logged week the data
+    now fully covers - filling in its actual sale, its other values staying
+    as last refreshed - then saves the running week: each Style's ~2-month
+    forecast, stock + WIP and suggested production, refreshed on every
+    publish until the week completes."""
+    import weekly_log
+    try:
+        rows = get_weekly_grid("style", _LOG_WEEKS, 5000, 0, "", "", "").rows
+        # A week locks only once its last day is both in the data and over
+        # (a late manual refresh on that day could otherwise miss its last orders).
+        for ws in weekly_log.open_weeks_ending_by(min(SNAPSHOT_DATE, date.today() - timedelta(days=1))):
+            actual = {r.key: (r.cells[ws].actual or 0) for r in rows if ws in r.cells}
+            weekly_log.complete_week(ws, actual, SNAPSHOT_DATE)
+            print(f"[weekly_log] week {ws} completed ({len(actual):,} styles)", file=sys.stderr)
+
+        today = date.today()
+        chunks = _month_chunks(today.year, today.month)
+        idx = next(i for i, (c_start, c_end) in enumerate(chunks) if c_start <= today <= c_end)
+        week_start, week_end = chunks[idx]
+        key = week_start.isoformat()
+        records = [{
+            "style": r.key, "sub_category": r.subCategory, "category": r.category,
+            "forecast_qty": r.cells[key].forecast if key in r.cells else 0,
+            "forecast_2m_qty": r.futureForecastTotal,
+            "available_qty": r.availableQty,
+            "suggested_production_qty": r.suggestedProduction,
+        } for r in rows]
+        saved = weekly_log.save_running_week(records, week_start.strftime("%B %Y"), f"W{idx + 1}",
+                                             week_start, week_end, SNAPSHOT_DATE)
+        print(f"[weekly_log] running week {key} saved ({saved:,} styles, data through {SNAPSHOT_DATE})", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — the log is a bonus, never break a rebuild
+        print(f"[weekly_log] update failed ({exc!r})", file=sys.stderr)
+
+
+def get_weekly_production_log(style: str = "", status: str = "") -> list[dict]:
+    """The weekly production log's rows (weekly_log.read()), with
+    ``actual_so_far`` added to every row of a still-running week: the gross
+    units sold in that week so far, from today's live Weekly Sales Report."""
+    import weekly_log
+    rows = weekly_log.read(style, status)
+    open_weeks = {r["week_start"] for r in rows if r["status"] == "open"}
+    live: dict[str, dict] = {}
+    if open_weeks:
+        try:
+            live = {r.key: r.cells for r in get_weekly_grid("style", _LOG_WEEKS, 5000, 0, "", "", "").rows}
+        except Exception as exc:  # noqa: BLE001 — the running figure is a bonus
+            print(f"[weekly_log] live actuals unavailable ({exc!r})", file=sys.stderr)
+    for r in rows:
+        if r["status"] == "open":
+            cell = live.get(r["style"], {}).get(r["week_start"])
+            r["actual_so_far"] = cell.actual if cell is not None and cell.actual is not None else 0
+        else:
+            r["actual_so_far"] = None
+    return rows
 
 
 def get_weekly_grid(
@@ -3433,9 +3480,9 @@ def _compute_weekly_grid(
     for key, skus in groups.items():
         naive_week, wk_actual, series, model_hist = _aggregate_group_series(skus, gross=True)
         forecast, historical = _build_week_points(
-            weeks, naive_week, wk_actual, series, model_hist, f"grid:{group_by}:{key}",
+            weeks, naive_week, wk_actual, series, model_hist,
         )
-        forecast, festival_boosted = _apply_festival_boost(f"grid:{group_by}:{key}", forecast, naive_week, wk_actual, boost_windows)
+        forecast, festival_boosted = _apply_festival_boost(forecast, naive_week, wk_actual, boost_windows)
 
         built.append((key, len(skus), len(group_styles[key]), forecast, historical, festival_boosted))
         week_qty: dict[str, float] = {p.date: float(p.forecast) for p in historical}
@@ -3630,7 +3677,6 @@ def _compute_weekly_grid(
             )
         )
 
-    _flush_naive_snapshot_if_dirty()
     return WeeklyGridResponse(
         groupBy=group_by, total=total, totalForecast=total_forecast, totalActual=total_actual,
         currentWeekForecast=current_week_forecast, currentWeekActual=current_week_actual,

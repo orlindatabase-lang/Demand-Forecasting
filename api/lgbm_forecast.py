@@ -158,7 +158,7 @@ _LGBM_GRID = [
 ]
 
 _CACHE_DIR = Path(__file__).resolve().parent / ".cache"
-_CACHE_VERSION = "v47"
+_CACHE_VERSION = "v48"
 
 
 def _cache_file(snapshot: str) -> Path:
@@ -180,7 +180,7 @@ def save_cache(snapshot: str, forecasts: dict) -> None:
     _cache_file(snapshot).write_text(json.dumps(forecasts))
 
 
-_DESIGN_CACHE_VERSION = "d34"
+_DESIGN_CACHE_VERSION = "d35"
 
 
 def _design_cache_file(snapshot: str) -> Path:
@@ -202,7 +202,7 @@ def save_design_cache(snapshot: str, forecasts: dict) -> None:
     _design_cache_file(snapshot).write_text(json.dumps(forecasts))
 
 
-_CHANNEL_CACHE_VERSION = "c5"
+_CHANNEL_CACHE_VERSION = "c6"
 
 _OMS_MARKETPLACE_KEYWORDS = [
     ("amazon", "Amazon"),
@@ -245,6 +245,28 @@ def load_channel_cache(snapshot: str) -> dict | None:
 def save_channel_cache(snapshot: str, forecasts: dict) -> None:
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     _channel_cache_file(snapshot).write_text(json.dumps(forecasts))
+
+
+def latest_cached_file(kind: str, on_or_before: str) -> tuple[str, Path, bool] | None:
+    """(snapshot ISO, path, is_current_version) of the newest saved forecast
+    for ``kind`` ("sku", "design" or "channel") with snapshot <=
+    ``on_or_before``, across every cache version (the on-disk schema is the
+    same) - the current version wins a same-date tie. None if nothing is
+    saved. Lets data.py keep serving the last trained model while a new
+    snapshot's (or a new version's) model trains, instead of dropping to
+    naive."""
+    file_of = {"sku": _cache_file, "design": _design_cache_file, "channel": _channel_cache_file}[kind]
+    current = file_of("").name[: -len("_.json")]            # e.g. "lgbm_forecasts_v48"
+    family = current.rstrip("0123456789")                    # e.g. "lgbm_forecasts_v"
+    best: tuple[str, bool, int, Path] | None = None
+    for f in _CACHE_DIR.glob(f"{family}*_*.json"):
+        version, _, snap = f.stem.rpartition("_")
+        if not version[len(family):].isdigit() or len(snap) != 10 or snap > on_or_before:
+            continue
+        key = (snap, version == current, int(version[len(family):]), f)
+        if best is None or key[:3] > best[:3]:
+            best = key
+    return (best[0], best[3], best[1]) if best else None
 
 
 def _wape(y_true, y_pred) -> float:
@@ -544,7 +566,9 @@ def compute(df_full) -> dict:
     launch_map = _fetch_launch_dates()
     static["_launch"] = static["design_no"].map(launch_map)
     static["_first_week"] = static[id_col].map(first_week)
-    static["_launch"] = static["_launch"].fillna(static["_first_week"])
+    # to_datetime: an empty launch_map (ERP master unavailable) leaves an
+    # object column under pandas 3, which breaks the .dt arithmetic below.
+    static["_launch"] = pd.to_datetime(static["_launch"].fillna(static["_first_week"]))
 
     _lwo = wk[[id_col, "_week", TARGET]].merge(static[[id_col, "_launch"]], on=id_col, how="left")
     _lwo = _lwo.dropna(subset=["_launch"])
@@ -930,7 +954,9 @@ def compute_design(df_full) -> dict:
     launch_map = _fetch_launch_dates()
     static["_launch"] = static[id_col].map(launch_map)
     static["_first_week"] = static[id_col].map(first_week)
-    static["_launch"] = static["_launch"].fillna(static["_first_week"])
+    # to_datetime: an empty launch_map (ERP master unavailable) leaves an
+    # object column under pandas 3, which breaks the .dt arithmetic below.
+    static["_launch"] = pd.to_datetime(static["_launch"].fillna(static["_first_week"]))
 
     _lwo = wk[[id_col, "_week", TARGET]].merge(static[[id_col, "_launch"]], on=id_col, how="left")
     _lwo = _lwo.dropna(subset=["_launch"])
@@ -1291,7 +1317,9 @@ def compute_channel(df_full) -> dict:
     launch_map = _fetch_launch_dates()
     static["_launch"] = static[COL_DESIGN].map(launch_map)
     static["_first_week"] = static[id_col].map(first_week)
-    static["_launch"] = static["_launch"].fillna(static["_first_week"])
+    # to_datetime: an empty launch_map (ERP master unavailable) leaves an
+    # object column under pandas 3, which breaks the .dt arithmetic below.
+    static["_launch"] = pd.to_datetime(static["_launch"].fillna(static["_first_week"]))
 
     _lwo = wk[[id_col, "_week", TARGET]].merge(static[[id_col, "_launch"]], on=id_col, how="left")
     _lwo = _lwo.dropna(subset=["_launch"])
