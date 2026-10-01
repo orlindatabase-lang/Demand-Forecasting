@@ -220,19 +220,14 @@ function Cell({
   );
 }
 
-// One marketplace's actual + forecast Gross Sale for one week (2026-09-16,
-// user-requested inline channel breakdown; forecast added 2026-09-18,
-// user-requested - see ChannelSourceWeeklySeries.forecastCells: a top-down
-// proportional split of the row's own pooled forecast by this channel's
-// historical actual-sales share, not an independently-modeled number).
-function MarketplaceCell({ qty, forecast }: { qty: number | undefined; forecast: number | undefined }) {
+// One marketplace's actual Gross Sale for one week (2026-09-16,
+// user-requested inline channel breakdown). Actuals only - per-channel
+// forecasts were removed 2026-10-01 (user-requested).
+function MarketplaceCell({ qty }: { qty: number | undefined }) {
   return (
     <TableCell align="right" sx={{ bgcolor: MARKET_ROW_BG }}>
       <Typography variant="body2" sx={{ color: qty ? "text.primary" : "text.disabled" }}>
         {qty ? formatNumber(qty) : "—"}
-      </Typography>
-      <Typography variant="caption" sx={{ color: FORECAST_COLOR, lineHeight: 1.3, display: "block" }}>
-        {forecast ? formatNumber(forecast) : "—"}
       </Typography>
     </TableCell>
   );
@@ -1541,28 +1536,17 @@ export default function WeeklySalesGrid() {
                               (acc, w) => acc + (series.cells[w.weekStart] ?? 0),
                               0,
                             );
-                            const monthForecastTotal = m.weeks.reduce(
-                              (acc, w) => acc + (series.forecastCells[w.weekStart] ?? 0),
-                              0,
-                            );
                             return (
                               <Fragment key={m.label}>
                                 {m.weeks.map((w) => (
                                   <MarketplaceCell
                                     key={w.weekStart}
                                     qty={series.cells[w.weekStart]}
-                                    forecast={series.forecastCells[w.weekStart]}
                                   />
                                 ))}
                                 <TableCell align="right" sx={{ bgcolor: SHADE_COLOR }}>
                                   <Typography variant="body2" sx={{ fontWeight: 700, color: ACTUAL_COLOR }}>
                                     {monthTotal > 0 ? formatNumber(monthTotal) : "—"}
-                                  </Typography>
-                                  <Typography
-                                    variant="caption"
-                                    sx={{ color: FORECAST_COLOR, lineHeight: 1.3, display: "block", fontWeight: 600 }}
-                                  >
-                                    {monthForecastTotal > 0 ? formatNumber(monthForecastTotal) : "—"}
                                   </Typography>
                                 </TableCell>
                               </Fragment>
@@ -1828,10 +1812,6 @@ export default function WeeklySalesGrid() {
                         (acc, w) => acc + (series.cells[w.weekStart] ?? 0),
                         0,
                       );
-                      const monthForecastTotal = m.weeks.reduce(
-                        (acc, w) => acc + (series.forecastCells[w.weekStart] ?? 0),
-                        0,
-                      );
                       return (
                         <Fragment key={m.label}>
                           {m.weeks.map((w) => (
@@ -1851,12 +1831,6 @@ export default function WeeklySalesGrid() {
                               >
                                 {series.cells[w.weekStart] ? formatNumber(series.cells[w.weekStart]) : "—"}
                               </Typography>
-                              <Typography
-                                variant="caption"
-                                sx={{ color: FORECAST_COLOR, lineHeight: 1.3, display: "block" }}
-                              >
-                                {series.forecastCells[w.weekStart] ? formatNumber(series.forecastCells[w.weekStart]) : "—"}
-                              </Typography>
                             </TableCell>
                           ))}
                           <TableCell
@@ -1870,12 +1844,6 @@ export default function WeeklySalesGrid() {
                           >
                             <Typography variant="body2" sx={{ fontWeight: 700, color: ACTUAL_COLOR }}>
                               {monthTotal > 0 ? formatNumber(monthTotal) : "—"}
-                            </Typography>
-                            <Typography
-                              variant="caption"
-                              sx={{ color: FORECAST_COLOR, lineHeight: 1.3, display: "block", fontWeight: 600 }}
-                            >
-                              {monthForecastTotal > 0 ? formatNumber(monthForecastTotal) : "—"}
                             </Typography>
                           </TableCell>
                         </Fragment>

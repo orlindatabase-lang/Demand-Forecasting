@@ -252,14 +252,6 @@ class ChannelSourceWeeklySeries(BaseModel):
     source: str   # "OMS" | "WEBSITE"
     totalQty: int  # summed across every week in the response's weekStarts
     cells: dict[str, int]  # weekStart (ISO) -> Gross qty, sparse (only weeks with any qty)
-    # weekStart (ISO) -> this channel's forecasted qty for that week
-    # (2026-09-18, user-requested: show Forecast, not just Actual, per
-    # channel). There is no per-channel-TRAINED model - this is a top-down
-    # proportional split of the row's own already-computed pooled forecast
-    # (the same number the row's main cells show), allocated by this
-    # channel's own historical share of the row's real actual sales. See
-    # data.py's _channel_source_forecast_by_chunk().
-    forecastCells: dict[str, float] = {}
 
 
 class ChannelSourceWeeklyResponse(BaseModel):

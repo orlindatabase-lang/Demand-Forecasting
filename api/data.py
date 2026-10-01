@@ -69,13 +69,13 @@ FORECAST_BLEND = float(os.getenv("FORECAST_BLEND", "0.25"))
 DAILY_REFRESH = os.getenv("DAILY_REFRESH", "on").strip().lower() != "off"
 REFRESH_HOUR = int(os.getenv("REFRESH_HOUR", "6"))
 REFRESH_MINUTE = int(os.getenv("REFRESH_MINUTE", "0"))
-# SKU/design/channel walk-forward backtest - OFF by default (2026-09-24,
+# SKU/design walk-forward backtest - OFF by default (2026-09-24,
 # user-requested: do not run this automatically on any rebuild - daily
 # refresh, manual refresh, or retrain - until explicitly asked to turn it
 # back on again; don't re-enable it unilaterally, e.g. as a side effect of
 # some other change, without that explicit ask). Set RUN_BACKTEST=1 to
-# enable. While off, OVERALL_ACCURACY/SKU_ACCURACY/DESIGN_ACCURACY/
-# CHANNEL_ACCURACY etc. fall back to the same "no scoreable snapshot yet"
+# enable. While off, OVERALL_ACCURACY/SKU_ACCURACY/DESIGN_ACCURACY
+# etc. fall back to the same "no scoreable snapshot yet"
 # naive-only proxy path already used before any snapshot is old enough to
 # score.
 RUN_BACKTEST = os.getenv("RUN_BACKTEST", "0").strip().lower() in ("1", "true", "on")
@@ -751,15 +751,6 @@ def _tier_accuracy_breakdown(week_data: dict[tuple[str, str], dict[str, float]])
 # rather than shown as its own row (matches the existing "DiEGO
 # International - Amazon FBA" pattern above - both are just one channel's
 # orders under a different legal-entity prefix).
-#
-# Moved here (2026-09-18) from further down in this file, next to its other
-# callers — it must be defined BEFORE rebuild()'s module-level call at the
-# bottom of this file, since _backtest_channel_model_accuracy() below (called
-# synchronously from that very first rebuild()) needs it. Defining it after
-# rebuild()'s call site worked fine for every OTHER caller (all only ever
-# invoked later, per-request, once the whole module has finished loading) but
-# broke on this one (verified: NameError("name '_marketplace_of' is not
-# defined") on startup).
 _OMS_MARKETPLACE_KEYWORDS = [
     ("amazon", "Amazon"),
     ("flipkart", "Flipkart"),
@@ -782,112 +773,6 @@ def _marketplace_of(channel_name: str, source: str) -> str:
         if keyword in name:
             return label
     return str(channel_name)  # unrecognized OMS channel - show raw name rather than guess
-
-
-def _backtest_channel_model_accuracy(
-    sales, snap: "pd.Timestamp"
-) -> tuple[int, int, dict[str, dict[str, dict[str, float]]]]:
-    """Genuine walk-forward accuracy for the channel-level model
-    (lgbm_forecast.compute_channel()), at (DESIGN_NO, marketplace) grain -
-    the channel-level counterpart of _backtest_model_accuracy() /
-    _backtest_design_model_accuracy() above (2026-09-18, user-requested).
-    This is the THIRD, independently-trained model (see that function's
-    docstring) - previously the Channel & Source drill-down's forecast was
-    only ever a top-down proportional split, which had nothing of its own
-    to backtest in the first place.
-
-    ``sales`` must already be filtered to GROSS (see _GROSS_SALE_STATUSES /
-    lgbm_forecast._GROSS_SALE_NORM) - callers must pass gross_sales,
-    matching what the model was actually trained to predict.
-
-    Returns (channel_pct, snapshots_used, channel_model_hist):
-      - channel_pct: pooled, volume-weighted accuracy across every matured
-        (design, marketplace, week).
-      - channel_model_hist: {design_no: {marketplace: {week_start_iso:
-        model_pred}}} - real backtested channel-level predictions.
-    """
-    import json as _json
-    import pandas as pd
-
-    if "channel_name" not in sales.columns:
-        return 0, 0, {}
-
-    cache_dir = Path(__file__).resolve().parent / ".cache"
-
-    def _snap_date(f: Path) -> date:
-        try:
-            return date.fromisoformat(f.stem.rsplit("_", 1)[-1])
-        except ValueError:
-            return date.min
-
-    files = sorted(
-        cache_dir.glob("lgbm_channel_forecasts_c*_*.json"), key=_snap_date
-    )[-_BACKTEST_MAX_SNAPSHOTS:]
-    if not files:
-        return 0, 0, {}
-
-    sales = sales.assign(
-        _marketplace=[
-            _marketplace_of(ch, src) for ch, src in zip(sales["channel_name"], sales.get("source", "OMS"))
-        ]
-    )
-
-    channel_model_hist: dict[str, dict[str, dict[str, float]]] = {}
-    week_data: dict[tuple[str, str, str], dict[str, float]] = {}
-    used_weeks: set[str] = set()
-
-    for f in files:
-        try:
-            snap_date = date.fromisoformat(f.stem.rsplit("_", 1)[-1])
-        except ValueError:
-            continue
-
-        week1_start = _forecast_week_start(snap_date, 0)
-        week1_end = week1_start + timedelta(days=6)
-        if pd.Timestamp(week1_end) + timedelta(days=MATURATION_DAYS) >= snap:
-            continue
-
-        try:
-            forecasts = _json.loads(f.read_text())
-        except Exception:
-            continue
-        if not forecasts:
-            continue
-
-        wk_sales = sales[
-            (sales["order_date"] >= pd.Timestamp(week1_start))
-            & (sales["order_date"] <= pd.Timestamp(week1_end))
-        ]
-        actual = wk_sales.groupby(["DESIGN_NO", "_marketplace"])["qty"].sum()
-
-        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=34)
-        hist = sales[(sales["order_date"] >= lo) & (sales["order_date"] <= pd.Timestamp(snap_date))]
-        naive_week = hist.groupby(["DESIGN_NO", "_marketplace"])["qty"].sum() / 5.0
-
-        mult = _week_festival(week1_start)[0]
-        week_iso = week1_start.isoformat()
-        used_weeks.add(week_iso)
-
-        for design_no, by_marketplace in forecasts.items():
-            for marketplace, fc in by_marketplace.items():
-                cweekly = fc.get("weekly") if fc else None
-                if not cweekly:
-                    continue
-                key = (design_no, marketplace)
-                nw = float(naive_week.get(key, 0.0))
-                act = float(actual.get(key, 0.0))
-                model_pred = max(0.0, (FORECAST_BLEND * cweekly[0] + (1 - FORECAST_BLEND) * nw) * mult)
-                week_data[(design_no, marketplace, week_iso)] = {"model_pred": model_pred, "actual": act}
-                channel_model_hist.setdefault(design_no, {}).setdefault(marketplace, {})[week_iso] = model_pred
-
-    model_err = model_act = 0.0
-    for (_design_no, _marketplace, _week_iso), d in week_data.items():
-        model_err += abs(d["actual"] - d["model_pred"])
-        model_act += d["actual"]
-
-    used = len(used_weeks)
-    channel_pct = max(0, min(100, round((1 - model_err / model_act) * 100))) if model_act > 0 else 0
-    return channel_pct, used, channel_model_hist
 
 
 def _adjusted_weekly(snap_date: date, lgbm_weekly: list[float] | None,
@@ -1172,7 +1057,6 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
     global SNAPSHOT_DATE, OVERALL_ACCURACY, SKU_ACCURACY, SKU_MODEL_HIST
     global LATEST_WEEK_ACCURACY, LATEST_WEEK_ISO, _WEEK_ACTUAL_GROSS, _DAY_ACTUAL_GROSS
     global DESIGN_ACCURACY, DESIGN_MODEL_HIST, TIER_ACCURACY
-    global CHANNEL_ACCURACY, CHANNEL_MODEL_HIST
     import pandas as pd
 
     df = df.dropna(subset=["product_sku_code"])
@@ -1518,25 +1402,6 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
         DESIGN_MODEL_HIST = {}
         TIER_ACCURACY = {}
 
-    # --- channel-level MODEL accuracy: same walk-forward backtest, at
-    # (DESIGN_NO, marketplace) grain (2026-09-18, user-requested) - the
-    # channel-level counterpart of the SKU/design backtests above, for the
-    # THIRD, independently-trained model (lgbm_forecast.compute_channel())
-    # that only just started being trained. Scored against gross_sales, same
-    # reasoning as the other two backtests.
-    channel_pct, channel_used, channel_model_hist = (
-        _backtest_channel_model_accuracy(gross_sales, snap) if RUN_BACKTEST else (0, 0, {})
-    )
-    if channel_used > 0:
-        CHANNEL_ACCURACY = channel_pct
-        CHANNEL_MODEL_HIST = channel_model_hist
-        _pair_count = sum(len(v) for v in channel_model_hist.values())
-        print(f"[data] channel-level backtest accuracy over {channel_used} snapshot(s): "
-              f"{channel_pct}% ({_pair_count} design-channel pairs scored)", file=sys.stderr)
-    else:
-        CHANNEL_ACCURACY = 0
-        CHANNEL_MODEL_HIST = {}
-
     # --- top-selling state / city / warehouse (real revenue + quantity) ------ #
     geo = _geo_frame(sales)
     # cap=100: the long noisy tail (buyer_city has ~9k variants) doesn't need
@@ -1605,16 +1470,6 @@ _FC_WEEKLY: dict[str, list[float]] = {}
 # Never redistributes back down to SKU level. Empty until the background
 # retrain covers a design.
 _FC_WEEKLY_DESIGN: dict[str, dict] = {}
-# Per-(design, marketplace) RAW weekly forecast from lgbm_forecast.
-# compute_channel() — a THIRD, independently-trained model (2026-09-18,
-# user-requested), {design_no: {marketplace: {"weekly": [...]}}}. Only
-# covers pairs with enough of their own history (see compute_channel()'s
-# _MIN_CHANNEL_ACTIVE_WEEKS gate) — get_channel_source_weekly() prefers this
-# over the proportional-share-of-pooled-forecast split for whichever
-# (Style, channel) pairs it covers, for FUTURE weeks only (no backtested
-# channel-level history exists yet to cover past weeks). Empty until the
-# background retrain covers a pair.
-_FC_WEEKLY_CHANNEL: dict[str, dict[str, dict]] = {}
 # Per-SKU seasonal-naive WEEKLY level (5-week run-rate); the drill-down back-test
 # baseline and the fallback when LightGBM doesn't cover a SKU.
 _NAIVE_WEEK: dict[str, float] = {}
@@ -1656,17 +1511,6 @@ TIER_ACCURACY: dict[str, dict] = {}
 # user-requested). {"lastYear": int, "thisYear": int, "bySubCategory":
 # {sub_category: {presentCount, presentStyles, addedCount, addedStyles}}}.
 STYLE_LIFECYCLE: dict = {}
-# Channel-level counterpart, from _backtest_channel_model_accuracy()
-# (2026-09-18, user-requested) - the THIRD, independently-trained model
-# (lgbm_forecast.compute_channel(), (design, marketplace) grain). Backtested
-# the same way as the SKU/design models above, at (design, marketplace,
-# week) grain. CHANNEL_MODEL_HIST is {design_no: {marketplace:
-# {week_start_iso: model_pred}}} - not currently consumed by
-# get_channel_source_weekly()'s HISTORICAL side (which still uses the
-# proportional-split value for past weeks - see that function's docstring),
-# only exposed here for accuracy reporting.
-CHANNEL_ACCURACY: int = 0
-CHANNEL_MODEL_HIST: dict[str, dict[str, dict[str, float]]] = {}
 # Per-horizon-week backtested accuracy (0-100): {week_offset: accuracy_pct}.
 # OVERALL_ACCURACY only ever scores week-1 of each snapshot's forecast — this
 # extends the same walk-forward backtest across the full HORIZON_WEEKS, since
@@ -1710,13 +1554,12 @@ _CHANNEL_SOURCE_BASE_CACHE: tuple[int, object] | None = None
 # cause: _upcoming_event_outlook() scans the full ~2.5M-row _SOURCE_DF up to
 # 4 times (event + control window, x2 categories) to rank top-selling Sub
 # Categories/Colors - the main Weekly Sales Report row already pays this cost
-# once per request but reuses it via _WEEKLY_GRID_CACHE, while
-# _channel_source_forecast_by_chunk()'s _current_boost_windows() call had no
-# such cache and repeated the full scan from scratch on every drill-down
-# click.
+# once per request but reuses it via _WEEKLY_GRID_CACHE, while the
+# drill-down's own call had no such cache and repeated the full scan from
+# scratch on every click.
 _FESTIVAL_OUTLOOK_CACHE: tuple[int, date, int, "FestivalOutlook"] | None = None
 
-# Forecast-model status: "xgboost" once model forecasts are folded into the
+# Forecast-model status: "lightgbm" once model forecasts are folded into the
 # plan, "naive" only on a cold start with no saved model.
 ACTIVE_FORECAST_MODEL = "naive"
 # Snapshot date (ISO) of the model forecasts currently served ("" = none).
@@ -1780,8 +1623,7 @@ def _daily_gross_units(df):
 
 def _shift_weekly(obj, weeks: int):
     """Drop the first ``weeks`` entries of every "weekly" list in a saved
-    forecast (SKU/design ``{key: {"weekly": [...]}}`` or channel
-    ``{design: {marketplace: {"weekly": [...], ...}}}``), so an OLDER
+    forecast (SKU/design ``{key: {"weekly": [...]}}``), so an OLDER
     snapshot's week 0 lines up with the current snapshot's week 0. Weeks
     past the shortened series fall back to the naive run-rate in
     _adjusted_weekly()."""
@@ -1800,7 +1642,7 @@ _PREVIOUS_MODEL_MAX_AGE_DAYS = 28
 
 def _load_saved_forecasts(kind: str, snap: date) -> tuple[dict | None, str, bool]:
     """(forecasts, source snapshot ISO, up_to_date) for ``kind``
-    ("sku"/"design"/"channel") from disk: the newest saved forecast with
+    ("sku"/"design") from disk: the newest saved forecast with
     snapshot <= ``snap`` and within _PREVIOUS_MODEL_MAX_AGE_DAYS, of any
     cache version, week-shifted to line up with ``snap``. ``up_to_date`` is
     True only for ``snap``'s own forecast of the CURRENT cache version -
@@ -1826,23 +1668,22 @@ def _load_saved_forecasts(kind: str, snap: date) -> tuple[dict | None, str, bool
 
 
 def _publish_model_plan(df, forecasts: dict, design_forecasts: dict | None,
-                        channel_forecasts: dict | None, forecast_snapshot: str) -> None:
+                        forecast_snapshot: str) -> None:
     """Fold the model's forecasts into the published plan. The model and the
     naive run-rate are never shown as two competing numbers: every SKU's
     weekly forecast is FORECAST_BLEND * model + (1 - blend) * its own naive
     run-rate (_adjusted_weekly()), and naive alone only fills in SKUs/weeks
     the model doesn't cover."""
-    global ACTIVE_FORECAST_MODEL, _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN, _FC_WEEKLY_CHANNEL, FORECAST_SNAPSHOT
+    global ACTIVE_FORECAST_MODEL, _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN, FORECAST_SNAPSHOT
     _FC_WEEKLY_DESIGN = design_forecasts or {}
-    _FC_WEEKLY_CHANNEL = channel_forecasts or {}
     _ACTIVE_FORECASTS = forecasts
     _set_plan(_load_real_plan(df, forecasts=forecasts, design_forecasts=_FC_WEEKLY_DESIGN))
-    ACTIVE_FORECAST_MODEL = "xgboost"
+    ACTIVE_FORECAST_MODEL = "lightgbm"
     FORECAST_SNAPSHOT = forecast_snapshot
 
 
 def _train_and_publish(df, snap: date) -> None:
-    """Background step: train whichever of the SKU / design / channel models
+    """Background step: train whichever of the SKU / design models
     has no saved forecast for ``snap`` yet, save it, then publish. Whatever
     rebuild() already published (the previous snapshot's model, or naive on
     a cold start) keeps serving until this finishes, and stays in place on
@@ -1851,23 +1692,19 @@ def _train_and_publish(df, snap: date) -> None:
     Design-level (style) model: a second, independently-trained model at
     DESIGN_NO grain, measurably more accurate than summing SKU-level
     forecasts for a design's total demand (see compute_design()'s
-    docstring). Channel-level (Style x Marketplace) model: a THIRD one at
-    (DESIGN_NO, marketplace) grain (2026-09-18, user-requested) - only
-    covers pairs with enough of their own history; every thinner pair falls
-    back to the proportional split of the pooled design forecast. A failure
-    in either keeps the design/channel forecasts already being served, and
-    never undoes the SKU-level model."""
+    docstring). A failure there keeps the design forecasts already being
+    served, and never undoes the SKU-level model."""
     try:
         import lgbm_forecast
         s = snap.isoformat()
         forecasts = lgbm_forecast.load_cache(s)
         if forecasts is None:
-            print("[data] training XGBoost in background…", file=sys.stderr)
+            print("[data] training LightGBM in background…", file=sys.stderr)
             forecasts = lgbm_forecast.compute(df)
             if forecasts:
                 lgbm_forecast.save_cache(s, forecasts)
         if not forecasts:
-            print("[data] XGBoost produced no forecasts; keeping current plan", file=sys.stderr)
+            print("[data] LightGBM produced no forecasts; keeping current plan", file=sys.stderr)
             return
 
         design_forecasts = _FC_WEEKLY_DESIGN
@@ -1883,27 +1720,12 @@ def _train_and_publish(df, snap: date) -> None:
         except Exception as exc:  # noqa: BLE001 — design-level is a bonus signal, not required
             print(f"[data] design-level model failed ({exc!r}); keeping current design forecasts", file=sys.stderr)
 
-        channel_forecasts = _FC_WEEKLY_CHANNEL
-        try:
-            fresh = lgbm_forecast.load_channel_cache(s)
-            if fresh is None:
-                print("[data] training channel-level model in background…", file=sys.stderr)
-                fresh = lgbm_forecast.compute_channel(df)
-                if fresh:
-                    lgbm_forecast.save_channel_cache(s, fresh)
-            channel_forecasts = fresh or channel_forecasts
-            pair_count = sum(len(v) for v in channel_forecasts.values())
-            print(f"[data] channel-level model active ({len(channel_forecasts):,} designs, "
-                  f"{pair_count:,} design-channel pairs)", file=sys.stderr)
-        except Exception as exc:  # noqa: BLE001 — channel-level is a bonus signal, not required
-            print(f"[data] channel-level model failed ({exc!r}); keeping current channel forecasts", file=sys.stderr)
-
-        _publish_model_plan(df, forecasts, design_forecasts, channel_forecasts, s)
+        _publish_model_plan(df, forecasts, design_forecasts, s)
         # Re-warm (2026-09-26, user-requested) - _set_plan() bumped
         # _DATA_VERSION and evicted rebuild()'s warm-up.
         _warm_caches()
         _record_weekly_production()
-        print(f"[data] XGBoost active ({len(forecasts):,} SKUs, snapshot {s})", file=sys.stderr)
+        print(f"[data] LightGBM active ({len(forecasts):,} SKUs, snapshot {s})", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 — never let forecasting kill the API
         print(f"[data] model training failed ({exc!r}); keeping current plan", file=sys.stderr)
 
@@ -2005,6 +1827,9 @@ def _warm_caches() -> None:
         # WeeklySalesGrid.tsx's useWeeklyGrid() call - so the page a user
         # actually lands on is already cached by the time they load it.
         get_weekly_grid("style", 9, 200, 0, "", "", "")
+        # Also records the Sub Category rows' running-week forecasts (see
+        # forecast_freeze.py) even on days nobody opens that grouping.
+        get_weekly_grid("subCategory", 9, 200, 0, "", "", "")
     except Exception as exc:  # noqa: BLE001 — a slow first request beats a broken rebuild
         print(f"[data] cache warm-up failed ({exc!r})", file=sys.stderr)
 
@@ -2023,7 +1848,7 @@ def rebuild() -> dict:
     ``POST /admin/refresh``. Falls back to mock data on failure.
     """
     global _SOURCE_DF, ACTIVE_FORECAST_MODEL, _LGBM_THREAD, FORECAST_SNAPSHOT
-    global _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN, _FC_WEEKLY_CHANNEL
+    global _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN
     try:
         df = _source_dataframe()
         _SOURCE_DF = df
@@ -2037,16 +1862,15 @@ def rebuild() -> dict:
             snap = _snapshot_of(df)
             forecasts, sku_snap, sku_ok = _load_saved_forecasts("sku", snap)
             design_forecasts, _design_snap, design_ok = _load_saved_forecasts("design", snap)
-            channel_forecasts, _channel_snap, channel_ok = _load_saved_forecasts("channel", snap)
-            needs_training = not (sku_ok and design_ok and channel_ok)
+            needs_training = not (sku_ok and design_ok)
             if forecasts:
-                _publish_model_plan(df, forecasts, design_forecasts, channel_forecasts, sku_snap)
+                _publish_model_plan(df, forecasts, design_forecasts, sku_snap)
                 print(f"[data] model forecasts from snapshot {sku_snap} active "
                       f"({len(forecasts):,} SKUs)", file=sys.stderr)
         if not forecasts:
-            # Clear any previous run's model state so a stale design/channel
+            # Clear any previous run's model state so a stale design
             # forecast can't leak into the naive plan.
-            _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN, _FC_WEEKLY_CHANNEL = None, {}, {}
+            _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN = None, {}
             _set_plan(_load_real_plan(df))
             ACTIVE_FORECAST_MODEL = "naive"
             FORECAST_SNAPSHOT = ""
@@ -2082,7 +1906,7 @@ def model_status() -> dict:
         # while that snapshot's own model is still training.
         "forecastSnapshot": FORECAST_SNAPSHOT,
         "modelTraining": bool(_LGBM_THREAD and _LGBM_THREAD.is_alive()),
-        "lgbmPending": FORECAST_MODEL == "lgbm" and ACTIVE_FORECAST_MODEL != "xgboost",
+        "lgbmPending": FORECAST_MODEL == "lgbm" and ACTIVE_FORECAST_MODEL != "lightgbm",
     }
 
 
@@ -2655,34 +2479,12 @@ def _event_boost_windows(
     return upcoming_weeks, historical_weeks, control_weeks
 
 
-def _current_boost_windows(weeks: int) -> list[tuple[set[str], list[str], list[str]]]:
-    """The SAME upcoming-Festival/upcoming-Sale boost windows
-    _compute_weekly_grid() computes once per request - factored out
-    (2026-09-18, user-requested accuracy audit) so
-    _channel_source_forecast_by_chunk() can apply the identical
-    group-specific festival boost the main Weekly Sales Report row already
-    gets. See _apply_festival_boost()'s docstring for why this matters -
-    verified missing here: the Channel & Source drill-down was
-    under-forecasting by 15-31% for the exact runup weeks to an upcoming
-    Sale event, precisely because this boost never reached it."""
-    outlook = get_festival_outlook()
-    historical_mondays, forecast_mondays = _week_axis(weeks)
-    return [
-        w for w in (
-            _event_boost_windows(outlook.upcomingFestival, forecast_mondays, historical_mondays),
-            _event_boost_windows(outlook.upcomingSale, forecast_mondays, historical_mondays),
-        ) if w is not None
-    ]
-
-
 def _apply_festival_boost(
     forecast: list[ForecastPoint], naive_week: float, wk_actual: dict[str, int],
     boost_windows: list[tuple[set[str], list[str], list[str]]],
 ) -> tuple[list[ForecastPoint], bool]:
     """Optimistic festival-aware forecast boost (2026-09-12, user-requested;
-    factored out of _compute_weekly_grid() 2026-09-18 so
-    get_channel_source_weekly()/_total() can apply the SAME real
-    per-group signal the main row already gets).
+    factored out of _compute_weekly_grid() 2026-09-18).
 
     The model + festival.py's generic per-day multiplier already lift EVERY
     group's forecast during a festival/sale window by the same hand-tuned
@@ -2811,288 +2613,6 @@ def _channel_source_series(sub: "pd.DataFrame", chunks) -> list[ChannelSourceWee
     ]
 
 
-def _week_qty_to_chunks(week_qty: dict[str, float], chunks) -> dict[str, float]:
-    """Convert a {Mon-Sun week_start_iso: qty} dict into {calendar-chunk
-    start_iso: qty} by splitting each week's total evenly across its 7 days
-    and re-summing whichever days fall in each calendar chunk - the same
-    day-splitting convention used everywhere else a Mon-Sun model week needs
-    to line up with the Weekly Sales Report's fixed 1-7/8-15/16-23/24-end
-    calendar columns (see _calendar_chunk_axis's own comment for the full
-    rationale). Shared by _channel_source_forecast_by_chunk() (a pooled
-    group's forecast), _channel_model_forecast_by_chunk() (one
-    independently-trained channel model's own future series), and
-    get_channel_source_weekly()'s CHANNEL_MODEL_HIST override (that same
-    model's own backtested HISTORICAL predictions)."""
-    out: dict[str, float] = {}
-    for c_start, c_end in chunks:
-        total = 0.0
-        d = c_start
-        while d <= c_end:
-            m_iso = (d - timedelta(days=d.weekday())).isoformat()
-            total += week_qty.get(m_iso, 0.0) / 7.0
-            d += timedelta(days=1)
-        if total:
-            out[c_start.isoformat()] = total
-    return out
-
-
-def _channel_source_forecast_by_chunk(skus: list[str], chunks, weeks: int) -> dict[str, float]:
-    """Per-calendar-chunk forecast total for ``skus``, pooled the exact same
-    way a Style/Sub Category row's own cells are (design-level-preferred
-    series, backtested-or-naive historical comparison, PLUS the same
-    group-specific festival/sale boost - see _aggregate_group_series/
-    _build_week_points/_apply_festival_boost), on the SAME calendar-day
-    chunk axis as _channel_source_series()'s actual-qty cells - the SAME
-    pooled forecast the row itself already shows. Used to proportionally
-    allocate each channel's own forecast share (2026-09-18, user-requested:
-    show Forecast, not just Actual, per channel) - there is no per-channel-
-    TRAINED model, so this is a top-down split by historical actual-sales
-    share, not an independently-modeled number.
-
-    The festival boost specifically (2026-09-18, found while auditing why
-    the channel breakdown looked "too low") was originally missing here -
-    verified against real data: for the runup weeks to the upcoming
-    "Meesho Mega Blockbuster Sale + Myntra Big Fashion Festival + Flipkart
-    Big Billion Days" event, this under-forecast the main row's own total
-    by 15-31% before this fix, purely because that group-specific boost
-    (based on the row's own real performance during last year's SAME
-    event) was applied to the main Weekly Sales Report row but never
-    reached this function."""
-    if not skus:
-        return {}
-    naive_week, wk_actual, series, model_hist = _aggregate_group_series(skus, gross=True)
-    forecast, historical = _build_week_points(
-        weeks, naive_week, wk_actual, series, model_hist,
-    )
-    forecast, _ = _apply_festival_boost(forecast, naive_week, wk_actual, _current_boost_windows(weeks))
-    week_qty: dict[str, float] = {p.date: float(p.forecast) for p in historical}
-    week_qty.update({p.date: float(p.qty) for p in forecast})
-    return _week_qty_to_chunks(week_qty, chunks)
-
-
-def _apply_channel_forecast_share(
-    series: list[ChannelSourceWeeklySeries], forecast_by_chunk: dict[str, float],
-) -> None:
-    """Split ``forecast_by_chunk`` (this row's own pooled forecast, per
-    calendar chunk) across ``series`` in place, by each channel's own share
-    of the row's TOTAL real actual sales (2026-09-18, user-requested)."""
-    total_qty_all = sum(s.totalQty for s in series)
-    if total_qty_all <= 0 or not forecast_by_chunk:
-        return
-    for s in series:
-        share = s.totalQty / total_qty_all
-        s.forecastCells = {wk: round(v * share, 1) for wk, v in forecast_by_chunk.items()}
-
-
-# Below this many total Gross units, a Style's own channel-mix split is too
-# thin to trust outright (e.g. 3 units on Flipkart, 0 everywhere else would
-# otherwise "forecast" 100% Flipkart with zero real evidence) - ramps
-# linearly to full confidence in its own numbers at this threshold, same
-# style as lgbm_forecast.py's _REQUIRED_WEEKS confidence ramp.
-_MIN_CHANNEL_SHARE_QTY = 20
-
-
-def _borrow_channel_mix(style: str, df: "pd.DataFrame", chunks) -> dict[tuple[str, str], float]:
-    """Similarity-weighted average channel MIX (each marketplace's share of
-    Gross Sale, summing to ~1.0) borrowed from ``style``'s material-similar,
-    launch-eligible donor designs - the SAME cold-start borrowing
-    lgbm_forecast.py's compute()/compute_design() already use for demand
-    LEVEL/CURVE (similar_design.py), applied here to channel MIX instead
-    (2026-09-18, user-requested). {} if similar_design has no eligible
-    donor for this style, or none of them have any channel history either."""
-    try:
-        import similar_design
-        neighbors = similar_design.get_similar_designs(style, eligible_donors_only=True)
-    except Exception:  # noqa: BLE001 — cold-start channel mix must never break the drill-down
-        return {}
-    if not neighbors:
-        return {}
-    combined: dict[tuple[str, str], float] = {}
-    weight_total = 0.0
-    for n in neighbors:
-        sim = n["similarity"]
-        if sim <= 0:
-            continue
-        other_sub = df[df["DESIGN_NO"].astype(str) == n["design"]]
-        if other_sub.empty:
-            continue
-        other_series = _channel_source_series(other_sub, chunks)
-        other_total = sum(s.totalQty for s in other_series)
-        if other_total <= 0:
-            continue
-        for s in other_series:
-            key = (s.marketplace, s.source)
-            combined[key] = combined.get(key, 0.0) + sim * (s.totalQty / other_total)
-        weight_total += sim
-    if weight_total <= 0:
-        return {}
-    return {k: v / weight_total for k, v in combined.items()}
-
-
-def _apply_channel_forecast_with_cold_start(
-    style: str, series: list[ChannelSourceWeeklySeries], forecast_by_chunk: dict[str, float],
-    df: "pd.DataFrame", chunks,
-) -> list[ChannelSourceWeeklySeries]:
-    """Same allocation as _apply_channel_forecast_share(), but when this
-    Style has too little (or zero) of its own channel-level actual-sales
-    history to trust that split (below _MIN_CHANNEL_SHARE_QTY total units),
-    blend it with a channel MIX borrowed from material-similar eligible
-    donor designs (2026-09-18, user-requested: apply the SAME cold-start
-    borrowing used for demand level/curve here, for channel mix). A Style
-    with ZERO own channel history (brand new — ``series`` starts empty)
-    gets entirely synthetic rows built from the donor mix alone (confidence
-    0), so the dropdown can still show a per-channel forecast even before
-    any of its own sales exist. Returns the (possibly donor-extended) list —
-    ``series`` itself may start empty, so this can't just mutate in place."""
-    if not forecast_by_chunk:
-        return series
-    total_qty_all = sum(s.totalQty for s in series)
-    confidence = min(1.0, total_qty_all / _MIN_CHANNEL_SHARE_QTY) if _MIN_CHANNEL_SHARE_QTY else 1.0
-    if confidence >= 1.0:
-        _apply_channel_forecast_share(series, forecast_by_chunk)
-        return series
-
-    borrowed = _borrow_channel_mix(style, df, chunks)
-    if not borrowed:
-        if series:
-            _apply_channel_forecast_share(series, forecast_by_chunk)
-        return series
-
-    own_share = {
-        (s.marketplace, s.source): (s.totalQty / total_qty_all if total_qty_all > 0 else 0.0) for s in series
-    }
-    by_key = {(s.marketplace, s.source): s for s in series}
-    blended: dict[tuple[str, str], float] = {
-        key: confidence * own_share.get(key, 0.0) + (1 - confidence) * borrowed.get(key, 0.0)
-        for key in set(own_share) | set(borrowed)
-    }
-    norm = sum(blended.values()) or 1.0
-    for key, weight in blended.items():
-        share = weight / norm
-        cells = {wk: round(v * share, 1) for wk, v in forecast_by_chunk.items()}
-        if key in by_key:
-            by_key[key].forecastCells = cells
-        else:
-            marketplace, source = key
-            series.append(ChannelSourceWeeklySeries(
-                marketplace=marketplace, source=source, totalQty=0, cells={}, forecastCells=cells,
-            ))
-    series.sort(key=lambda s: s.totalQty, reverse=True)
-    return series
-
-
-def _channel_model_forecast_by_chunk(weekly: list[float], chunks) -> dict[str, float]:
-    """Per-calendar-chunk forecast for one (design, marketplace) pair's own
-    INDEPENDENTLY-TRAINED weekly series (lgbm_forecast.compute_channel()),
-    with the festival post-hoc multiplier applied (2026-09-18,
-    user-requested) - same day-splitting convention as
-    _channel_source_forecast_by_chunk(), for a single already-known weekly
-    series instead of a pooled group's _build_week_points() output. Not
-    blended with a naive baseline (unlike _adjusted_weekly) - there's no
-    tracked per-channel naive rate anywhere else in the app, and the
-    channel model only ever covers pairs with real WEEKLY-solid history
-    (see compute_channel()'s _MIN_CHANNEL_ACTIVE_WEEKS gate) - i.e. exactly
-    the pairs where a raw run-rate blend matters least. Only covers weeks
-    from SNAPSHOT_DATE forward, since ``weekly`` is a pure forward recursive
-    forecast (no backtested channel-level history exists for past weeks)."""
-    if not weekly:
-        return {}
-    week_qty: dict[str, float] = {}
-    for w, v in enumerate(weekly):
-        ws = _forecast_week_start(SNAPSHOT_DATE, w)
-        week_qty[ws.isoformat()] = max(0.0, v * _week_festival(ws)[0])
-    return _week_qty_to_chunks(week_qty, chunks)
-
-
-def _apply_channel_model_overrides(style: str, series: list[ChannelSourceWeeklySeries], chunks) -> None:
-    """Override the proportional-split forecastCells already on ``series``,
-    in place, wherever lgbm_forecast.compute_channel()'s independently-
-    trained (design, marketplace) model has something real to say for this
-    Style. A channel with no real actual sales of its own yet (2026-09-18,
-    user-requested fix: this used to leave weeks stuck on a proportional
-    split derived from a channel-mix ratio that doesn't reflect that
-    specific week's real mix - e.g. a Style whose Amazon share spiked one
-    week showed Amazon UNDER-forecast and Flipkart/Myntra OVER-forecast
-    that same week, even though the row's own POOLED total was accurate -
-    see this function's origin: a real screenshot of 417-03 showing ~89%
-    pooled accuracy but as low as ~9-37% for individual channels) gets a
-    brand-new synthetic row if the model covers a channel the Style has
-    otherwise never sold on.
-
-    Applied in three layers, weakest first so a stronger source always wins
-    where they overlap:
-      1. FITTED in-sample values (``fc["fitted"]``) for HISTORICAL weeks -
-         the model's own prediction on rows it was TRAINED on, not held
-         out, so it reads more optimistic than genuine backtested accuracy
-         (2026-09-18, user-requested: better than a flat proportional
-         split, without waiting on a walk-forward backtest to mature).
-      2. CHANNEL_MODEL_HIST - the REAL walk-forward-backtested prediction
-         (see _backtest_channel_model_accuracy()) for whichever HISTORICAL
-         weeks have actually matured - overrides #1 wherever it exists,
-         since it's genuinely validated instead of in-sample.
-      3. _FC_WEEKLY_CHANNEL's own forward recursive forecast, for FUTURE
-         weeks (doesn't overlap #1/#2 - those only ever cover the past)."""
-    by_marketplace = {s.marketplace: s for s in series}
-
-    def _apply(marketplace: str, cells: dict[str, float]) -> None:
-        if not cells:
-            return
-        existing = by_marketplace.get(marketplace)
-        if existing is not None:
-            existing.forecastCells.update(cells)
-        else:
-            new_series = ChannelSourceWeeklySeries(
-                marketplace=marketplace, source="OMS", totalQty=0, cells={}, forecastCells=cells,
-            )
-            series.append(new_series)
-            by_marketplace[marketplace] = new_series
-
-    channel_models = _FC_WEEKLY_CHANNEL.get(style, {})
-    for marketplace, fc in channel_models.items():
-        fitted = fc.get("fitted")
-        if fitted:
-            _apply(marketplace, _week_qty_to_chunks(fitted, chunks))
-    for marketplace, week_qty in CHANNEL_MODEL_HIST.get(style, {}).items():
-        _apply(marketplace, _week_qty_to_chunks(week_qty, chunks))
-    for marketplace, fc in channel_models.items():
-        _apply(marketplace, _channel_model_forecast_by_chunk(fc.get("weekly"), chunks))
-
-
-def _reconcile_channel_forecast_to_pooled(
-    series: list[ChannelSourceWeeklySeries], forecast_by_chunk: dict[str, float],
-) -> None:
-    """Rescale every channel's forecastCells, in place, so they sum EXACTLY
-    to the row's own pooled forecast for that same week (``forecast_by_chunk``
-    - the same backtested-or-naive number the main Weekly Sales Report row
-    itself shows), preserving each channel's own relative SHAPE/proportions
-    from whichever source produced it (2026-09-18, user-requested accuracy
-    audit finding: lgbm_forecast.compute_channel() is trained completely
-    independently of the pooled SKU/design-level model, with nothing forcing
-    their totals to agree - verified on Style 417-03, where the channel-
-    summed 13-week future forecast (8,250 units) was roughly HALF the
-    design-level model's own future forecast (17,238 units) for the
-    identical Style/horizon. Since the pooled model is measurably more
-    accurate (design-level ~36% test WAPE vs. channel-level ~44%, per each
-    model's own training diagnostics), every channel's forecast is rescaled
-    here to inherit the pooled total instead of silently understating -
-    or overstating - the row's real expected demand by whatever the two
-    independently-trained models happen to disagree by."""
-    weeks: set[str] = set()
-    for s in series:
-        weeks.update(s.forecastCells)
-    for wk in weeks:
-        target = forecast_by_chunk.get(wk)
-        if target is None:
-            continue
-        channel_sum = sum(s.forecastCells.get(wk, 0.0) for s in series)
-        if channel_sum <= 0:
-            continue
-        scale = target / channel_sum
-        for s in series:
-            if wk in s.forecastCells:
-                s.forecastCells[wk] = round(s.forecastCells[wk] * scale, 1)
-
-
 def get_channel_source_weekly(style: str, weeks: int = 9) -> ChannelSourceWeeklyResponse:
     """Per-marketplace week-wise Gross Sale for one Style, on the SAME
     calendar-day week axis as the Weekly Sales Report's own row cells - the
@@ -3101,16 +2621,8 @@ def get_channel_source_weekly(style: str, weeks: int = 9) -> ChannelSourceWeekly
     dialog with an inline dropdown, shown week-wise, matching the app's
     existing size-level expand/collapse row pattern). Several raw
     channel_name values (different legal entities on the same platform) roll
-    up into one marketplace row - see _marketplace_of(). Each series also
-    carries a per-channel FORECAST (2026-09-18, user-requested): the
-    proportionally-allocated pooled forecast (cold-start blended with a
-    similarity-borrowed channel mix when this Style has too little of its
-    own channel history - see _apply_channel_forecast_with_cold_start()) is
-    the baseline for EVERY week, then overridden wherever
-    lgbm_forecast.compute_channel()'s own independently-trained
-    (design, marketplace) model has real backtested (historical) or forward
-    (future) output for this Style/channel - see
-    _apply_channel_model_overrides()."""
+    up into one marketplace row - see _marketplace_of(). Actual sales only -
+    per-channel forecasts were removed 2026-10-01 (user-requested)."""
     chunks = _calendar_chunk_axis(weeks)
     week_starts_iso = [c[0].isoformat() for c in chunks]
 
@@ -3119,14 +2631,9 @@ def get_channel_source_weekly(style: str, weeks: int = 9) -> ChannelSourceWeekly
         return ChannelSourceWeeklyResponse(style=style, weekStarts=week_starts_iso, series=[])
 
     sub = df[df["DESIGN_NO"].astype(str) == style]
-    series = _channel_source_series(sub, chunks)
-    skus = [r.skuCode for r in PLAN_ROWS if r.designNo == style]
-    forecast_by_chunk = _channel_source_forecast_by_chunk(skus, chunks, weeks) if skus else {}
-    series = _apply_channel_forecast_with_cold_start(style, series, forecast_by_chunk, df, chunks)
-    _apply_channel_model_overrides(style, series, chunks)
-    _reconcile_channel_forecast_to_pooled(series, forecast_by_chunk)
-
-    return ChannelSourceWeeklyResponse(style=style, weekStarts=week_starts_iso, series=series)
+    return ChannelSourceWeeklyResponse(
+        style=style, weekStarts=week_starts_iso, series=_channel_source_series(sub, chunks),
+    )
 
 
 def _matching_style_keys(search: str, sub_category: str, category: str = "") -> set[str]:
@@ -3151,44 +2658,6 @@ def _matching_style_keys(search: str, sub_category: str, category: str = "") -> 
     return keys
 
 
-def _pooled_forecast_by_chunk_per_style(matching_designs: set[str], chunks, weeks: int) -> dict[str, float]:
-    """Per-calendar-chunk forecast summed across every Style in
-    ``matching_designs``, computed the SAME way _compute_weekly_grid()
-    builds the TOTAL row's own number: each Style's forecast (including its
-    own festival/sale boost) computed INDIVIDUALLY, then summed - NOT one
-    pooled _aggregate_group_series() call across every matching SKU at once
-    with a single boost applied to the combined total.
-
-    These two orders of operation are NOT equivalent once a boost has a
-    per-entity threshold/cap (_MIN_FESTIVAL_CONTROL_ACTUAL/
-    _MAX_FESTIVAL_BOOST_RATIO): summing already-thresholded-and-capped
-    per-style boosts gives a different number than thresholding/capping ONE
-    ratio computed from the pooled total (2026-09-18, user-requested
-    accuracy audit - found while fixing get_channel_source_weekly_total()'s
-    missing boost: applying it to the pooled SKU list instead of per-style
-    overshot the main row's own TOTAL by up to +23.5% for the exact same
-    weeks that were previously undershooting by up to -31% with no boost at
-    all). Costs one _aggregate_group_series() call per matching Style - the
-    same per-style work _compute_weekly_grid() already does for the main
-    table, just duplicated here for the TOTAL row's own channel breakdown."""
-    boost_windows = _current_boost_windows(weeks)
-    total: dict[str, float] = {}
-    for design_no in matching_designs:
-        skus = [r.skuCode for r in PLAN_ROWS if r.designNo == design_no]
-        if not skus:
-            continue
-        naive_week, wk_actual, series, model_hist = _aggregate_group_series(skus, gross=True)
-        forecast, historical = _build_week_points(
-            weeks, naive_week, wk_actual, series, model_hist,
-        )
-        forecast, _ = _apply_festival_boost(forecast, naive_week, wk_actual, boost_windows)
-        week_qty: dict[str, float] = {p.date: float(p.forecast) for p in historical}
-        week_qty.update({p.date: float(p.qty) for p in forecast})
-        for wk, v in _week_qty_to_chunks(week_qty, chunks).items():
-            total[wk] = total.get(wk, 0.0) + v
-    return total
-
-
 def get_channel_source_weekly_total(
     weeks: int = 9, search: str = "", sub_category: str = "", category: str = "",
 ) -> ChannelSourceWeeklyResponse:
@@ -3211,10 +2680,9 @@ def get_channel_source_weekly_total(
         return ChannelSourceWeeklyResponse(style="TOTAL", weekStarts=week_starts_iso, series=[])
 
     sub = df[df["DESIGN_NO"].astype(str).isin(matching)]
-    series = _channel_source_series(sub, chunks)
-    if series:
-        _apply_channel_forecast_share(series, _pooled_forecast_by_chunk_per_style(matching, chunks, weeks))
-    return ChannelSourceWeeklyResponse(style="TOTAL", weekStarts=week_starts_iso, series=series)
+    return ChannelSourceWeeklyResponse(
+        style="TOTAL", weekStarts=week_starts_iso, series=_channel_source_series(sub, chunks),
+    )
 
 
 def get_style_lifecycle(sub_category: str = "") -> dict:
@@ -3461,10 +2929,7 @@ def _compute_weekly_grid(
     outlook = get_festival_outlook()  # also carried into the response as festivalOutlook, below
 
     # Optimistic festival-aware forecast boost (2026-09-12, user-requested;
-    # applied per group via _apply_festival_boost(), factored out 2026-09-18
-    # so get_channel_source_weekly()/_total() apply this SAME real
-    # per-group signal too, not just this main row - see
-    # _current_boost_windows() for that self-contained version). Applied
+    # applied per group via _apply_festival_boost()). Applied
     # independently for the upcoming Festival AND the upcoming Sale (see
     # festival_calendar.py) - either, both, or neither may end up boosting
     # a given group.
@@ -3493,6 +2958,38 @@ def _compute_weekly_grid(
         key=lambda item: sum(p.actual for p in item[4]) + sum(p.qty for p in item[3]),
         reverse=True,
     )
+
+    # Per-group forecast for every calendar-week cell (each Mon-Sun week's
+    # total spread evenly over its 7 days, re-summed per cell), with every
+    # COMPLETED cell replaced by its locked value (2026-09-29, user-requested:
+    # completed weeks/months must not change on a data refresh - see
+    # forecast_freeze.py). Built for EVERY matching group, not just the page,
+    # so the TOTAL row is the sum of the same frozen cells and every group's
+    # running week gets recorded before it completes.
+    chunk_parts: list[tuple[str, list[tuple[str, int]]]] = []
+    for c_start, c_end in chunks:
+        parts: dict[str, int] = {}
+        d = c_start
+        while d <= c_end:
+            m_iso = (d - timedelta(days=d.weekday())).isoformat()
+            parts[m_iso] = parts.get(m_iso, 0) + 1
+            d += timedelta(days=1)
+        chunk_parts.append((c_start.isoformat(), list(parts.items())))
+    live_cells = {
+        item[0]: {
+            c_iso: round(sum(week_qty_by_key[item[0]].get(m_iso, 0.0) * n / 7.0 for m_iso, n in parts))
+            for c_iso, parts in chunk_parts
+        }
+        for item in built
+    }
+    try:
+        import forecast_freeze
+        fc_cells = forecast_freeze.apply(
+            f"grid:{group_by}", live_cells, {c_start.isoformat(): c_end for c_start, c_end in chunks}, today,
+        )
+    except Exception as exc:  # noqa: BLE001 — never break the report over the freeze store
+        print(f"[data] forecast freeze unavailable ({exc!r}); serving live values", file=sys.stderr)
+        fc_cells = live_cells
     # Headline totals across EVERY matching group (search-filtered, but not
     # paginated) - each SKU belongs to exactly one Sub Category and exactly
     # one Style, so these come out the same regardless of which grouping is
@@ -3517,22 +3014,8 @@ def _compute_weekly_grid(
             (cur_chunk[0] + timedelta(days=i)).isoformat()
             for i in range((cur_chunk[1] - cur_chunk[0]).days + 1)
         ]
-        for item in built:
-            week_qty = week_qty_by_key.get(item[0], {})
-            # NOTE: named distinctly from the outer `total` (pagination group
-            # count, set above from len(groups)) - this loop used to reuse
-            # that name as its own float accumulator, silently clobbering it
-            # with whatever float this scratch sum last held. WeeklyGridResponse's
-            # `total` field is declared int, so most of the time the leftover
-            # float happened to be a whole number and pydantic coerced it
-            # silently; whenever it wasn't (e.g. 0.9999999999999998), the
-            # whole endpoint 500'd (2026-09-14, found while testing the Weekly
-            # Sales Report page).
-            item_week_total = 0.0
-            for d_iso in cur_days:
-                m_iso = (date.fromisoformat(d_iso) - timedelta(days=date.fromisoformat(d_iso).weekday())).isoformat()
-                item_week_total += week_qty.get(m_iso, 0.0) / 7.0
-            current_week_forecast += round(item_week_total)
+        cur_iso = cur_chunk[0].isoformat()
+        current_week_forecast = int(sum(round(fc_cells[item[0]].get(cur_iso, 0)) for item in built))
         for s in all_matching_skus:
             day_map = _DAY_ACTUAL_GROSS.get(s)
             if not day_map:
@@ -3551,14 +3034,10 @@ def _compute_weekly_grid(
     # Weekly Total row (2026-09-14, user-requested): the SAME per-chunk
     # cell/month-total aggregation as each row below, but summed across
     # EVERY matching group (search/Sub Category filtered, but not
-    # paginated) rather than just the current page. One combined
-    # {monday_iso: qty} forecast series and one combined {day_iso: qty}
-    # actual series are built first so the per-chunk loop costs O(chunks),
-    # not O(chunks * groups).
-    total_week_qty: dict[str, float] = {}
-    for wq in week_qty_by_key.values():
-        for m_iso, qty in wq.items():
-            total_week_qty[m_iso] = total_week_qty.get(m_iso, 0.0) + qty
+    # paginated) rather than just the current page. Forecast = the sum of
+    # every group's own (frozen-if-completed) cell, so the TOTAL row always
+    # equals the sum of its rows; actual = one combined {day_iso: qty}
+    # series so the per-chunk loop costs O(chunks), not O(chunks * groups).
     total_day_actual: dict[str, int] = {}
     for skus in groups.values():
         for s in skus:
@@ -3573,18 +3052,14 @@ def _compute_weekly_grid(
     totals_month_forecast: dict[str, int] = {}
     for c_start, c_end in chunks:
         is_historical = c_start <= today
-        forecast_total = 0.0
-        actual_total = 0
-        d = c_start
-        while d <= c_end:
-            d_iso = d.isoformat()
-            m_iso = (d - timedelta(days=d.weekday())).isoformat()
-            forecast_total += total_week_qty.get(m_iso, 0.0) / 7.0
-            if is_historical:
-                actual_total += total_day_actual.get(d_iso, 0)
-            d += timedelta(days=1)
-        forecast_qty = round(forecast_total)
         key_iso = c_start.isoformat()
+        actual_total = 0
+        if is_historical:
+            d = c_start
+            while d <= c_end:
+                actual_total += total_day_actual.get(d.isoformat(), 0)
+                d += timedelta(days=1)
+        forecast_qty = int(sum(round(fc_cells[item[0]].get(key_iso, 0)) for item in built))
         totals_cells[key_iso] = WeeklyGridCell(
             actual=actual_total if is_historical else None,
             forecast=forecast_qty, partial=(c_end > SNAPSHOT_DATE),
@@ -3604,7 +3079,7 @@ def _compute_weekly_grid(
 
     rows_payload: list[WeeklyGridRow] = []
     for key, sku_count, style_count, forecast, historical, festival_boosted in page:
-        week_qty = week_qty_by_key.get(key, {})
+        row_fc = fc_cells.get(key, {})
         day_actual = _aggregate_group_day_actual(groups.get(key, []), gross=True)
         # Launch date only means something for a single design (group_by=
         # "style") - a Sub Category row pools many designs, so it stays at
@@ -3625,19 +3100,15 @@ def _compute_weekly_grid(
         month_forecast: dict[str, int] = {}
         for c_start, c_end in chunks:
             is_historical = c_start <= today
-            forecast_total = 0.0
-            actual_total = 0
-            d = c_start
-            while d <= c_end:
-                d_iso = d.isoformat()
-                m_iso = (d - timedelta(days=d.weekday())).isoformat()
-                forecast_total += week_qty.get(m_iso, 0.0) / 7.0
-                if is_historical:
-                    actual_total += day_actual.get(d_iso, 0)
-                d += timedelta(days=1)
-            forecast_qty = round(forecast_total)
-            partial = c_end > SNAPSHOT_DATE
             key_iso = c_start.isoformat()
+            actual_total = 0
+            if is_historical:
+                d = c_start
+                while d <= c_end:
+                    actual_total += day_actual.get(d.isoformat(), 0)
+                    d += timedelta(days=1)
+            forecast_qty = int(round(row_fc.get(key_iso, 0)))
+            partial = c_end > SNAPSHOT_DATE
             cells[key_iso] = WeeklyGridCell(
                 actual=actual_total if is_historical else None,
                 forecast=forecast_qty, partial=partial,
@@ -3669,7 +3140,9 @@ def _compute_weekly_grid(
                 monthActualTotal=month_actual,
                 monthForecastTotal=month_forecast,
                 grandActualTotal=sum(p.actual for p in historical),
-                grandForecastTotal=sum(p.forecast for p in historical) + future_forecast_total,
+                # Sum of the row's own week cells (frozen where completed), so
+                # this grand total never drifts for weeks already finished.
+                grandForecastTotal=sum(month_forecast.values()),
                 futureForecastTotal=future_forecast_total,
                 availableQty=available,
                 suggestedProduction=max(0, future_forecast_total - available),
@@ -3701,5 +3174,38 @@ def _compute_weekly_grid(
 # raised a NameError at import (caught by rebuild()'s own try/except, so it
 # failed silently as "cache warm-up failed" rather than crashing startup, but
 # never actually warmed anything).
-rebuild()
-start_daily_refresh()
+#
+# With DEFER_INITIAL_LOAD=1 (set by main.py, 2026-10-01) the first load runs
+# in a background thread instead, started by start_background_load(), so the
+# web server can open its port immediately - Cloud Run fails a revision whose
+# container doesn't listen within its startup timeout, and the full BigQuery +
+# ERP load takes minutes. Scripts that import this module (backtest_sweep.py
+# etc.) still get the old synchronous load.
+DATA_READY = False
+
+
+def _initial_load() -> None:
+    global DATA_READY
+    try:
+        rebuild()
+    finally:
+        DATA_READY = True
+    start_daily_refresh()
+
+
+_INITIAL_LOAD_THREAD: threading.Thread | None = None
+
+
+def start_background_load() -> None:
+    """Run the first rebuild() + daily-refresh scheduling in a background
+    thread (idempotent). Requests are answered "still loading" until
+    DATA_READY - see main.py."""
+    global _INITIAL_LOAD_THREAD
+    if DATA_READY or (_INITIAL_LOAD_THREAD and _INITIAL_LOAD_THREAD.is_alive()):
+        return
+    _INITIAL_LOAD_THREAD = threading.Thread(target=_initial_load, daemon=True, name="initial-load")
+    _INITIAL_LOAD_THREAD.start()
+
+
+if os.getenv("DEFER_INITIAL_LOAD", "0") != "1":
+    _initial_load()

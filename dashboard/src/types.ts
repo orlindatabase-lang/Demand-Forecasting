@@ -142,12 +142,6 @@ export interface ChannelSourceWeeklySeries {
   source: string;  // "OMS" | "WEBSITE"
   totalQty: number; // summed across every week in the response's weekStarts
   cells: Record<string, number>; // weekStart (ISO) -> Gross qty, sparse (only weeks with any qty)
-  // weekStart (ISO) -> this channel's forecasted qty for that week. Not an
-  // independently-modeled number — a top-down split of the row's own
-  // already-computed forecast, allocated by this channel's historical share
-  // of the row's real actual sales (see api/data.py's
-  // _channel_source_forecast_by_chunk()).
-  forecastCells: Record<string, number>;
 }
 
 export interface ChannelSourceWeeklyResponse {

@@ -111,22 +111,22 @@ def _cap_non_festival_outliers(wk, id_col: str, week_col: str, target_col: str, 
     return wk
 
 
-_XGB_PARAMS = {
-    "objective": "reg:tweedie",
+_LGBM_PARAMS = {
+    "objective": "tweedie",
     "tweedie_variance_power": 1.3,
     "n_estimators": 3000,
     "learning_rate": 0.04,
     "max_depth": 8,
-    "min_child_weight": 15,
+    "num_leaves": 31,
+    "min_child_samples": 15,
     "subsample": 0.8,
+    "subsample_freq": 1,
     "colsample_bytree": 0.8,
     "reg_alpha": 0.1,
     "reg_lambda": 1.0,
-    "tree_method": "hist",
-    "enable_categorical": True,
     "n_jobs": -1,
     "random_state": 42,
-    "verbosity": 0,
+    "verbose": -1,
 }
 
 _VAL_FRAC = 0.15
@@ -136,18 +136,6 @@ _GRID_LEARNING_RATE = 0.04
 _GRID_EARLY_STOP = 50
 _CV_FOLDS = 3
 _RECENCY_HALFLIFE_WEEKS = 26
-_XGB_GRID = [
-    {"max_depth": 8, "min_child_weight": 30, "reg_alpha": 1.0, "reg_lambda": 5.0,
-     "subsample": 0.7, "colsample_bytree": 0.7, "colsample_bynode": 0.7, "tweedie_variance_power": 1.3},
-    {"max_depth": 3, "min_child_weight": 20, "reg_alpha": 1.0, "reg_lambda": 5.0,
-     "subsample": 0.7, "colsample_bytree": 0.7, "colsample_bynode": 0.7, "tweedie_variance_power": 1.3},
-    {"max_depth": 4, "min_child_weight": 30, "reg_alpha": 2.0, "reg_lambda": 8.0,
-     "subsample": 0.6, "colsample_bytree": 0.6, "colsample_bynode": 0.6, "tweedie_variance_power": 1.1},
-    {"max_depth": 5, "min_child_weight": 30, "reg_alpha": 2.0, "reg_lambda": 8.0,
-     "subsample": 0.6, "colsample_bytree": 0.6, "colsample_bynode": 0.6, "tweedie_variance_power": 1.5},
-    {"max_depth": 4, "min_child_weight": 15, "reg_alpha": 0.5, "reg_lambda": 3.0,
-     "subsample": 0.8, "colsample_bytree": 0.8, "colsample_bynode": 0.8, "tweedie_variance_power": 1.3},
-]
 _LGBM_GRID = [
     {"max_depth": 8, "num_leaves": 31, "min_child_samples": 30, "reg_alpha": 1.0, "reg_lambda": 5.0,
      "subsample": 0.7, "colsample_bytree": 0.7, "tweedie_variance_power": 1.3},
@@ -158,7 +146,7 @@ _LGBM_GRID = [
 ]
 
 _CACHE_DIR = Path(__file__).resolve().parent / ".cache"
-_CACHE_VERSION = "v48"
+_CACHE_VERSION = "v49"
 
 
 def _cache_file(snapshot: str) -> Path:
@@ -180,7 +168,7 @@ def save_cache(snapshot: str, forecasts: dict) -> None:
     _cache_file(snapshot).write_text(json.dumps(forecasts))
 
 
-_DESIGN_CACHE_VERSION = "d35"
+_DESIGN_CACHE_VERSION = "d36"
 
 
 def _design_cache_file(snapshot: str) -> Path:
@@ -202,60 +190,15 @@ def save_design_cache(snapshot: str, forecasts: dict) -> None:
     _design_cache_file(snapshot).write_text(json.dumps(forecasts))
 
 
-_CHANNEL_CACHE_VERSION = "c6"
-
-_OMS_MARKETPLACE_KEYWORDS = [
-    ("amazon", "Amazon"),
-    ("flipkart", "Flipkart"),
-    ("meesho", "Meesho"),
-    ("myntra", "Myntra"),
-    ("nykaa", "Nykaa"),
-    ("wishlink", "Amazon"),
-]
-
-
-def _marketplace_of(channel_name, source) -> str:
-    name = str(channel_name).strip().lower()
-    if str(source) == "WEBSITE":
-        if "mokosh" in name:
-            return "MOKOSH"
-        if "colorsofearth" in name:
-            return "Color's Of Earth"
-        return str(channel_name)
-    for keyword, label in _OMS_MARKETPLACE_KEYWORDS:
-        if keyword in name:
-            return label
-    return str(channel_name)
-
-
-def _channel_cache_file(snapshot: str) -> Path:
-    return _CACHE_DIR / f"lgbm_channel_forecasts_{_CHANNEL_CACHE_VERSION}_{snapshot}.json"
-
-
-def load_channel_cache(snapshot: str) -> dict | None:
-    path = _channel_cache_file(snapshot)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return None
-
-
-def save_channel_cache(snapshot: str, forecasts: dict) -> None:
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    _channel_cache_file(snapshot).write_text(json.dumps(forecasts))
-
-
 def latest_cached_file(kind: str, on_or_before: str) -> tuple[str, Path, bool] | None:
     """(snapshot ISO, path, is_current_version) of the newest saved forecast
-    for ``kind`` ("sku", "design" or "channel") with snapshot <=
+    for ``kind`` ("sku" or "design") with snapshot <=
     ``on_or_before``, across every cache version (the on-disk schema is the
     same) - the current version wins a same-date tie. None if nothing is
     saved. Lets data.py keep serving the last trained model while a new
     snapshot's (or a new version's) model trains, instead of dropping to
     naive."""
-    file_of = {"sku": _cache_file, "design": _design_cache_file, "channel": _channel_cache_file}[kind]
+    file_of = {"sku": _cache_file, "design": _design_cache_file}[kind]
     current = file_of("").name[: -len("_.json")]            # e.g. "lgbm_forecasts_v48"
     family = current.rstrip("0123456789")                    # e.g. "lgbm_forecasts_v"
     best: tuple[str, bool, int, Path] | None = None
@@ -333,7 +276,6 @@ def _rolling_folds(weeks_sorted, n_folds: int, val_frac: float, test_frac: float
 
 def _train_select_and_refit(panel, feature_cols, target_col, weeks_sorted, test_weeks, log_prefix=""):
     import numpy as np
-    import xgboost as xgb
     import lightgbm as lgb
 
     _t0 = time.time()
@@ -351,30 +293,10 @@ def _train_select_and_refit(panel, feature_cols, target_col, weeks_sorted, test_
 
     if not has_valid:
         print(f"[lgbm_forecast]{log_prefix} only {len(weeks_sorted)} distinct weeks — skipping "
-              f"grid search, using a single fixed-param XGBoost fit", file=sys.stderr)
-        final_xgb = xgb.XGBRegressor(**_XGB_PARAMS)
-        final_xgb.fit(panel[feature_cols], panel[target_col])
-        return (lambda X: final_xgb.predict(X)), final_xgb, None
-
-    def _cv_xgb(params):
-        wapes, iters = [], []
-        for f_train, f_valid in folds:
-            Xtr, ytr = _rows(f_train)
-            Xva, yva = _rows(f_valid)
-            if len(Xtr) == 0 or len(Xva) == 0:
-                continue
-            m = xgb.XGBRegressor(
-                objective="reg:tweedie", n_estimators=_GRID_N_ESTIMATORS,
-                learning_rate=_GRID_LEARNING_RATE, random_state=42, tree_method="hist",
-                enable_categorical=True, n_jobs=-1, verbosity=0,
-                early_stopping_rounds=_GRID_EARLY_STOP, eval_metric="mae", **params,
-            )
-            m.fit(Xtr, ytr, sample_weight=_recency_weights(panel.loc[panel["_week"].isin(f_train), "_week"]),
-                  eval_set=[(Xva, yva)], verbose=False)
-            wapes.append(_wape(yva, m.predict(Xva)))
-            iters.append(getattr(m, "best_iteration", None) or _GRID_N_ESTIMATORS)
-        return (float(np.mean(wapes)) if wapes else float("inf"),
-                int(np.median(iters)) if iters else _GRID_N_ESTIMATORS)
+              f"grid search, using a single fixed-param LightGBM fit", file=sys.stderr)
+        final_lgbm = lgb.LGBMRegressor(**_LGBM_PARAMS)
+        final_lgbm.fit(panel[feature_cols], panel[target_col])
+        return (lambda X: final_lgbm.predict(X)), final_lgbm
 
     def _cv_lgbm(params):
         wapes, iters = [], []
@@ -396,12 +318,6 @@ def _train_select_and_refit(panel, feature_cols, target_col, weeks_sorted, test_
         return (float(np.mean(wapes)) if wapes else float("inf"),
                 int(np.median(iters)) if iters else _GRID_N_ESTIMATORS)
 
-    xgb_search = []
-    for p in _XGB_GRID:
-        wape, it = _cv_xgb(p)
-        xgb_search.append({"params": p, "cv_wape": wape, "cv_iter": it})
-    best_xgb_cfg = min(xgb_search, key=lambda r: r["cv_wape"])
-
     lgbm_search = []
     for p in _LGBM_GRID:
         wape, it = _cv_lgbm(p)
@@ -409,17 +325,10 @@ def _train_select_and_refit(panel, feature_cols, target_col, weeks_sorted, test_
     best_lgbm_cfg = min(lgbm_search, key=lambda r: r["cv_wape"])
 
     print(f"[lgbm_forecast]{log_prefix} CV grid search done in {time.time() - _t0:.0f}s over "
-          f"{len(folds)} fold(s) | best_xgb={best_xgb_cfg['params']} (cv_wape={best_xgb_cfg['cv_wape']:.2f}) "
-          f"| best_lgbm={best_lgbm_cfg['params']} (cv_wape={best_lgbm_cfg['cv_wape']:.2f})", file=sys.stderr)
+          f"{len(folds)} fold(s) | best_lgbm={best_lgbm_cfg['params']} "
+          f"(cv_wape={best_lgbm_cfg['cv_wape']:.2f})", file=sys.stderr)
 
     sw_train = _recency_weights(panel.loc[X_train.index, "_week"])
-    m_xgb = xgb.XGBRegressor(
-        objective="reg:tweedie", n_estimators=_GRID_N_ESTIMATORS,
-        learning_rate=_GRID_LEARNING_RATE, random_state=42, tree_method="hist",
-        enable_categorical=True, n_jobs=-1, verbosity=0,
-        early_stopping_rounds=_GRID_EARLY_STOP, eval_metric="mae", **best_xgb_cfg["params"],
-    )
-    m_xgb.fit(X_train, y_train, sample_weight=sw_train, eval_set=[(X_valid, y_valid)], verbose=False)
     m_lgbm = lgb.LGBMRegressor(
         objective="tweedie", n_estimators=_GRID_N_ESTIMATORS,
         learning_rate=_GRID_LEARNING_RATE, subsample_freq=1,
@@ -428,41 +337,23 @@ def _train_select_and_refit(panel, feature_cols, target_col, weeks_sorted, test_
     m_lgbm.fit(X_train, y_train, sample_weight=sw_train, eval_set=[(X_valid, y_valid)], eval_metric="mae",
                callbacks=[lgb.early_stopping(_GRID_EARLY_STOP, verbose=False)])
 
-    valid_wape_xgb = _wape(y_valid, m_xgb.predict(X_valid))
-    valid_wape_lgbm = _wape(y_valid, m_lgbm.predict(X_valid))
-    inv_x, inv_l = 1.0 / max(valid_wape_xgb, 1e-6), 1.0 / max(valid_wape_lgbm, 1e-6)
-    w_xgb = inv_x / (inv_x + inv_l)
-
-    def _blend(xp, lp):
-        return w_xgb * xp + (1 - w_xgb) * lp
-
-    candidates = {
-        "xgboost": {"valid": m_xgb.predict(X_valid), "test": m_xgb.predict(X_test) if has_test else np.array([])},
-        "lightgbm": {"valid": m_lgbm.predict(X_valid), "test": m_lgbm.predict(X_test) if has_test else np.array([])},
-    }
-    candidates["blend"] = {s: _blend(candidates["xgboost"][s], candidates["lightgbm"][s]) for s in ("valid", "test")}
-    comparison = sorted((
-        {"candidate": name, "valid_wape": _wape(y_valid, p["valid"]),
-         "test_wape": _wape(y_test, p["test"]) if has_test else float("nan")}
-        for name, p in candidates.items()
-    ), key=lambda r: r["valid_wape"])
-    best_name = comparison[0]["candidate"]
-    print(f"[lgbm_forecast]{log_prefix} comparison={comparison} | selected='{best_name}' "
-          f"| blend_weight_xgb={w_xgb:.2f}", file=sys.stderr)
+    pred_valid = m_lgbm.predict(X_valid)
+    pred_test = m_lgbm.predict(X_test) if has_test else np.array([])
+    print(f"[lgbm_forecast]{log_prefix} lightgbm valid_wape={_wape(y_valid, pred_valid):.2f} "
+          f"test_wape={(_wape(y_test, pred_test) if has_test else float('nan')):.2f}", file=sys.stderr)
 
     try:
         from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
-        _bp = candidates[best_name]
         _diag = {
             split: {"r2": round(float(r2_score(y_true, pred)), 3),
                     "mae": round(float(mean_absolute_error(y_true, pred)), 3),
                     "rmse": round(float(np.sqrt(mean_squared_error(y_true, pred))), 3)}
             for split, y_true, pred, ok in (
-                ("valid", y_valid, _bp["valid"], has_valid),
-                ("test", y_test, _bp["test"], has_test),
+                ("valid", y_valid, pred_valid, has_valid),
+                ("test", y_test, pred_test, has_test),
             ) if ok
         }
-        print(f"[lgbm_forecast]{log_prefix} diagnostics ({best_name}): {_diag}", file=sys.stderr)
+        print(f"[lgbm_forecast]{log_prefix} diagnostics (lightgbm): {_diag}", file=sys.stderr)
     except Exception as exc:
         print(f"[lgbm_forecast]{log_prefix} diagnostics logging failed: {exc!r}", file=sys.stderr)
 
@@ -473,38 +364,20 @@ def _train_select_and_refit(panel, feature_cols, target_col, weeks_sorted, test_
             return _GRID_N_ESTIMATORS
         return max(1, min(_GRID_N_ESTIMATORS, int(cv_iter * (full_rows / train_rows))))
 
-    sw_full = _recency_weights(panel["_week"])
-    final_xgb = final_lgbm = None
-    if best_name in ("xgboost", "blend"):
-        final_xgb = xgb.XGBRegressor(
-            objective="reg:tweedie", n_estimators=_scaled_iters(best_xgb_cfg["cv_iter"]),
-            learning_rate=_GRID_LEARNING_RATE, random_state=42, tree_method="hist",
-            enable_categorical=True, n_jobs=-1, verbosity=0, **best_xgb_cfg["params"],
-        )
-        final_xgb.fit(panel[feature_cols], panel[target_col], sample_weight=sw_full)
-    if best_name in ("lightgbm", "blend"):
-        final_lgbm = lgb.LGBMRegressor(
-            objective="tweedie", n_estimators=_scaled_iters(best_lgbm_cfg["cv_iter"]),
-            learning_rate=_GRID_LEARNING_RATE, subsample_freq=1,
-            random_state=42, verbose=-1, n_jobs=-1, **best_lgbm_cfg["params"],
-        )
-        final_lgbm.fit(panel[feature_cols], panel[target_col], sample_weight=sw_full)
-
-    def _predict(X):
-        if best_name == "xgboost":
-            return final_xgb.predict(X)
-        if best_name == "lightgbm":
-            return final_lgbm.predict(X)
-        return _blend(final_xgb.predict(X), final_lgbm.predict(X))
+    final_lgbm = lgb.LGBMRegressor(
+        objective="tweedie", n_estimators=_scaled_iters(best_lgbm_cfg["cv_iter"]),
+        learning_rate=_GRID_LEARNING_RATE, subsample_freq=1,
+        random_state=42, verbose=-1, n_jobs=-1, **best_lgbm_cfg["params"],
+    )
+    final_lgbm.fit(panel[feature_cols], panel[target_col], sample_weight=_recency_weights(panel["_week"]))
 
     print(f"[lgbm_forecast]{log_prefix} training total {time.time() - _t0:.0f}s", file=sys.stderr)
-    return _predict, final_xgb, final_lgbm
+    return final_lgbm.predict, final_lgbm
 
 
 def compute(df_full) -> dict:
     import numpy as np
     import pandas as pd
-    import xgboost as xgb
     import lightgbm as lgb
 
     id_col = COL_SKU
@@ -719,12 +592,11 @@ def compute(df_full) -> dict:
     weeks_sorted = np.sort(panel["_week"].unique())
     valid_end = max(1, int(len(weeks_sorted) * (1 - _TEST_FRAC)))
     test_weeks = weeks_sorted[valid_end:]
-    _predict, final_xgb, final_lgbm = _train_select_and_refit(
+    _predict, final_lgbm = _train_select_and_refit(
         panel, feature_cols, TARGET, weeks_sorted, test_weeks,
     )
-    if final_xgb is not None:
-        _imp = pd.Series(final_xgb.feature_importances_, index=feature_cols).sort_values(ascending=False)
-        print(f"[lgbm_forecast] top-10 features (xgboost): {_imp.head(10).round(3).to_dict()}", file=sys.stderr)
+    _imp = pd.Series(final_lgbm.feature_importances_, index=feature_cols).sort_values(ascending=False)
+    print(f"[lgbm_forecast] top-10 features (lightgbm): {_imp.head(10).round(3).to_dict()}", file=sys.stderr)
 
     ids = np.sort(panel[id_col].unique())
     W = max(_WEEK_LAGS)
@@ -899,7 +771,6 @@ def compute(df_full) -> dict:
 def compute_design(df_full) -> dict:
     import numpy as np
     import pandas as pd
-    import xgboost as xgb
     import lightgbm as lgb
 
     id_col = COL_DESIGN
@@ -1056,7 +927,7 @@ def compute_design(df_full) -> dict:
     weeks_sorted = np.sort(panel["_week"].unique())
     valid_end = max(1, int(len(weeks_sorted) * (1 - _TEST_FRAC)))
     test_weeks = weeks_sorted[valid_end:]
-    _predict, final_xgb, final_lgbm = _train_select_and_refit(
+    _predict, final_lgbm = _train_select_and_refit(
         panel, feature_cols, TARGET, weeks_sorted, test_weeks, log_prefix="[design]",
     )
 
@@ -1237,302 +1108,3 @@ def compute_design(df_full) -> dict:
 
     print(f"[lgbm_forecast][design] forecast built for {len(out)} designs", file=sys.stderr)
     return {s: {"weekly": v} for s, v in out.items()}
-
-
-_MIN_CHANNEL_ACTIVE_WEEKS = 8
-
-
-def compute_channel(df_full) -> dict:
-    import numpy as np
-    import pandas as pd
-    import xgboost as xgb
-    import lightgbm as lgb
-
-    clean = df_full.dropna(subset=[COL_DESIGN]).copy()
-    clean[COL_DESIGN] = clean[COL_DESIGN].astype(str).str.strip().str.upper()
-    clean[COL_ORDER_DATE] = pd.to_datetime(clean[COL_ORDER_DATE], errors="coerce")
-    clean = clean.dropna(subset=[COL_ORDER_DATE])
-    clean = clean[clean[COL_ORDER_DATE] <= pd.Timestamp.today().normalize()]
-    clean = clean.drop_duplicates()
-    for c in _ATTR_COLS:
-        if c in clean.columns:
-            clean[c] = clean[c].astype(str).str.strip().str.upper()
-    if "source" not in clean.columns:
-        clean["source"] = "OMS"
-    clean["source"] = clean["source"].fillna("OMS").replace("", "OMS")
-    clean["marketplace"] = [
-        _marketplace_of(ch, src) for ch, src in zip(clean["channel_name"], clean["source"])
-    ]
-    clean["_channel_key"] = clean[COL_DESIGN] + "||" + clean["marketplace"]
-    id_col = "_channel_key"
-
-    status_norm = clean[COL_STATUS].astype(str).str.strip().str.lower().str.replace(r"\s+", " ", regex=True)
-    qty = pd.to_numeric(clean[COL_QTY], errors="coerce").fillna(0)
-    clean[TARGET] = np.where(status_norm.isin(_GROSS_SALE_NORM), qty, 0.0).astype("float64")
-    clean["promo_discount"] = pd.to_numeric(clean.get("promo_discount"), errors="coerce").fillna(0.0) \
-        if "promo_discount" in clean.columns else 0.0
-
-    _od = clean[COL_ORDER_DATE]
-    clean["_week"] = _od - pd.to_timedelta(_od.dt.weekday, unit="D")
-    wk = (
-        clean.groupby([id_col, "_week"], as_index=False)
-        .agg(**{TARGET: (TARGET, "sum"), "promo_discount": ("promo_discount", "sum")})
-    )
-    if wk.empty:
-        return {}
-    _true_last_date = clean[COL_ORDER_DATE].max()
-    if pd.notna(_true_last_date):
-        _maturity_cutoff = _true_last_date - pd.Timedelta(days=MATURATION_DAYS)
-        wk = wk[wk["_week"] + pd.Timedelta(days=6) <= _maturity_cutoff]
-        if wk.empty:
-            return {}
-
-    active_weeks_count = wk.loc[wk[TARGET] > 0].groupby(id_col)["_week"].nunique()
-    eligible_ids = set(active_weeks_count[active_weeks_count >= _MIN_CHANNEL_ACTIVE_WEEKS].index)
-    if not eligible_ids:
-        print("[lgbm_forecast][channel] no (design, marketplace) pair has enough active weeks yet", file=sys.stderr)
-        return {}
-    wk = wk[wk[id_col].isin(eligible_ids)]
-
-    _cap_all_weeks = pd.date_range(wk["_week"].min(), wk["_week"].max(), freq="W-MON")
-    _cap_train_end = max(1, int(len(_cap_all_weeks) * (1 - _VAL_FRAC - _TEST_FRAC)))
-    _cap_fit_cutoff = _cap_all_weeks[_cap_train_end - 1]
-    wk = _cap_non_festival_outliers(wk, id_col, "_week", TARGET, fit_cutoff=_cap_fit_cutoff)
-
-    def _mode(s):
-        m = s.dropna()
-        return m.mode().iloc[0] if not m.mode().empty else "UNKNOWN"
-
-    static_cols = [id_col, COL_DESIGN, "marketplace"] + [c for c in _ATTR_COLS if c in clean.columns]
-    agg = {**{c: _mode for c in _ATTR_COLS if c in clean.columns}, COL_DESIGN: "first", "marketplace": "first"}
-    static = clean.loc[clean[id_col].notna(), static_cols].groupby(id_col).agg(agg).reset_index()
-    for c in _ATTR_COLS:
-        if c not in static.columns:
-            static[c] = "UNKNOWN"
-        static[c] = static[c].fillna("UNKNOWN")
-    _attach_master_attrs(static, COL_DESIGN)
-    _attach_current_tier(static, COL_DESIGN)
-
-    first_week = wk.groupby(id_col)["_week"].min()
-    launch_map = _fetch_launch_dates()
-    static["_launch"] = static[COL_DESIGN].map(launch_map)
-    static["_first_week"] = static[id_col].map(first_week)
-    # to_datetime: an empty launch_map (ERP master unavailable) leaves an
-    # object column under pandas 3, which breaks the .dt arithmetic below.
-    static["_launch"] = pd.to_datetime(static["_launch"].fillna(static["_first_week"]))
-
-    _lwo = wk[[id_col, "_week", TARGET]].merge(static[[id_col, "_launch"]], on=id_col, how="left")
-    _lwo = _lwo.dropna(subset=["_launch"])
-    _lwo["_dal"] = (_lwo["_week"] - _lwo["_launch"]).dt.days
-    _lwo = _lwo[(_lwo["_dal"] >= 0) & (_lwo["_dal"] < _LAUNCH_WINDOW_DAYS)]
-    _launch_units = _lwo.groupby(id_col)[TARGET].sum()
-    _launch_days = _lwo.groupby(id_col)["_week"].count() * 7
-    static["launch_drr"] = static[id_col].map(_launch_units / _launch_days.clip(lower=1)).fillna(0.0).astype("float64")
-
-    gmax = wk["_week"].max()
-    starts = wk.groupby(id_col)["_week"].min().reset_index(name="_start")
-    starts["_w"] = starts["_start"].apply(lambda s: pd.date_range(s, gmax, freq="W-MON"))
-    grid = starts.explode("_w")[[id_col, "_w"]].rename(columns={"_w": "_week"})
-    panel = grid.merge(wk, on=[id_col, "_week"], how="left").sort_values([id_col, "_week"])
-    panel[TARGET] = panel[TARGET].fillna(0.0)
-    panel["promo_discount"] = panel["promo_discount"].fillna(0.0)
-    panel = panel[panel["_week"].notna()].reset_index(drop=True)
-
-    g = panel.groupby(id_col)[TARGET]
-    for L in _WEEK_LAGS:
-        panel[f"lag_{L}"] = g.shift(L)
-    sh = panel.groupby(id_col)[TARGET].shift(1)
-    gg = sh.groupby(panel[id_col])
-    for w in _WEEK_ROLL:
-        panel[f"rolling_mean_{w}"] = gg.rolling(w, min_periods=1).mean().reset_index(level=0, drop=True)
-    for w in _WEEK_STD:
-        panel[f"rolling_std_{w}"] = gg.rolling(w, min_periods=2).std().reset_index(level=0, drop=True)
-    panel["rolling_max_4"] = gg.rolling(4, min_periods=1).max().reset_index(level=0, drop=True)
-    panel["rolling_min_4"] = gg.rolling(4, min_periods=1).min().reset_index(level=0, drop=True)
-    panel["sales_diff_1"] = panel["lag_1"] - panel["lag_2"]
-    panel["sales_growth_pct"] = np.where(
-        panel["lag_2"].fillna(0) == 0, 0.0,
-        (panel["lag_1"] - panel["lag_2"]) / panel["lag_2"])
-    panel["rolling_mean_ratio"] = np.where(
-        panel["rolling_mean_4"].fillna(0) == 0, 0.0,
-        panel["lag_1"] / panel["rolling_mean_4"])
-    panel["trend_vs_avg"] = panel["lag_1"] - panel["rolling_mean_4"]
-    panel["coefficient_variation"] = np.where(
-        panel["rolling_mean_4"].fillna(0) == 0, 0.0,
-        panel["rolling_std_4"] / panel["rolling_mean_4"])
-    panel["avg_weekly_sales"] = g.transform(lambda s: s.shift(1).expanding().mean())
-    _is_zero = (panel[TARGET] == 0).astype("float64")
-    panel["zero_sales_ratio"] = (
-        _is_zero.groupby(panel[id_col]).transform(lambda s: s.shift(1).expanding().mean())
-    )
-    panel["promotion_flag"] = (panel["promo_discount"] < 0).astype("int8")
-
-    panel["weekofyear"] = panel["_week"].dt.isocalendar().week.fillna(0).astype("int16")
-    panel["month"] = panel["_week"].dt.month.astype("int16")
-    panel["quarter"] = panel["_week"].dt.quarter.astype("int16")
-    panel["year"] = panel["_week"].dt.year.astype("int32")
-    panel["day_of_year"] = panel["_week"].dt.dayofyear.astype("int16")
-    panel["is_month_start"] = panel["_week"].dt.is_month_start.astype("int8")
-    panel["is_month_end"] = panel["_week"].dt.is_month_end.astype("int8")
-    panel["is_quarter_start"] = panel["_week"].dt.is_quarter_start.astype("int8")
-    panel["is_quarter_end"] = panel["_week"].dt.is_quarter_end.astype("int8")
-
-    if _USE_FESTIVAL_FEATURES:
-        import festival
-        uniq_weeks = panel["_week"].dropna().unique()
-        wk_sig = {w: festival.week_signal(pd.Timestamp(w).date()) for w in uniq_weeks}
-        panel["festival_mult"] = panel["_week"].map(lambda w: wk_sig[w][0]).astype("float64")
-        panel["festival_event"] = panel["_week"].map(lambda w: wk_sig[w][1] or "None")
-        panel["days_to_festival_peak"] = panel["_week"].map(lambda w: wk_sig[w][2]).astype("int32")
-        panel["is_festival"] = (panel["festival_mult"] > 1.0).astype("int8")
-
-    panel = panel.merge(static, on=id_col, how="left")
-    age = (panel["_week"] - panel["_launch"]).dt.days.astype("float64")
-    panel["product_age_weeks"] = (age.clip(lower=0) / 7).fillna(-1).astype("int32")
-    panel["launch_drr"] = np.where(age >= _LAUNCH_WINDOW_DAYS, panel["launch_drr"], 0.0)
-    panel = panel.drop(columns=["_launch", "_first_week"])
-    panel[_TIER_FEATURE] = _point_in_time_tier(panel, COL_DESIGN)
-
-    if _USE_FESTIVAL_FEATURES:
-        _cat_for_x = panel["category_name"].astype(str) if "category_name" in panel.columns else "UNKNOWN"
-        panel["category_festival"] = _cat_for_x + "_" + panel["festival_event"].astype(str)
-
-    lag_cols = [f"lag_{L}" for L in _WEEK_LAGS]
-    roll_cols = [f"rolling_mean_{w}" for w in _WEEK_ROLL] + [f"rolling_std_{w}" for w in _WEEK_STD] \
-        + ["rolling_max_4", "rolling_min_4"]
-    trend_cols = ["sales_diff_1", "sales_growth_pct", "rolling_mean_ratio", "trend_vs_avg",
-                  "coefficient_variation", "avg_weekly_sales", "zero_sales_ratio"]
-    calendar_cols = ["year", "month", "quarter", "weekofyear", "day_of_year",
-                     "is_month_start", "is_month_end", "is_quarter_start", "is_quarter_end"]
-    prod_cat = [c for c in _ATTR_COLS if c in panel.columns] \
-        + [c for c in _MASTER_ATTR_COLS if c in panel.columns] + [_TIER_FEATURE]
-    festival_cols = ["festival_mult", "is_festival", "festival_event", "days_to_festival_peak",
-                      "category_festival"] if _USE_FESTIVAL_FEATURES else []
-    feature_cols = (lag_cols + roll_cols + trend_cols + calendar_cols
-                    + prod_cat + ["marketplace", "product_age_weeks", "launch_drr",
-                                  "promo_discount", "promotion_flag"]
-                    + festival_cols)
-    cat_cols = prod_cat + ["marketplace"] + \
-        (["festival_event", "category_festival"] if _USE_FESTIVAL_FEATURES else [])
-    for c in cat_cols:
-        panel[c] = panel[c].astype("category")
-    cat_dtypes = {c: panel[c].dtype for c in cat_cols}
-
-    weeks_sorted = np.sort(panel["_week"].unique())
-    valid_end = max(1, int(len(weeks_sorted) * (1 - _TEST_FRAC)))
-    test_weeks = weeks_sorted[valid_end:]
-    _predict, final_xgb, final_lgbm = _train_select_and_refit(
-        panel, feature_cols, TARGET, weeks_sorted, test_weeks, log_prefix="[channel]",
-    )
-
-    ids = np.sort(panel[id_col].unique())
-    W = max(_WEEK_LAGS)
-    last_week = panel["_week"].max()
-    weeks_idx = pd.date_range(last_week - pd.Timedelta(weeks=W - 1), last_week, freq="W-MON")
-    H = (panel[panel["_week"] >= weeks_idx[0]]
-         .pivot_table(index=id_col, columns="_week", values=TARGET, aggfunc="sum")
-         .reindex(index=ids, columns=weeks_idx).to_numpy(dtype="float64"))
-    stat = static.set_index(id_col).reindex(ids)
-    n = len(ids)
-    out: dict[str, list[float]] = {str(s): [] for s in ids}
-
-    _hist_by_id = panel.groupby(id_col)[TARGET]
-    run_sum = _hist_by_id.sum().reindex(ids).fillna(0.0).to_numpy(dtype="float64")
-    run_count = _hist_by_id.count().reindex(ids).fillna(0).to_numpy(dtype="float64")
-    run_zeros = (
-        (panel[TARGET] == 0).groupby(panel[id_col]).sum()
-        .reindex(ids).fillna(0.0).to_numpy(dtype="float64")
-    )
-
-    for step in range(1, HORIZON_WEEKS + 1):
-        wkdate = last_week + pd.Timedelta(weeks=step)
-        data: dict = {}
-        for L in _WEEK_LAGS:
-            data[f"lag_{L}"] = H[:, -L]
-        for w in _WEEK_ROLL:
-            sl = H[:, -w:]
-            cnt = np.sum(~np.isnan(sl), axis=1)
-            with np.errstate(invalid="ignore"):
-                data[f"rolling_mean_{w}"] = np.nansum(sl, axis=1) / np.where(cnt > 0, cnt, np.nan)
-        for w in _WEEK_STD:
-            slw = H[:, -w:]
-            cntw = np.sum(~np.isnan(slw), axis=1)
-            mw = np.where(cntw > 0, np.nansum(slw, axis=1) / np.where(cntw > 0, cntw, np.nan), np.nan)
-            with np.errstate(invalid="ignore"):
-                data[f"rolling_std_{w}"] = np.sqrt(np.nansum((slw - mw[:, None]) ** 2, axis=1)
-                                                    / np.where(cntw >= 2, cntw - 1, np.nan))
-        sl4 = H[:, -4:]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            data["rolling_max_4"] = np.nanmax(sl4, axis=1)
-            data["rolling_min_4"] = np.nanmin(sl4, axis=1)
-        data["sales_diff_1"] = data["lag_1"] - data["lag_2"]
-        with np.errstate(invalid="ignore", divide="ignore"):
-            data["sales_growth_pct"] = np.where(
-                np.nan_to_num(data["lag_2"]) == 0, 0.0,
-                (data["lag_1"] - data["lag_2"]) / data["lag_2"])
-            data["rolling_mean_ratio"] = np.where(
-                np.nan_to_num(data["rolling_mean_4"]) == 0, 0.0,
-                data["lag_1"] / data["rolling_mean_4"])
-            data["coefficient_variation"] = np.where(
-                np.nan_to_num(data["rolling_mean_4"]) == 0, 0.0,
-                data["rolling_std_4"] / data["rolling_mean_4"])
-        data["trend_vs_avg"] = data["lag_1"] - data["rolling_mean_4"]
-        with np.errstate(invalid="ignore", divide="ignore"):
-            data["avg_weekly_sales"] = np.where(run_count > 0, run_sum / run_count, 0.0)
-            data["zero_sales_ratio"] = np.where(run_count > 0, run_zeros / run_count, 0.0)
-        data["year"] = np.full(n, wkdate.year, dtype="int32")
-        data["month"] = np.full(n, wkdate.month, dtype="int16")
-        data["quarter"] = np.full(n, wkdate.quarter, dtype="int16")
-        data["weekofyear"] = np.full(n, int(wkdate.isocalendar()[1]), dtype="int16")
-        data["day_of_year"] = np.full(n, wkdate.dayofyear, dtype="int16")
-        data["is_month_start"] = np.full(n, int(wkdate.is_month_start), dtype="int8")
-        data["is_month_end"] = np.full(n, int(wkdate.is_month_end), dtype="int8")
-        data["is_quarter_start"] = np.full(n, int(wkdate.is_quarter_start), dtype="int8")
-        data["is_quarter_end"] = np.full(n, int(wkdate.is_quarter_end), dtype="int8")
-        data["promo_discount"] = np.zeros(n, dtype="float64")
-        data["promotion_flag"] = np.zeros(n, dtype="int8")
-        if _USE_FESTIVAL_FEATURES:
-            fmult, fevent, fdays = festival.week_signal(wkdate.date())
-            data["festival_mult"] = np.full(n, fmult, dtype="float64")
-            data["festival_event"] = np.full(n, fevent or "None", dtype=object)
-            data["days_to_festival_peak"] = np.full(n, fdays, dtype="int32")
-            data["is_festival"] = np.full(n, 1 if fmult > 1.0 else 0, dtype="int8")
-        for c in prod_cat:
-            if c in stat.columns:
-                data[c] = stat[c].to_numpy()
-        data["marketplace"] = stat["marketplace"].to_numpy()
-        if _USE_FESTIVAL_FEATURES:
-            _fevent_suffix = f"_{fevent or 'None'}"
-            _cat_for_x_step = data["category_name"] if "category_name" in data else np.full(n, "UNKNOWN")
-            data["category_festival"] = np.array([f"{c}{_fevent_suffix}" for c in _cat_for_x_step], dtype=object)
-        age = (wkdate - stat["_launch"]).dt.days.astype("float64")
-        data["product_age_weeks"] = (age.clip(lower=0) / 7).fillna(-1).astype("int32").to_numpy()
-        data["launch_drr"] = stat["launch_drr"].to_numpy()
-        X = pd.DataFrame(data)
-        for c, dt in cat_dtypes.items():
-            if c in X.columns:
-                X[c] = X[c].astype(dt)
-        preds = np.clip(_predict(X[feature_cols]), 0, None)
-        H = np.concatenate([H[:, 1:], preds[:, None]], axis=1)
-        run_sum = run_sum + preds
-        run_count = run_count + 1
-        run_zeros = run_zeros + (preds == 0).astype("float64")
-        for i, s in enumerate(ids):
-            out[str(s)].append(round(float(preds[i]), 3))
-
-    print(f"[lgbm_forecast][channel] forecast built for {len(out)} (design, marketplace) pairs", file=sys.stderr)
-
-    fitted_vals = np.clip(_predict(panel[feature_cols]), 0, None)
-    fitted_by_id: dict[str, dict[str, float]] = {}
-    for key, week_iso, val in zip(panel[id_col], panel["_week"].dt.strftime("%Y-%m-%d"), fitted_vals):
-        fitted_by_id.setdefault(str(key), {})[week_iso] = round(float(val), 3)
-
-    nested: dict[str, dict[str, dict]] = {}
-    for key, weekly in out.items():
-        design_no, marketplace = key.split("||", 1)
-        nested.setdefault(design_no, {})[marketplace] = {
-            "weekly": weekly,
-            "fitted": fitted_by_id.get(key, {}),
-        }
-    return nested

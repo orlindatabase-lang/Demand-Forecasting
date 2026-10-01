@@ -11,9 +11,9 @@ google-cloud-bigquery-storage>=2.0   # faster bulk download of the sales table
 db-dtypes>=1.0
 requests>=2.31
 # Weekly demand forecasting (api/lgbm_forecast.py): rolling-origin CV
-# grid-search over both XGBoost and LightGBM (Tweedie objective), picks the
-# winner (or an inverse-WAPE-weighted blend) by average validation WAPE.
-# xgboost is also used by production-delay prediction (api/delay_predict_*.py).
+# grid-search over LightGBM configs (Tweedie objective), best by average
+# validation WAPE. xgboost is used only by production-delay prediction
+# (api/delay_predict_*.py).
 xgboost>=2.0
 lightgbm>=4.0
 scikit-learn>=1.3

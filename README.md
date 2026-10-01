@@ -46,7 +46,8 @@ The system predicts **weekly gross demand** for every product for the next
 **13 weeks**. It then turns that prediction into **how many units to produce**, given
 the finished-goods stock and work-in-progress (WIP) that already exist.
 
-Forecasts are made at three levels and then reconciled so they agree with each other:
+Forecasts are made at two levels, SKU and Style. Sub Category figures are the sum of
+their Styles:
 
 ```mermaid
 flowchart TD
@@ -55,24 +56,23 @@ flowchart TD
     ST1 --> SKU1["SKU<br/>417-03-S"]
     ST1 --> SKU2["SKU<br/>417-03-M"]
     ST1 --> SKU3["SKU<br/>417-03-XL"]
-    ST1 --> CH1["Style × Amazon"]
-    ST1 --> CH2["Style × Flipkart"]
-    ST1 --> CH3["Style × Myntra / Meesho / ..."]
 
     classDef lvl1 fill:#e8eaf6,stroke:#312c5c;
     classDef lvl2 fill:#fff3e0,stroke:#e65100;
     classDef lvl3 fill:#e8f5e9,stroke:#1b5e20;
     class SC lvl1;
     class ST1,ST2 lvl2;
-    class SKU1,SKU2,SKU3,CH1,CH2,CH3 lvl3;
+    class SKU1,SKU2,SKU3 lvl3;
 ```
 
 | Level | Unit | Why it is needed |
 |---|---|---|
 | **SKU** | design + size | Size-level stock and production decisions |
 | **Style** | design number (`DESIGN_NO`) | More stable totals for planning at the style level |
-| **Style × Marketplace** | design + sales channel | How demand splits across Amazon, Flipkart, Myntra, Meesho, Nykaa and the brand websites |
 | **Sub Category** | sum of its Styles | Category-level view in the report |
+
+Sales channels (Amazon, Flipkart, Myntra, Meesho, Nykaa and the brand websites) are
+shown as **actual sales only**. There is no per-channel forecast.
 
 ---
 
@@ -85,7 +85,7 @@ flowchart TD
 | Catalog metadata | Google Cloud SQL, PostgreSQL (catalog tiers, style images) |
 | Backend | Python 3.13, FastAPI, Uvicorn, Pydantic |
 | Data processing | pandas, NumPy |
-| Machine learning | XGBoost, LightGBM, scikit-learn (metrics) |
+| Machine learning | LightGBM, scikit-learn (metrics) |
 | Persistence | JSON forecast snapshots and a SQLite weekly log in `api/.cache/` |
 | Frontend | React 19, TypeScript, Vite, Material UI, TanStack Query / Table / Virtual |
 | Deployment | Docker, Google Cloud Run (API and dashboard), nginx (serves the dashboard's static files) |
@@ -128,7 +128,7 @@ flowchart LR
 
     subgraph STORE["Local persistence (api/.cache)"]
         direction TB
-        JS[("Forecast snapshots<br/>SKU / Design / Channel JSON")]
+        JS[("Forecast snapshots<br/>SKU / Design JSON")]
         SQ[("weekly_production_log<br/>SQLite")]
         SC[("Similarity graph cache")]
     end
@@ -229,9 +229,9 @@ flowchart TD
         B2["Stage 5<br/>Similar designs<br/>IDF-Jaccard kNN"]
     end
 
-    subgraph S3["FORECASTING ENGINE ×3<br/>SKU · Design · Channel"]
+    subgraph S3["FORECASTING ENGINE ×2<br/>SKU · Design"]
         C1["Stage 6<br/>Feature engineering"]
-        C2["Stage 7<br/>CV + grid search<br/>XGBoost / LightGBM / blend"]
+        C2["Stage 7<br/>CV + grid search<br/>LightGBM"]
         C3["Stage 8<br/>Recursive 13-week forecast"]
         C4["Stage 9<br/>Cold-start blending"]
     end
@@ -481,7 +481,6 @@ flowchart TD
     I -- otherwise --> K["Ignored"]
     J --> L1["Borrow LEVEL<br/>→ feature similar_design_level"]
     J --> L2["Borrow CURVE by weeks since launch<br/>→ cold-start blending"]
-    J --> L3["Borrow CHANNEL MIX<br/>→ channel split for thin-history styles"]
 ```
 
 **Idea.** A design's bill of materials (fabric, embroidery, lace, trims) works as a
@@ -552,9 +551,8 @@ uses no future data. One-off spikes are dampened while real festival spikes are 
 **Module:** `api/lgbm_forecast.py`.
 
 **Technique:** gradient-boosted decision trees with a **Tweedie** loss, tuned with
-**rolling-origin time-series cross-validation**. Two algorithm families compete,
-**XGBoost** and **LightGBM**, together with an **inverse-error-weighted ensemble** of
-both.
+**rolling-origin time-series cross-validation**. The algorithm is **LightGBM**; a grid
+search picks its hyperparameters.
 
 **Why Tweedie.** Weekly apparel demand has many zero weeks and occasional large ones. A
 Tweedie distribution models this mix of "no sale" and a positive amount directly, and
@@ -587,21 +585,11 @@ flowchart TD
     A["Feature matrix + target"] --> B["Hold out last 15% of weeks as TEST"]
     B --> C["3 rolling-origin folds<br/>train = all earlier weeks,<br/>validate = next 15% span"]
     C --> D["Recency weights<br/>w = 0.5^(age in weeks / 26)"]
-    D --> E1["For each XGBoost config in the grid:<br/>train each fold with early stopping,<br/>record mean WAPE"]
-    D --> E2["For each LightGBM config in the grid:<br/>train each fold with early stopping,<br/>record mean WAPE"]
-    E1 --> F1["Best XGBoost config"]
-    E2 --> F2["Best LightGBM config"]
-    F1 --> G["Fit both on the last fold"]
-    F2 --> G
-    G --> H["Ensemble weight<br/>w_x = (1/WAPE_x) / (1/WAPE_x + 1/WAPE_l)"]
-    H --> I{"Lowest validation WAPE?"}
-    I -- XGBoost --> J["Choose XGBoost"]
-    I -- LightGBM --> J2["Choose LightGBM"]
-    I -- Blend --> J3["Choose weighted blend"]
-    J --> K["Log diagnostics: WAPE, R², MAE, RMSE<br/>on validation and test"]
-    J2 --> K
-    J3 --> K
-    K --> L["Refit chosen model(s) on ALL history;<br/>tree count scaled up by full rows / train rows"]
+    D --> E["For each LightGBM config in the grid:<br/>train each fold with early stopping,<br/>record mean WAPE"]
+    E --> F["Best config = lowest mean WAPE"]
+    F --> G["Fit it on the last fold"]
+    G --> K["Log diagnostics: WAPE, R², MAE, RMSE<br/>on validation and test"]
+    K --> L["Refit on ALL history;<br/>tree count scaled up by full rows / train rows"]
     L --> M["Final predictor"]
 ```
 
@@ -613,20 +601,15 @@ Every candidate uses a learning rate of 0.04, up to 3,000 trees, and stops early
 **Metric.** WAPE (weighted absolute percentage error) = `Σ|actual − forecast| / Σ actual`.
 It is weighted by volume, so fast-selling items count for more than rare ones.
 
-### 12.3 The three models
+### 12.3 The two models
 
-The same engine trains three independent models:
+The same engine trains two independent models:
 
 ```mermaid
 flowchart LR
     E["Shared training engine"] --> M1["SKU model<br/>ID = SKU code<br/>scope: SKUs sold in the last 13 weeks"]
     E --> M2["Design model<br/>ID = design number<br/>scope: all designs"]
-    E --> M3["Channel model<br/>ID = design × marketplace<br/>scope: pairs with ≥ 8 active weeks<br/>+ in-sample fitted values"]
 ```
-
-Marketplaces are derived from the channel name. Amazon (including Wishlink), Flipkart,
-Meesho, Myntra and Nykaa come from the OMS source; the brand websites come from the
-WEBSITE source.
 
 ---
 
@@ -754,27 +737,14 @@ This uses each Style's or Sub Category's own history of how it responded to that
 It can only **raise** a forecast. When a week falls in both a festival and a sale, the
 larger boost wins.
 
-### 15.4 Channel breakdown and reconciliation
+### 15.4 Channel breakdown (actuals only)
 
-```mermaid
-flowchart TD
-    P["Pooled Style forecast<br/>(15.2, boosted)"] --> S1["Layer 1: proportional split<br/>by each channel's share of the<br/>Style's gross sales"]
-    SM{"Style has fewer than<br/>20 gross units of channel history?"} -- yes --> BM["Blend own share with channel mix<br/>borrowed from similar designs"]
-    BM --> S1
-    SM -- no --> S1
-    S1 --> S2["Layer 2: channel model's in-sample<br/>fitted values for past weeks"]
-    S2 --> S3["Layer 3: channel model's backtested<br/>predictions for past weeks"]
-    S3 --> S4["Layer 4: channel model's forward forecast<br/>× festival multiplier for future weeks"]
-    S4 --> RC["Reconcile: rescale each week's channels<br/>so they add up exactly to the pooled forecast"]
-    P --> RC
-    RC --> OUT["Per-marketplace actual + forecast<br/>per calendar week"]
-```
+Expanding a Style row, or the TOTAL row, shows its **actual gross sales per marketplace**
+for each calendar week. No forecast is made at channel level.
 
-The channel model supplies the **shape**: how demand is distributed across channels and
-weeks. The pooled Style forecast supplies the **total**. Reconciliation keeps the
-drill-down consistent with the Style row it belongs to. The TOTAL row's breakdown
-computes each matching Style's forecast separately, sums them, and then splits the total
-by channel share.
+Marketplaces are derived from the channel name. Amazon (including Wishlink), Flipkart,
+Meesho, Myntra and Nykaa come from the OMS source; the brand websites come from the
+WEBSITE source.
 
 ---
 
@@ -887,7 +857,7 @@ flowchart TD
 |---|---|---|
 | Cross-validation WAPE | Every training run | Choosing hyperparameters and the model family |
 | Test WAPE, R², MAE, RMSE | Every training run | Performance on held-out weeks |
-| Walk-forward backtest | Every rebuild, if `RUN_BACKTEST=1` | How the forecast as actually shown compared with what sold, separately for SKU, design and channel |
+| Walk-forward backtest | Every rebuild, if `RUN_BACKTEST=1` | How the forecast as actually shown compared with what sold, separately for SKU and design |
 | Naive proxy | When the backtest is off | Recent-sales baseline projected over recent weeks, compared with actuals |
 | Offline scripts | On demand | Compare method choices on real history |
 
@@ -901,7 +871,7 @@ flowchart TD
 |---|---|
 | **SKU plan** | 7, 10 and 35-day forecasts; stock, WIP, available; lifecycle stage, tiers, scores; safety stock; production suggestions; predicted festival spike |
 | **Weekly Sales Report** | One row per Style or Sub Category: forecast and actual per calendar week, month and grand totals, available quantity, suggested production, upcoming festival and sale outlook |
-| **Channel drill-down** | Actual and forecast per marketplace per week, for one Style or the filtered total |
+| **Channel drill-down** | Actual sales per marketplace per week, for one Style or the filtered total |
 | **Style lifecycle panel** | Styles that sold last year vs styles launched this year, per Sub Category |
 | **Inventory Planning** | Stock, daily run rate and days to finish per design + size |
 | **Weekly production log** | For each Style and report week: the forecast recorded at the start of the week, the suggestion while the week runs, and the actual sales once it ends |
@@ -956,7 +926,7 @@ sequenceDiagram
     D->>L: assemble()
     L-->>D: clean integrated frame (or CSV fallback)
     D->>F: calibrate(daily gross units)
-    D->>C: newest saved SKU / design / channel forecasts
+    D->>C: newest saved SKU / design forecasts
     C-->>D: forecasts ≤ 28 days old, shifted to align weeks
     D->>D: build plan (Stages 10–12), publish in one step
     D->>D: warm response caches
@@ -967,7 +937,6 @@ sequenceDiagram
         D->>T: start training thread
         T->>T: SKU model (Stages 6–9)
         T->>T: Design model (Stages 6–9)
-        T->>T: Channel model (Stages 6–9)
         T->>C: save snapshots
         T->>D: rebuild plan with fresh forecasts
         T->>W: complete finished weeks, save running week
@@ -987,7 +956,7 @@ flowchart TD
     P3 --> T
     T --> OK{"Training succeeded?"}
     OK -- yes --> P4["Save snapshot · publish new plan ·<br/>update weekly log"]
-    OK -- "design or channel failed" --> P5["Keep previous design / channel forecasts"]
+    OK -- "design failed" --> P5["Keep previous design forecasts"]
     OK -- "SKU failed" --> P6["Keep currently published plan"]
 ```
 
@@ -1109,15 +1078,14 @@ erDiagram
 | Similarity | IDF-weighted Jaccard, inverted index, top-k nearest neighbours, attribute fallback | `similar_design.py`, `design_attributes.py` |
 | Features | Lags, rolling statistics, trend, calendar, categorical attributes, point-in-time hierarchy and tier | `lgbm_forecast.py` |
 | Outlier handling | Per-ID 99th-percentile capping outside festival weeks, fitted on the training period | `lgbm_forecast.py` |
-| Learning algorithms | Gradient-boosted trees: **XGBoost** and **LightGBM**, Tweedie loss | `lgbm_forecast.py` |
+| Learning algorithm | Gradient-boosted trees: **LightGBM**, Tweedie loss | `lgbm_forecast.py` |
 | Validation | Rolling-origin time-series CV, hold-out test set, early stopping | `lgbm_forecast.py` |
 | Tuning | Grid search minimising WAPE | `lgbm_forecast.py` |
-| Ensembling | Inverse-WAPE weighted blend; best-of-three selection | `lgbm_forecast.py` |
 | Sample weighting | Exponential recency decay, 26-week half-life | `lgbm_forecast.py` |
 | Multi-step forecasting | Recursive 13-week forecasting | `lgbm_forecast.py` |
 | Cold start | Confidence-weighted shrinkage to analogue curves aligned by weeks since launch | `lgbm_forecast.py`, `similar_design.py` |
 | Post-processing | Shrinkage to the naive run-rate, multiplicative festival adjustment, group event-ratio boost | `data.py` |
-| Hierarchy | Design-level preference, top-down channel split, proportional reconciliation to the pooled total | `data.py` |
+| Hierarchy | Design-level forecast preferred over summed SKU forecasts | `data.py` |
 | Lifecycle | Rule-based stage classification, percentile tiers, weighted scoring | `lifecycle.py` |
 | Planning | Inventory position, stage-scaled requirement, statistical safety stock | `data.py`, `lifecycle.py` |
 | Evaluation | Walk-forward backtest, WAPE / accuracy, R², MAE, RMSE | `data.py`, `lgbm_forecast.py` |
@@ -1143,7 +1111,7 @@ erDiagram
 | `api/weekly_log.py` | Weekly production log (SQLite) |
 | `api/models.py` | API response schemas |
 | `api/test_lgbm_forecast.py` | Unit tests for forecasting helpers |
-| `api/backtest_sweep.py`, `retro_backtest.py`, `channel_backtest.py`, `check_month_total_bq.py` | Offline diagnostics |
+| `api/backtest_sweep.py`, `retro_backtest.py`, `check_month_total_bq.py` | Offline diagnostics |
 | `dashboard/src/pages/WeeklySalesGrid.tsx` | Weekly Sales Report |
 | `dashboard/src/pages/InventoryPlanning.tsx` | Inventory Planning |
 | `dashboard/src/components/tables/ProductionLogDialog.tsx` | Weekly production log dialog |
@@ -1217,12 +1185,73 @@ flowchart LR
 The forecast cache is local to each container. A new deployment serves the naive
 baseline at first, then retrains in the background.
 
-### 23.6 Tests and diagnostics
+### 23.6 Estimated GCP running cost
+
+These are **estimates**, not a quote. They use Cloud Run's published rates for
+**instance-based billing** in a Tier 1 region: $0.000018 per vCPU-second and $0.000002
+per GiB-second, with a monthly free allowance of 240,000 vCPU-seconds and 450,000
+GiB-seconds. A month is taken as 730 hours. `asia-south1` (Mumbai) is billed at the
+higher Tier 2 rates, estimated here at about 1.4× Tier 1. Check your region and the
+current rates with the [GCP pricing calculator](https://cloud.google.com/products/calculator).
+
+**Why the API has to stay on all the time.** The backend keeps the whole dataset and
+all forecasts in memory, runs the 06:00 refresh from a background thread, and trains the
+models in a background thread. On Cloud Run this needs:
+
+- **min-instances = 1**, so the in-memory state isn't lost when the service scales to zero
+- **instance-based billing** ("CPU always allocated"), so the background threads are not
+  paused between requests
+
+The API service is therefore billed 24/7. That is where almost all of the cost comes
+from.
+
+**Monthly cost of the API service**
+
+| API instance size | Tier 1 (e.g. `us-central1`) | Tier 2 (e.g. `asia-south1`) |
+|---|---|---|
+| 2 vCPU, 8 GiB | about $130 | about $185 |
+| 4 vCPU, 16 GiB | about $270 | about $375 |
+
+The size you need depends on peak memory while loading all sales rows and training the
+two models. Measure it locally before choosing; 8 GiB may be too little.
+
+**Other services**
+
+| Service | Expected monthly cost | Why |
+|---|---|---|
+| Dashboard (Cloud Run, nginx) | ≈ $0 | Static files, scales to zero, stays inside the request-based free allowance |
+| BigQuery | ≈ $0 | One scan a day; the first 1 TiB of queries per month is free |
+| Cloud SQL | $0 extra | Uses the existing `orlin-prod` instance |
+| Artifact Registry, Cloud Build | < $1 | Two container images; builds fit in the free build minutes |
+| Cloud Logging | ≈ $0 | Well under the 50 GiB/month free allowance |
+| Internet egress | < $1 | Small JSON responses |
+| Static outbound IP (optional) | ≈ $5–40 | Only needed if the ERP server allows only whitelisted IPs (Cloud NAT + static IP) |
+
+**Estimated total**
+
+| Setup | Monthly total |
+|---|---|
+| Current design, 2 vCPU / 8 GiB | ≈ $135–190 |
+| Current design, 4 vCPU / 16 GiB | ≈ $275–380 |
+
+**Ways to reduce the cost**
+
+1. **Move training to a Cloud Run Job**, triggered daily by Cloud Scheduler. The job
+   runs for a limited time with large resources, then stops.
+2. **Save forecasts to Cloud Storage** instead of the container's local disk. This costs
+   cents, and a restart no longer triggers a full retrain.
+3. **Keep the API small** (for example 1 vCPU / 4 GiB) and have it only load the saved
+   forecasts. This could bring the total to roughly **$75–110 per month**, but it needs
+   code changes.
+4. **Use a committed use discount** for 1 or 3 years to lower the always-on compute
+   rate.
+5. **Set a budget alert** in Cloud Billing so unexpected usage is caught early.
+
+### 23.7 Tests and diagnostics
 
 | Script | Purpose |
 |---|---|
 | `api/test_lgbm_forecast.py` | Unit tests: WAPE, outlier capping, CV folds, recency weights, point-in-time features (`python -m pytest api/test_lgbm_forecast.py -v`) |
 | `api/backtest_sweep.py` | Compare blend weights and festival on/off using saved snapshots |
 | `api/retro_backtest.py` | Retrain the design model at past cut-off dates and score against real history |
-| `api/channel_backtest.py` | Evaluate the channel split against per-channel actuals |
 | `api/check_month_total_bq.py` | Independent monthly Gross/Net total check against BigQuery |

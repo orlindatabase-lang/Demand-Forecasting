@@ -19,12 +19,20 @@ from __future__ import annotations
 import os
 import sys
 import urllib.request
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-import catalog_style
-import data
+# Load the data in the background (see data.start_background_load) so the
+# server opens its port at once instead of after the multi-minute BigQuery +
+# ERP load - Cloud Run fails a revision that doesn't listen within its
+# startup timeout. Must be set before `import data`.
+os.environ.setdefault("DEFER_INITIAL_LOAD", "1")
+
+import catalog_style  # noqa: E402
+import data  # noqa: E402
 from models import (
     CatalogStyleTiersResponse,
     ChannelSourceWeeklyResponse,
@@ -79,7 +87,15 @@ def _refuse_if_already_running(port: int = 8000) -> None:
 
 _refuse_if_already_running()
 
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    data.start_background_load()
+    yield
+
+
 app = FastAPI(
+    lifespan=_lifespan,
     title="Orlin · SKU Production Plan API",
     version="1.0.0",
     description=(
@@ -88,6 +104,22 @@ app = FastAPI(
         "derived from real order history (final_merged_data.csv)."
     ),
 )
+
+@app.middleware("http")
+async def _wait_for_data(request: Request, call_next):
+    """Until the first data load finishes, answer data requests with 503 +
+    Retry-After instead of empty tables; the dashboard keeps retrying.
+    /health and /docs stay available. Registered BEFORE the CORS middleware
+    so CORS wraps it and the 503 still carries the CORS headers the browser
+    needs to read it."""
+    if not data.DATA_READY and request.url.path.startswith(("/api/", "/admin/")):
+        return JSONResponse(
+            {"detail": "Data is still loading - please wait a few minutes."},
+            status_code=503,
+            headers={"Retry-After": "15"},
+        )
+    return await call_next(request)
+
 
 # Allow the Vite dev server (and previews) to call the API from the browser.
 # Match ANY loopback origin/port: Vite auto-increments (5173 -> 5174 -> ...) when
@@ -113,7 +145,8 @@ app.add_middleware(
 @app.get("/health", tags=["meta"])
 def health() -> dict:
     return {
-        "status": "ok",
+        "status": "ok" if data.DATA_READY else "loading",
+        "dataReady": data.DATA_READY,
         "rows": len(data.PLAN_ROWS),
         "snapshot": data.SNAPSHOT_DATE.isoformat(),
         "dataSource": data.DATA_SOURCE,
@@ -246,7 +279,7 @@ def debug_tier_accuracy() -> dict:
 
 @app.get("/api/debug/overall-accuracy", tags=["debug"])
 def debug_overall_accuracy() -> dict:
-    """SKU/design/channel-level overall accuracy the LIVE process already has
+    """SKU/design-level overall accuracy the LIVE process already has
     loaded, read-only (2026-09-24, user-requested: "what is the overall
     accuracy" - added so this can be checked without spawning a fresh
     process that has to redo a full live data load, which has occasionally
@@ -257,7 +290,6 @@ def debug_overall_accuracy() -> dict:
         "runBacktest": data.RUN_BACKTEST,
         "overallAccuracySku": data.OVERALL_ACCURACY,
         "designAccuracy": data.DESIGN_ACCURACY,
-        "channelAccuracy": data.CHANNEL_ACCURACY,
         "latestWeekAccuracy": data.LATEST_WEEK_ACCURACY,
         "latestWeekIso": data.LATEST_WEEK_ISO,
         "dataSource": data.DATA_SOURCE,

@@ -14,18 +14,36 @@ export const API_BASE =
   (import.meta.env.VITE_API_URL as string | undefined) ??
   `http://${typeof window !== "undefined" ? window.location.hostname : "localhost"}:8000`;
 
+/** HTTP error from the API, keeping the status so callers can tell "still
+ * loading" (503, sent while the API's first data load runs) from a real
+ * failure. */
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function errorFor(res: Response, path: string): Promise<ApiError> {
+  let detail = "";
+  try {
+    detail = ((await res.json()) as { detail?: string }).detail ?? "";
+  } catch {
+    // non-JSON body - fall back to the status text
+  }
+  return new ApiError(res.status, detail || `API ${res.status} ${res.statusText} — ${path}`);
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`);
-  if (!res.ok) {
-    throw new Error(`API ${res.status} ${res.statusText} — ${path}`);
-  }
+  if (!res.ok) throw await errorFor(res, path);
   return (await res.json()) as T;
 }
 
 export async function apiPost<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { method: "POST" });
-  if (!res.ok) {
-    throw new Error(`API ${res.status} ${res.statusText} — ${path}`);
-  }
+  if (!res.ok) throw await errorFor(res, path);
   return (await res.json()) as T;
 }

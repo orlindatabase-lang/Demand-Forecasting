@@ -4,11 +4,19 @@ import { Box, CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 
 import InventoryPlanning from "@/pages/InventoryPlanning";
 import WeeklySalesGrid from "@/pages/WeeklySalesGrid";
+import { ApiError } from "@/services/api";
+
+const isLoadingResponse = (error: unknown) => error instanceof ApiError && error.status === 503;
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 10,
+      // 503 = the API is still loading its data after a (re)start, which can
+      // take several minutes - keep waiting (up to ~15 min) instead of
+      // giving up after the normal 10 retries.
+      retry: (failureCount, error) => failureCount < (isLoadingResponse(error) ? 180 : 10),
+      retryDelay: (attempt, error) =>
+        isLoadingResponse(error) ? 5_000 : Math.min(1_000 * 2 ** attempt, 30_000),
       refetchOnWindowFocus: false,
     },
   },
