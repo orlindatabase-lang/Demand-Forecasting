@@ -24,3 +24,6 @@ pytest>=8.0
 # api/.env (git-ignored, never committed).
 cloud-sql-python-connector[pg8000]>=1.0
 python-dotenv>=1.0
+# api/.cache kept in a Cloud Storage bucket on Cloud Run (api/cache_sync.py,
+# only when CACHE_BUCKET is set) so history survives restarts/redeploys.
+google-cloud-storage>=2.0

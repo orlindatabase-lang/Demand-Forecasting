@@ -1725,6 +1725,8 @@ def _train_and_publish(df, snap: date) -> None:
         # _DATA_VERSION and evicted rebuild()'s warm-up.
         _warm_caches()
         _record_weekly_production()
+        import cache_sync
+        cache_sync.upload_changed()
         print(f"[data] LightGBM active ({len(forecasts):,} SKUs, snapshot {s})", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 — never let forecasting kill the API
         print(f"[data] model training failed ({exc!r}); keeping current plan", file=sys.stderr)
@@ -1880,6 +1882,8 @@ def rebuild() -> dict:
         if needs_training and not (_LGBM_THREAD and _LGBM_THREAD.is_alive()):
             _LGBM_THREAD = threading.Thread(target=_train_and_publish, args=(df, snap), daemon=True)
             _LGBM_THREAD.start()
+        import cache_sync
+        cache_sync.upload_changed()
     except Exception as exc:  # noqa: BLE001 — never let data issues kill startup
         print(f"[data] real load failed ({exc!r}); falling back to mock", file=sys.stderr)
         _set_plan((
@@ -3187,6 +3191,11 @@ DATA_READY = False
 def _initial_load() -> None:
     global DATA_READY
     try:
+        # Restore api/.cache from Cloud Storage first (no-op unless
+        # CACHE_BUCKET is set), so a fresh Cloud Run instance starts with the
+        # saved models, frozen weeks and production log - see cache_sync.py.
+        import cache_sync
+        cache_sync.download_recent()
         rebuild()
     finally:
         DATA_READY = True
