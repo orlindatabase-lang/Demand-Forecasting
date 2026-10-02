@@ -118,6 +118,7 @@ async def _wait_for_data(request: Request, call_next):
             status_code=503,
             headers={"Retry-After": "15"},
         )
+    data.maybe_refresh_snapshot()
     return await call_next(request)
 
 
@@ -157,7 +158,11 @@ def health() -> dict:
 @app.post("/admin/refresh", tags=["meta"])
 def refresh() -> dict:
     """Re-fetch the source data (live BigQuery + ERP, or CSV) and rebuild all
-    in-memory tables. Use this to pull fresh data without restarting."""
+    in-memory tables. Use this to pull fresh data without restarting.
+    With SERVING_MODE=snapshot it starts the daily Cloud Run Job instead; the
+    API picks up the job's new snapshot within SNAPSHOT_CHECK_SECS."""
+    if data.SERVING_MODE == "snapshot":
+        return {"status": "job started", **data.start_daily_job()}
     result = data.rebuild()
     return {"status": "refreshed", **result}
 

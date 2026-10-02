@@ -3266,8 +3266,122 @@ def _compute_weekly_grid(
 DATA_READY = False
 
 
+# Snapshot serving mode (2026-10-02, Phase 3): SERVING_MODE=snapshot makes this
+# process a small read-only API - it loads the serving snapshot the daily job
+# (job.py) saved to Cloud Storage instead of loading BigQuery and training,
+# picks up a newer snapshot when the job publishes one, and never writes to
+# the bucket (the job is the only writer).
+SERVING_MODE = os.getenv("SERVING_MODE", "full").strip().lower()
+_SNAPSHOT_CHECK_SECS = int(os.getenv("SNAPSHOT_CHECK_SECS", "600"))
+_SNAPSHOT_GENERATION: int | None = None   # bucket generation of the loaded snapshot
+_SNAPSHOT_LAST_CHECK = 0.0
+_SNAPSHOT_LOCK = threading.Lock()
+
+
+def _fetch_and_load_snapshot() -> bool:
+    """Download serving_snapshot.pkl if the bucket has a newer one than the
+    loaded one (or load the local file when no bucket is configured), then
+    load it. True if a snapshot is loaded afterwards."""
+    global _SNAPSHOT_GENERATION
+    import cache_sync
+    local = _serving_cache_path()
+    if not cache_sync.BUCKET:
+        return DATA_READY or load_serving_snapshot(local)
+    try:
+        blob = cache_sync._bucket().get_blob(SERVING_SNAPSHOT_FILE)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[data] snapshot check failed ({exc!r})", file=sys.stderr)
+        return DATA_READY
+    if blob is None:
+        print("[data] no serving snapshot in the bucket yet - run the daily job", file=sys.stderr)
+        return DATA_READY
+    if blob.generation == _SNAPSHOT_GENERATION:
+        return True
+    local.parent.mkdir(parents=True, exist_ok=True)
+    tmp = local.with_name(local.name + ".download")
+    blob.download_to_filename(str(tmp))
+    tmp.replace(local)
+    if load_serving_snapshot(local):
+        _SNAPSHOT_GENERATION = blob.generation
+        return True
+    return DATA_READY
+
+
+def _snapshot_initial_load() -> None:
+    """SERVING_MODE=snapshot start-up: restore api/.cache (production log,
+    frozen weeks), then load the snapshot - retrying every minute until the
+    daily job has published one."""
+    global DATA_READY, _SNAPSHOT_LAST_CHECK
+    import cache_sync
+    cache_sync.download_recent()
+    while True:
+        try:
+            with _SNAPSHOT_LOCK:
+                if _fetch_and_load_snapshot():
+                    _warm_caches()
+                    DATA_READY = True
+                    _SNAPSHOT_LAST_CHECK = time.time()
+                    return
+        except Exception as exc:  # noqa: BLE001 - keep retrying
+            print(f"[data] snapshot load failed ({exc!r})", file=sys.stderr)
+        time.sleep(60)
+
+
+def _snapshot_refresh() -> None:
+    with _SNAPSHOT_LOCK:
+        try:
+            import cache_sync
+            before = _SNAPSHOT_GENERATION
+            if _fetch_and_load_snapshot() and _SNAPSHOT_GENERATION != before:
+                cache_sync.download_recent()   # the job's newer production log / frozen weeks
+                _warm_caches()
+        except Exception as exc:  # noqa: BLE001 - keep serving the loaded snapshot
+            print(f"[data] snapshot refresh failed ({exc!r})", file=sys.stderr)
+
+
+def maybe_refresh_snapshot() -> None:
+    """Called on requests (main.py): at most every SNAPSHOT_CHECK_SECS, check
+    in the background whether the daily job published a newer snapshot."""
+    global _SNAPSHOT_LAST_CHECK
+    if SERVING_MODE != "snapshot" or not DATA_READY:
+        return
+    now = time.time()
+    if now - _SNAPSHOT_LAST_CHECK < _SNAPSHOT_CHECK_SECS or _SNAPSHOT_LOCK.locked():
+        return
+    _SNAPSHOT_LAST_CHECK = now
+    threading.Thread(target=_snapshot_refresh, daemon=True, name="snapshot-refresh").start()
+
+
+def start_daily_job() -> dict:
+    """SERVING_MODE=snapshot's Refresh button: start one execution of the
+    Cloud Run Job (DAILY_JOB_NAME) instead of rebuilding in this process."""
+    import json as _json
+    import urllib.request
+    import google.auth
+    import google.auth.transport.requests
+
+    job = os.getenv("DAILY_JOB_NAME", "demand-forecasting-job")
+    region = os.getenv("DAILY_JOB_REGION", "asia-south1")
+    creds, project = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    creds.refresh(google.auth.transport.requests.Request())
+    project = os.getenv("GOOGLE_CLOUD_PROJECT") or project
+    req = urllib.request.Request(
+        f"https://run.googleapis.com/v2/projects/{project}/locations/{region}/jobs/{job}:run",
+        data=b"{}", method="POST",
+        headers={"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        op = _json.loads(resp.read().decode("utf-8"))
+    print(f"[data] daily job started ({op.get('name', '')})", file=sys.stderr)
+    return {"source": "job started", "rows": len(PLAN_ROWS), "snapshot": SNAPSHOT_DATE.isoformat(),
+            **model_status()}
+
+
 def _initial_load() -> None:
     global DATA_READY
+    if SERVING_MODE == "snapshot":
+        _snapshot_initial_load()
+        return
     try:
         # Restore api/.cache from Cloud Storage first (no-op unless
         # CACHE_BUCKET is set), so a fresh Cloud Run instance starts with the
