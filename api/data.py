@@ -1602,6 +1602,84 @@ def _set_plan(result) -> None:
     _WEEKLY_GRID_CACHE.clear()
 
 
+# --------------------------------------------------------------------------- #
+# Serving snapshot (2026-10-02): the daily job (job.py) builds everything with
+# the full data + models, then saves just what the endpoints read into one
+# file, so a small API can serve the dashboard by loading that file instead of
+# 2.6M sales rows + model training. See save/load_serving_snapshot().
+# --------------------------------------------------------------------------- #
+SERVING_SNAPSHOT_FILE = "serving_snapshot.pkl"
+_SNAPSHOT_VARS = (
+    "SNAPSHOT_DATE", "PLAN_ROWS", "PLAN_BY_SKU", "_WEEK_ACTUAL", "_DAY_ACTUAL",
+    "_WEEK_ACTUAL_GROSS", "_DAY_ACTUAL_GROSS", "_FC_WEEKLY", "_FC_WEEKLY_DESIGN",
+    "_NAIVE_WEEK", "_ACTIVE_FORECASTS", "ACTIVE_FORECAST_MODEL", "FORECAST_SNAPSHOT",
+    "OVERALL_ACCURACY", "LATEST_WEEK_ACCURACY", "LATEST_WEEK_ISO", "SKU_ACCURACY",
+    "SKU_MODEL_HIST", "DESIGN_ACCURACY", "DESIGN_MODEL_HIST", "TIER_ACCURACY",
+    "HORIZON_ACCURACY", "STYLE_LIFECYCLE", "TOP_STATES", "TOP_CITIES", "TOP_WAREHOUSES",
+    "_DESIGN_LEAD", "_GLOBAL_LEAD", "_DESIGN_SECTION",
+)
+# The only _SOURCE_DF columns the endpoints read (festival outlook, spike
+# lead time, Channel & Source drill-down) - all of them on Gross rows only.
+_SERVING_SOURCE_COLS = ["order_date", "order_status", "qty", "DESIGN_NO", "channel_name", "source"]
+
+
+def _serving_cache_path() -> Path:
+    return Path(__file__).resolve().parent / ".cache" / SERVING_SNAPSHOT_FILE
+
+
+def save_serving_snapshot(path: Path | None = None) -> Path:
+    """Write every module-level table the endpoints read, plus a slim copy of
+    the sales rows (Gross rows, _SERVING_SOURCE_COLS, deduplicated against the
+    full row first) and the calibrated festival effects, to one pickle."""
+    import pickle
+
+    src = None
+    if _SOURCE_DF is not None:
+        full = _SOURCE_DF.drop_duplicates()
+        gross = full["order_status"].astype(str).str.strip().str.lower().isin(_GROSS_SALE_STATUSES)
+        src = full.loc[gross, [c for c in _SERVING_SOURCE_COLS if c in full.columns]].reset_index(drop=True)
+        # A unique row id, so the endpoints' own drop_duplicates() calls can
+        # never merge two distinct orders that look alike in these columns.
+        src["_row"] = range(len(src))
+    state = {name: globals()[name] for name in _SNAPSHOT_VARS}
+    state["_SOURCE_DF"] = src
+    state["festival_effects"] = festival.effects()
+    path = path or _serving_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "wb") as fh:
+        pickle.dump(state, fh, protocol=pickle.HIGHEST_PROTOCOL)
+    tmp.replace(path)
+    print(f"[data] serving snapshot saved: {path.name} ({path.stat().st_size / 1e6:.0f} MB, "
+          f"{len(PLAN_ROWS):,} SKUs, {0 if src is None else len(src):,} sales rows)", file=sys.stderr)
+    return path
+
+
+def load_serving_snapshot(path: Path | None = None) -> bool:
+    """Restore save_serving_snapshot()'s file into this process (no BigQuery,
+    no training) and re-warm the response caches. False if there is none."""
+    import pickle
+    global _SOURCE_DF, _DATA_VERSION, _CHANNEL_SOURCE_BASE_CACHE, _FESTIVAL_OUTLOOK_CACHE
+
+    path = path or _serving_cache_path()
+    if not path.exists():
+        return False
+    with open(path, "rb") as fh:
+        state = pickle.load(fh)
+    globals().update({name: state[name] for name in _SNAPSHOT_VARS if name in state})
+    _SOURCE_DF = state.get("_SOURCE_DF")
+    with festival._LOCK:
+        festival._EFFECTS = dict(state.get("festival_effects") or festival._EFFECTS)
+        festival._DAY_CACHE.clear()
+    _DATA_VERSION += 1
+    _WEEKLY_GRID_CACHE.clear()
+    _CHANNEL_SOURCE_BASE_CACHE = None
+    _FESTIVAL_OUTLOOK_CACHE = None
+    print(f"[data] serving snapshot loaded: data through {SNAPSHOT_DATE}, "
+          f"model {ACTIVE_FORECAST_MODEL} ({FORECAST_SNAPSHOT or 'none'})", file=sys.stderr)
+    return True
+
+
 def _snapshot_of(df) -> date:
     """The SNAPSHOT_DATE _load_real_plan() will publish for ``df`` (latest real
     order date, capped at today), computed up-front so rebuild() can look up

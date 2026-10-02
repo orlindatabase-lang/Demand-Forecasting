@@ -10,7 +10,7 @@ unchanged.
 - download_recent(): at startup, copy the bucket's files into api/.cache
   (SQLite files, similar_design.json, and model forecasts from the last
   DOWNLOAD_DAYS days - older snapshots are only needed for backtesting).
-- upload_changed(): after a refresh, upload every .json/.sqlite file that
+- upload_changed(): after a refresh, upload every .json/.sqlite/.pkl file that
   changed since the last upload. SQLite files are copied with SQLite's own
   backup API first, so a write happening at the same moment can't produce
   a half-written copy.
@@ -29,6 +29,8 @@ from pathlib import Path
 BUCKET = os.getenv("CACHE_BUCKET", "").strip()
 CACHE_DIR = Path(__file__).resolve().parent / ".cache"
 DOWNLOAD_DAYS = 35
+# File types kept in the bucket; .pkl = the serving snapshot written by job.py.
+_SYNCED = (".json", ".sqlite", ".pkl")
 
 _LOCK = threading.Lock()
 _UPLOADED: dict[str, float] = {}  # file name -> mtime at its last upload/download
@@ -41,7 +43,7 @@ def _bucket():
 
 
 def _wanted(name: str) -> bool:
-    if not name.endswith((".json", ".sqlite")):
+    if not name.endswith(_SYNCED):
         return False
     m = _DATED.search(name)
     if m is None:
@@ -70,7 +72,7 @@ def download_recent() -> None:
 
 
 def upload_changed() -> None:
-    """Upload every api/.cache .json/.sqlite file changed since its last upload."""
+    """Upload every api/.cache .json/.sqlite/.pkl file changed since its last upload."""
     if not BUCKET:
         return
     with _LOCK:
@@ -78,7 +80,7 @@ def upload_changed() -> None:
             bucket = _bucket()
             count = 0
             for path in sorted(CACHE_DIR.glob("*")):
-                if not path.is_file() or path.suffix not in (".json", ".sqlite"):
+                if not path.is_file() or path.suffix not in _SYNCED:
                     continue
                 mtime = path.stat().st_mtime
                 if _UPLOADED.get(path.name) == mtime:
