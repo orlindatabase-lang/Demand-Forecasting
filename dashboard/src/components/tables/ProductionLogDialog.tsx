@@ -48,9 +48,32 @@ interface WeekInfo {
   weekEnd: string;
   month: string;
   week: string;
-  status: "open" | "completed";
+  status: "open" | "settling" | "completed";
   capturedOn: string;
   updatedOn: string;
+  actualOn: string; // data date of the latest actual (settling / completed weeks)
+}
+
+// Days after a week ends during which its actual keeps updating (late
+// marketplace orders) - matches api/weekly_log.py's SETTLE_DAYS.
+const SETTLE_DAYS = 14;
+
+function addDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const STATUS_CHIP = {
+  open: { bg: "rgba(249,115,22,0.14)", fg: "#c2410c" },
+  settling: { bg: "rgba(202,138,4,0.14)", fg: "#a16207" },
+  completed: { bg: "rgba(21,128,61,0.12)", fg: "#15803d" },
+} as const;
+
+function statusLabel(w: WeekInfo): string {
+  if (w.status === "open") return `Running · updated ${formatDay(w.updatedOn)}`;
+  if (w.status === "settling") return `Settling · final ${formatDay(addDays(w.weekEnd, SETTLE_DAYS))}`;
+  return "Completed";
 }
 
 interface StyleRow {
@@ -115,6 +138,7 @@ export default function ProductionLogDialog({ open, onClose }: { open: boolean; 
         weekMap.set(r.week_start, {
           weekStart: r.week_start, weekEnd: r.week_end, month: r.month, week: r.week,
           status: r.status, capturedOn: r.captured_on, updatedOn: r.updated_on ?? r.captured_on,
+          actualOn: r.completed_on ?? "",
         });
       }
       let s = styleMap.get(r.style);
@@ -199,7 +223,7 @@ export default function ProductionLogDialog({ open, onClose }: { open: boolean; 
       for (const w of weeks) {
         const r = s.weeks[w.weekStart];
         const label = `${w.month} ${w.week}`;
-        out[`${label} Actual${w.status === "open" ? " (so far)" : ""}`] = r?.actual_qty ?? r?.actual_so_far ?? "";
+        out[`${label} Actual${w.status === "open" ? " (so far)" : w.status === "settling" ? " (still updating)" : ""}`] = r?.actual_qty ?? r?.actual_so_far ?? "";
         out[`${label} Forecast (2 months)`] = r?.forecast_2m_qty ?? "";
         out[`${label} Available (stock + WIP)`] = r?.available_qty ?? "";
         out[`${label} Suggested Production (2 months)`] = r?.suggested_production_qty ?? "";
@@ -217,7 +241,8 @@ export default function ProductionLogDialog({ open, onClose }: { open: boolean; 
         </Typography>
         <Typography component="span" variant="body2" sx={{ color: "text.secondary", display: "block" }}>
           For each report week: the style's forecast for the next ~2 months, stock + WIP, suggested production and actual
-          sale. Running weeks update with every data refresh; completed weeks are locked. Keeps the latest 8 completed weeks.
+          sale. Running weeks update with every data refresh. After a week ends it is "Settling" for 14 days - its actual still
+          updates as late marketplace orders arrive - then "Completed" and locked. Keeps the latest 8 finished weeks.
         </Typography>
         <IconButton aria-label="Close" onClick={onClose} sx={{ position: "absolute", top: 12, right: 12 }}>
           <CloseIcon />
@@ -368,11 +393,16 @@ export default function ProductionLogDialog({ open, onClose }: { open: boolean; 
                         </Typography>
                         <Chip
                           size="small"
-                          label={w.status === "completed" ? "Completed" : `Running · updated ${formatDay(w.updatedOn)}`}
+                          label={statusLabel(w)}
+                          title={
+                            w.status === "settling"
+                              ? `Week ended - late marketplace orders still arriving. Actual updates daily (data through ${formatDay(w.actualOn)}) until ${formatDay(addDays(w.weekEnd, SETTLE_DAYS))}.`
+                              : undefined
+                          }
                           sx={{
                             height: 18, fontSize: "0.65rem", fontWeight: 700,
-                            bgcolor: w.status === "completed" ? "rgba(21,128,61,0.12)" : "rgba(249,115,22,0.14)",
-                            color: w.status === "completed" ? "#15803d" : "#c2410c",
+                            bgcolor: STATUS_CHIP[w.status].bg,
+                            color: STATUS_CHIP[w.status].fg,
                           }}
                         />
                       </Stack>
@@ -472,7 +502,8 @@ export default function ProductionLogDialog({ open, onClose }: { open: boolean; 
       <Typography variant="caption" sx={{ display: "block", mt: 1, color: "text.secondary" }}>
         Forecast is the style's total forecast for the ~2 months from the week, Available is its stock + WIP, and Suggested =
         Forecast − Available (0 when stock covers it). While a week is running these three update with every data refresh; when
-        the week completes, its Actual is filled in and all its values are locked. Sorted by the latest week's suggested production.
+        the week ends they are locked and its Actual is filled in. The Actual keeps updating for 14 days (late marketplace orders),
+        then the week is completed and fully locked. Sorted by the latest week's suggested production.
       </Typography>
       </>
       )}

@@ -2,25 +2,32 @@
 Weekly production log (2026-09-28, user-requested): one row per Style per
 Weekly Sales Report week (1-7 / 8-15 / 16-23 / 24-end). While the week runs,
 its ~2-month forecast, stock + WIP and suggested production are refreshed on
-every data refresh; once the week has finished, its actual sale is filled in
-and the row is locked (never updated again). The week's own forecast
-(forecast_qty) is kept as saved at week start, for an honest accuracy score.
+every data refresh. Once the week has finished, its forecast / stock + WIP /
+suggestion are locked and the row becomes 'settling': its actual sale is
+re-read on every data refresh for SETTLE_DAYS days, because marketplace-
+fulfilled orders (Flipkart Advantage/Alpha, Myntra SJIT) reach BigQuery days
+late (2026-10-03, user-requested: a past week's actual grew 16% in one day).
+After that the row is 'completed' and never changes again. The week's own
+forecast (forecast_qty) is kept as saved at week start, for an honest
+accuracy score.
 
 Stored as a SQLite table in api/.cache/ (a local cache, not a shared
 database). Only the latest ``KEEP_COMPLETED_WEEKS`` completed weeks are kept
-(~2 months): closing a new week deletes the oldest one beyond that. The week
-still running is always kept.
+(~2 months, settling + completed): finishing a new week deletes the oldest
+one beyond that. The week still running is always kept.
 """
 from __future__ import annotations
 
 import sqlite3
 import sys
 import threading
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 _DB = Path(__file__).resolve().parent / ".cache" / "weekly_production_log.sqlite"
 KEEP_COMPLETED_WEEKS = 8
+# Days after a week ends during which its actual sale is still refreshed.
+SETTLE_DAYS = 14
 _LOCK = threading.Lock()
 
 _SCHEMA = """
@@ -38,9 +45,9 @@ CREATE TABLE IF NOT EXISTS weekly_production (
     suggested_production_qty INTEGER NOT NULL,  -- max(0, forecast_2m - available) (live until completed)
     captured_on              TEXT    NOT NULL,  -- data date of the week-start capture
     updated_on               TEXT,              -- data date of the last live update
-    actual_qty               INTEGER,           -- gross units sold in the week (once completed)
+    actual_qty               INTEGER,           -- gross units sold in the week (once the week ended)
     completed_on             TEXT,              -- data snapshot date the actual came from
-    status                   TEXT    NOT NULL DEFAULT 'open',  -- 'open' | 'completed'
+    status                   TEXT    NOT NULL DEFAULT 'open',  -- 'open' | 'settling' | 'completed'
     PRIMARY KEY (style, week_start)
 )
 """
@@ -84,33 +91,48 @@ def save_running_week(rows: list[dict], month: str, week: str, week_start: date,
         return cur.rowcount
 
 
-def open_weeks_ending_by(data_through: date) -> list[str]:
-    """week_start of every still-open week whose last day is covered by the data."""
+def weeks_needing_actual(data_through: date) -> list[tuple[str, str]]:
+    """(week_start, week_end) of every logged week whose actual sale should be
+    (re)read now: running weeks the data has just finished, settling weeks,
+    and completed weeks still inside the SETTLE_DAYS window (rows completed
+    before settling existed, or the day they are finalised)."""
+    window_start = (data_through - timedelta(days=SETTLE_DAYS)).isoformat()
     with _LOCK, _connect() as conn:
-        return [r[0] for r in conn.execute(
-            "SELECT DISTINCT week_start FROM weekly_production WHERE status = 'open' AND week_end <= ?",
-            (data_through.isoformat(),))]
+        return [(r[0], r[1]) for r in conn.execute(
+            """SELECT DISTINCT week_start, week_end FROM weekly_production
+               WHERE (status = 'open' AND week_end <= ?)
+                  OR status = 'settling'
+                  OR (status = 'completed' AND week_end > ?)
+               ORDER BY week_start""",
+            (data_through.isoformat(), window_start))]
 
 
-def complete_week(week_start: str, actual_by_style: dict[str, int], completed_on: date) -> None:
-    """Fill in the actual sale for a finished week and mark it completed, then
-    drop completed weeks older than the latest KEEP_COMPLETED_WEEKS."""
+def update_actual(week_start: str, week_end: str, actual_by_style: dict[str, int],
+                  as_of: date, data_through: date) -> str:
+    """Write the latest actual sale for a finished week. The week stays
+    'settling' (actual refreshed again next time) until SETTLE_DAYS after its
+    end, then becomes 'completed' (locked). Forecast / stock + WIP /
+    suggestion are not touched. Then drops finished weeks older than the
+    latest KEEP_COMPLETED_WEEKS. Returns the new status."""
+    final = date.fromisoformat(week_end) + timedelta(days=SETTLE_DAYS) <= data_through
+    status = "completed" if final else "settling"
     with _LOCK, _connect() as conn:
         styles = [r[0] for r in conn.execute(
             "SELECT style FROM weekly_production WHERE week_start = ?", (week_start,))]
         conn.executemany(
-            """UPDATE weekly_production SET actual_qty = ?, completed_on = ?, status = 'completed'
+            """UPDATE weekly_production SET actual_qty = ?, completed_on = ?, status = ?
                WHERE style = ? AND week_start = ?""",
-            [(int(actual_by_style.get(s, 0)), completed_on.isoformat(), s, week_start) for s in styles],
+            [(int(actual_by_style.get(s, 0)), as_of.isoformat(), status, s, week_start) for s in styles],
         )
         keep = [r[0] for r in conn.execute(
-            """SELECT DISTINCT week_start FROM weekly_production WHERE status = 'completed'
+            """SELECT DISTINCT week_start FROM weekly_production WHERE status != 'open'
                ORDER BY week_start DESC LIMIT ?""", (KEEP_COMPLETED_WEEKS,))]
         if len(keep) == KEEP_COMPLETED_WEEKS:
             dropped = conn.execute(
-                "DELETE FROM weekly_production WHERE status = 'completed' AND week_start < ?", (keep[-1],)).rowcount
+                "DELETE FROM weekly_production WHERE status != 'open' AND week_start < ?", (keep[-1],)).rowcount
             if dropped:
                 print(f"[weekly_log] dropped {dropped} rows older than {keep[-1]}", file=sys.stderr)
+    return status
 
 
 def read(style: str = "", status: str = "") -> list[dict]:

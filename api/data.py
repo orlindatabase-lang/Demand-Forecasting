@@ -2790,20 +2790,25 @@ _LOG_WEEKS = 9
 
 def _record_weekly_production() -> None:
     """Weekly production log (weekly_log.py), run after every up-to-date
-    model publish: first completes (and locks) every logged week the data
-    now fully covers - filling in its actual sale, its other values staying
-    as last refreshed - then saves the running week: each Style's ~2-month
-    forecast, stock + WIP and suggested production, refreshed on every
-    publish until the week completes."""
+    model publish: first (re)reads the actual sale of every logged week the
+    data has finished - settling for weekly_log.SETTLE_DAYS days because late
+    marketplace orders keep arriving, then completed - its other values
+    staying as last refreshed while it ran; then saves the running week: each
+    Style's ~2-month forecast, stock + WIP and suggested production,
+    refreshed on every publish until the week ends."""
     import weekly_log
     try:
         rows = get_weekly_grid("style", _LOG_WEEKS, 5000, 0, "", "", "").rows
-        # A week locks only once its last day is both in the data and over
-        # (a late manual refresh on that day could otherwise miss its last orders).
-        for ws in weekly_log.open_weeks_ending_by(min(SNAPSHOT_DATE, date.today() - timedelta(days=1))):
+        # A week's actual is first read only once its last day is both in the
+        # data and over (a late manual refresh on that day could otherwise miss
+        # its last orders).
+        data_through = min(SNAPSHOT_DATE, date.today() - timedelta(days=1))
+        for ws, we in weekly_log.weeks_needing_actual(data_through):
+            if not any(ws in r.cells for r in rows):
+                continue  # week outside the grid's date range - keep its stored actual
             actual = {r.key: (r.cells[ws].actual or 0) for r in rows if ws in r.cells}
-            weekly_log.complete_week(ws, actual, SNAPSHOT_DATE)
-            print(f"[weekly_log] week {ws} completed ({len(actual):,} styles)", file=sys.stderr)
+            status = weekly_log.update_actual(ws, we, actual, SNAPSHOT_DATE, data_through)
+            print(f"[weekly_log] week {ws} actual updated, {status} ({sum(actual.values()):,} units)", file=sys.stderr)
 
         today = date.today()
         chunks = _month_chunks(today.year, today.month)

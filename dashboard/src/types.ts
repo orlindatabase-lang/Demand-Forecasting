@@ -169,5 +169,5 @@ export interface WeeklyProductionLogRow {
   actual_qty: number | null; // gross units sold in the week (null until completed)
   actual_so_far: number | null; // running week only: units sold so far (live), null once completed
   completed_on: string | null;
-  status: "open" | "completed";
+  status: "open" | "settling" | "completed";
 }

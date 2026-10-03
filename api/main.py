@@ -206,7 +206,7 @@ def get_channel_source_weekly_total(
 @app.get("/api/reports/weekly-production-log", tags=["plan"])
 def get_weekly_production_log(
     style: str = Query("", description="One Style (DESIGN_NO); blank = all"),
-    status: str = Query("", pattern="^(|open|completed)$", description="'open' (week still running), 'completed', or blank for both"),
+    status: str = Query("", pattern="^(|open|settling|completed)$", description="'open' (week still running), 'settling' (ended, actual still updating), 'completed' (final), or blank for all"),
 ) -> list[dict]:
     """Weekly production log (api/weekly_log.py): per Style and report week,
     the forecast and ~2-month suggested production captured when the week
