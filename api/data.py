@@ -2767,6 +2767,81 @@ def get_channel_source_weekly_total(
     )
 
 
+# Category / Sub Category monthly analysis (2026-10-03, user-requested):
+# styles sold, orders, units and the month-on-month spike, from April 2025.
+# Gross sale - the SAME units as the Weekly Sales Report's Actual Sale (one
+# definition everywhere, 2026-10-03, user-requested); the spike is on units too.
+_CATEGORY_ANALYSIS_START = date(2025, 4, 1)
+_CATEGORY_ANALYSIS_CACHE: dict[tuple, dict] = {}
+
+
+def get_category_analysis(level: str = "subCategory") -> dict:
+    """One row per (month, Category or Sub Category): distinct styles with a
+    Gross sale that month, order count (order lines), units, and the units'
+    % change vs the previous month for the same group. The current
+    month is partial (data through SNAPSHOT_DATE), so it is compared with the
+    SAME days of the previous month (1..day) instead of the whole month."""
+    import pandas as pd
+
+    if level not in ("category", "subCategory"):
+        raise ValueError(f"level must be 'category' or 'subCategory', got {level!r}")
+    cache_key = (_DATA_VERSION, level)
+    if cache_key in _CATEGORY_ANALYSIS_CACHE:
+        return _CATEGORY_ANALYSIS_CACHE[cache_key]
+
+    df = _channel_source_base_df()
+    out = {"level": level, "dataThrough": SNAPSHOT_DATE.isoformat(), "partialMonth": "", "rows": []}
+    if df is None or df.empty:
+        return out
+    df = df[(df["order_date"] >= pd.Timestamp(_CATEGORY_ANALYSIS_START))
+            & (df["order_date"] < pd.Timestamp(SNAPSHOT_DATE) + pd.Timedelta(days=1))]
+    designs = df["DESIGN_NO"].astype(str)
+    group_of = design_attributes.category_of if level == "category" else design_attributes.sub_category_of
+    mapping = {d: (group_of(d) or "Unclassified") for d in designs.unique()}
+    frame = pd.DataFrame({
+        "month": df["_month"].astype(str),
+        "group": designs.map(mapping),
+        "style": designs,
+        "qty": pd.to_numeric(df["qty"], errors="coerce").fillna(0),
+        "day": df["order_date"].dt.day,
+    })
+    agg = frame.groupby(["month", "group"]).agg(
+        styles=("style", "nunique"), orders=("qty", "size"), units=("qty", "sum"))
+
+    partial = f"{SNAPSHOT_DATE.year:04d}-{SNAPSHOT_DATE.month:02d}"
+    is_partial = SNAPSHOT_DATE != (pd.Timestamp(SNAPSHOT_DATE) + pd.offsets.MonthEnd(0)).date()
+    prev_partial = str(pd.Period(partial, freq="M") - 1)
+    # Previous month's units over the same days as the partial current month.
+    same_days_prev = (frame[(frame["month"] == prev_partial) & (frame["day"] <= SNAPSHOT_DATE.day)]
+                      .groupby("group")["qty"].sum())
+
+    units_by = agg["units"].to_dict()
+    rows = []
+    for (month, group), r in agg.iterrows():
+        prev_month = str(pd.Period(month, freq="M") - 1)
+        if is_partial and month == partial:
+            prev_units = int(round(float(same_days_prev.get(group, 0))))
+        else:
+            prev_units = int(round(float(units_by.get((prev_month, group), 0))))
+        units = int(round(float(r["units"])))
+        rows.append({
+            "month": month,
+            "group": group,
+            "styles": int(r["styles"]),
+            "orders": int(r["orders"]),
+            "units": units,
+            "prevUnits": prev_units,
+            "changePct": round((units - prev_units) / prev_units * 100, 1) if prev_units > 0 else None,
+            "partial": bool(is_partial and month == partial),
+        })
+    rows.sort(key=lambda x: (x["month"], x["units"]), reverse=True)
+    out.update(partialMonth=partial if is_partial else "", rows=rows)
+    if len(_CATEGORY_ANALYSIS_CACHE) > 8:
+        _CATEGORY_ANALYSIS_CACHE.clear()
+    _CATEGORY_ANALYSIS_CACHE[cache_key] = out
+    return out
+
+
 def get_style_lifecycle(sub_category: str = "") -> dict:
     """STYLE_LIFECYCLE for one Sub Category, or every Sub Category if
     ``sub_category`` is blank (2026-09-22, user-requested Weekly Sales Report
@@ -2807,7 +2882,8 @@ def _record_weekly_production() -> None:
             if not any(ws in r.cells for r in rows):
                 continue  # week outside the grid's date range - keep its stored actual
             actual = {r.key: (r.cells[ws].actual or 0) for r in rows if ws in r.cells}
-            status = weekly_log.update_actual(ws, we, actual, SNAPSHOT_DATE, data_through)
+            info = {r.key: (r.subCategory, r.category) for r in rows}
+            status = weekly_log.update_actual(ws, we, actual, SNAPSHOT_DATE, data_through, info)
             print(f"[weekly_log] week {ws} actual updated, {status} ({sum(actual.values()):,} units)", file=sys.stderr)
 
         today = date.today()

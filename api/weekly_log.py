@@ -108,8 +108,13 @@ def weeks_needing_actual(data_through: date) -> list[tuple[str, str]]:
 
 
 def update_actual(week_start: str, week_end: str, actual_by_style: dict[str, int],
-                  as_of: date, data_through: date) -> str:
-    """Write the latest actual sale for a finished week. The week stays
+                  as_of: date, data_through: date,
+                  style_info: dict[str, tuple[str, str]] | None = None) -> str:
+    """Write the latest actual sale for a finished week. A style that sold in
+    the week but was not logged when the week started (first sale later in
+    the week) is added with a zero forecast / stock / suggestion, so the
+    week's actual total always equals the Weekly Sales Report's
+    (``style_info``: style -> (sub_category, category)). The week stays
     'settling' (actual refreshed again next time) until SETTLE_DAYS after its
     end, then becomes 'completed' (locked). Forecast / stock + WIP /
     suggestion are not touched. Then drops finished weeks older than the
@@ -119,6 +124,20 @@ def update_actual(week_start: str, week_end: str, actual_by_style: dict[str, int
     with _LOCK, _connect() as conn:
         styles = [r[0] for r in conn.execute(
             "SELECT style FROM weekly_production WHERE week_start = ?", (week_start,))]
+        label = conn.execute(
+            "SELECT month, week FROM weekly_production WHERE week_start = ? LIMIT 1", (week_start,)).fetchone()
+        missing = [s for s, q in actual_by_style.items() if q and s not in set(styles)]
+        if label and missing:
+            info = style_info or {}
+            conn.executemany(
+                """INSERT INTO weekly_production
+                   (style, sub_category, category, month, week, week_start, week_end, forecast_qty,
+                    forecast_2m_qty, available_qty, suggested_production_qty, captured_on, updated_on)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?)""",
+                [(s, info.get(s, ("", ""))[0], info.get(s, ("", ""))[1], label[0], label[1], week_start,
+                  week_end, as_of.isoformat(), as_of.isoformat()) for s in missing],
+            )
+            styles += missing
         conn.executemany(
             """UPDATE weekly_production SET actual_qty = ?, completed_on = ?, status = ?
                WHERE style = ? AND week_start = ?""",

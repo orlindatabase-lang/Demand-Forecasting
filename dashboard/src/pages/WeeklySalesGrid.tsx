@@ -31,14 +31,13 @@ import SellIcon from "@mui/icons-material/Sell";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import DownloadIcon from "@mui/icons-material/Download";
-import EventNoteIcon from "@mui/icons-material/EventNote";
 import CloseIcon from "@mui/icons-material/Close";
 import ImageNotSupportedIcon from "@mui/icons-material/ImageNotSupported";
 import PageHeader from "@/components/common/PageHeader";
 import RefreshButton from "@/components/common/RefreshButton";
+import PageTabs from "@/components/common/PageTabs";
 import { LoadingSkeleton, ErrorState } from "@/components/common/StateViews";
 import { rowsToCsv, downloadCsv } from "@/components/common/ExportButton";
-import ProductionLogDialog from "@/components/tables/ProductionLogDialog";
 import {
   useWeeklyGrid,
   useChannelSourceWeeklyTotal,
@@ -49,6 +48,7 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { dataService } from "@/services/dataService";
 import { formatNumber } from "@/utils/format";
 import type {
+  WeeklyGridResponse,
   WeeklyGridCell,
   WeeklyGridRow,
   WeeklyGridMonth,
@@ -92,9 +92,13 @@ const ROW_HEIGHT_ESTIMATE = 81;
 // fixed px height (row estimate x count, plus the two-row header) rather
 // than a vh percentage, so the row count stays consistent across window
 // sizes instead of shrinking on a shorter screen.
-const VISIBLE_ROWS = 8;
+// 2026-10-03: 6 Style rows, with the sticky TOTAL row and the horizontal
+// scrollbar added on top so they don't cover the 6th row.
+const VISIBLE_ROWS = 6;
 const HEADER_HEIGHT = 75; // both header rows combined (see HEADER_ROW1_HEIGHT)
-const TABLE_MAX_HEIGHT = HEADER_HEIGHT + VISIBLE_ROWS * ROW_HEIGHT_ESTIMATE;
+const TOTAL_ROW_HEIGHT = 72; // sticky TOTAL row at the bottom (actual + forecast + accuracy lines)
+const SCROLLBAR_HEIGHT = 12;
+const TABLE_MAX_HEIGHT = HEADER_HEIGHT + VISIBLE_ROWS * ROW_HEIGHT_ESTIMATE + TOTAL_ROW_HEIGHT + SCROLLBAR_HEIGHT;
 // Solid (not the theme's "action.hover", which is translucent rgba) - this
 // table's header row is `position: sticky` over a scrolling body, and a
 // translucent background lets the scrolling rows underneath show/bleed
@@ -642,6 +646,70 @@ function FestivalCard({ outlook }: { outlook: FestivalOutlook | null }) {
   );
 }
 
+interface OverviewTotals {
+  totalForecast: number;
+  totalActual: number;
+  totalSuggestedProduction: number;
+  currentWeekForecast: number;
+  currentWeekActual: number;
+}
+
+/** Page title, the three summary cards and the Upcoming Festival / Sale
+ * cards - shown at the top of every tab, above the tab bar. */
+function ForecastOverview({ data, totals }: { data: WeeklyGridResponse; totals: OverviewTotals }) {
+  const displayTotals = totals;
+  return (
+    <>
+      <PageHeader
+        title="Demand Forecasting"
+        actions={<RefreshButton />}
+      />
+
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }}>
+        <SummaryCard
+          label="Total Forecast (Next 2 Months)"
+          value={displayTotals.totalForecast}
+          color={FORECAST_COLOR}
+          currentWeekLabel={data.currentWeekLabel}
+          currentWeekValue={displayTotals.currentWeekForecast}
+        />
+        <SummaryCard
+          label="Total Actual Sale (Since Apr 2025)"
+          value={displayTotals.totalActual}
+          color={ACTUAL_COLOR}
+          currentWeekLabel={data.currentWeekLabel}
+          currentWeekValue={displayTotals.currentWeekActual}
+        />
+        <SummaryCard
+          label="Total Suggested Production Qty"
+          value={displayTotals.totalSuggestedProduction}
+          color={FORECAST_COLOR}
+        />
+      </Stack>
+
+      <FestivalCard outlook={data.festivalOutlook} />
+    </>
+  );
+}
+
+/** The shared top section for the other tabs (Category Analysis, Production
+ * Log): overall totals with no filters - the same
+ * request the Weekly Sales Report makes by default, so it is usually cached -
+ * then the tab bar. */
+export function SharedOverview() {
+  const { data, isLoading } = useWeeklyGrid("style", { limit: PAGE_SIZE, offset: 0 });
+  return (
+    <>
+      {isLoading ? (
+        <Box sx={{ mb: 2 }}><LoadingSkeleton /></Box>
+      ) : data ? (
+        <ForecastOverview data={data} totals={data} />
+      ) : null}
+      <PageTabs />
+    </>
+  );
+}
+
 // One flattened virtualizer item: either a normal Style row, one of its
 // expanded per-marketplace week-wise sub-rows, or a status line (loading/
 // empty/error) while that Style's breakdown is fetched (2026-09-16,
@@ -732,7 +800,6 @@ export default function WeeklySalesGrid() {
     return new Set(group?.styles.map((s) => s.name) ?? []);
   }, [catalogQuery.data, tierFilter]);
   const [lightboxStyle, setLightboxStyle] = useState<CatalogStyleImage | null>(null);
-  const [productionLogOpen, setProductionLogOpen] = useState(false);
   // Clicking a W1..W4 header on a highlighted week shows each overlapping
   // event's own real start/end date (2026-09-24, user-requested) - distinct
   // from the calendar chunk's dates, since a chunk can be a partial slice
@@ -797,7 +864,7 @@ export default function WeeklySalesGrid() {
   // CSV export already uses) and filter client-side, rather than trying to
   // paginate a set the backend doesn't know how to slice by tier.
   const tierFilterActive = tierStyleSet !== null;
-  const { data, isLoading, isError, refetch, isFetching } = useWeeklyGrid("style", {
+  const { data, isLoading, isError, refetch } = useWeeklyGrid("style", {
     limit: tierFilterActive ? FULL_EXPORT_LIMIT : PAGE_SIZE,
     offset: tierFilterActive ? 0 : offset,
     search: debouncedSearch,
@@ -1036,8 +1103,8 @@ export default function WeeklySalesGrid() {
     }
   };
 
-  if (isLoading) return <LoadingSkeleton variant="page" />;
-  if (isError || !data || !displayTotals) return <ErrorState onRetry={() => refetch()} />;
+  if (isLoading) return <><LoadingSkeleton variant="page" /><PageTabs /></>;
+  if (isError || !data || !displayTotals) return <><ErrorState onRetry={() => refetch()} /><PageTabs /></>;
 
   const page = data.total === 0 ? 0 : Math.floor(offset / PAGE_SIZE) + 1;
   const pageCount = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
@@ -1053,42 +1120,8 @@ export default function WeeklySalesGrid() {
 
   return (
     <Box>
-      <PageHeader
-        title="Demand Forecasting"
-        subtitle={
-          <>
-            Forecasted vs Actual sales, week by week, next 2 months — top number is Actual, bottom (orange) is
-            Forecast. The last column suggests how much to produce (forecast demand minus what's already
-            available).
-            {isFetching && " Refreshing…"}
-          </>
-        }
-        actions={<RefreshButton />}
-      />
-
-      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }}>
-        <SummaryCard
-          label="Total Forecast (Next 2 Months)"
-          value={displayTotals.totalForecast}
-          color={FORECAST_COLOR}
-          currentWeekLabel={data.currentWeekLabel}
-          currentWeekValue={displayTotals.currentWeekForecast}
-        />
-        <SummaryCard
-          label="Total Actual Sale (Since Apr 2025)"
-          value={displayTotals.totalActual}
-          color={ACTUAL_COLOR}
-          currentWeekLabel={data.currentWeekLabel}
-          currentWeekValue={displayTotals.currentWeekActual}
-        />
-        <SummaryCard
-          label="Total Suggested Production Qty"
-          value={displayTotals.totalSuggestedProduction}
-          color={FORECAST_COLOR}
-        />
-      </Stack>
-
-      <FestivalCard outlook={data.festivalOutlook} />
+      <ForecastOverview data={data} totals={displayTotals} />
+      <PageTabs />
 
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, alignItems: "center", mb: 2 }}>
         <TextField
@@ -1161,21 +1194,12 @@ export default function WeeklySalesGrid() {
         </FormControl>
 
         <Button
-          onClick={() => setProductionLogOpen(true)}
-          size="small"
-          variant="outlined"
-          startIcon={<EventNoteIcon fontSize="small" />}
-          sx={{ ml: "auto" }}
-        >
-          Production Log
-        </Button>
-
-        <Button
           size="small"
           variant="outlined"
           startIcon={<DownloadIcon fontSize="small" />}
           onClick={handleExportAll}
           disabled={exporting || data.total === 0}
+          sx={{ ml: "auto" }}
         >
           {exporting ? "Exporting…" : "Export Full Report"}
         </Button>
@@ -1967,7 +1991,6 @@ export default function WeeklySalesGrid() {
         </Box>
       </Paper>
 
-      <ProductionLogDialog open={productionLogOpen} onClose={() => setProductionLogOpen(false)} />
 
       <Dialog
         open={lightboxStyle !== null}

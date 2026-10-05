@@ -234,6 +234,18 @@ def get_style_lifecycle(
     return data.get_style_lifecycle(subCategory)
 
 
+@app.get("/api/reports/category-analysis", tags=["plan"])
+def get_category_analysis(
+    level: str = Query("subCategory", pattern="^(category|subCategory)$",
+                       description="'category' or 'subCategory'"),
+) -> dict:
+    """Per month (April 2025 to now) and Category / Sub Category: styles with a
+    Gross sale, order count, units, and the units' % change vs the
+    previous month (the partial current month vs the same days of the
+    previous month) - the Category Analysis page (2026-10-03, user-requested)."""
+    return data.get_category_analysis(level)
+
+
 @app.get(
     "/api/reports/channel-source/{style}/weekly",
     response_model=ChannelSourceWeeklyResponse,

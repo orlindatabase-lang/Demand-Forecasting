@@ -171,3 +171,23 @@ export interface WeeklyProductionLogRow {
   completed_on: string | null;
   status: "open" | "settling" | "completed";
 }
+
+/** One (month, Category / Sub Category) row of the Category Analysis page -
+ * GET /api/reports/category-analysis. Gross sale. */
+export interface CategoryAnalysisRow {
+  month: string; // "2026-09"
+  group: string; // Category or Sub Category name
+  styles: number; // distinct styles with a sale that month
+  orders: number; // order lines
+  units: number;
+  prevUnits: number; // previous month's units (same days for the partial month)
+  changePct: number | null; // units vs prevUnits, null when prevUnits = 0
+  partial: boolean; // current month, data not complete yet
+}
+
+export interface CategoryAnalysisResponse {
+  level: "category" | "subCategory";
+  dataThrough: string;
+  partialMonth: string;
+  rows: CategoryAnalysisRow[];
+}

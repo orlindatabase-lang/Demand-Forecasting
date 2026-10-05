@@ -98,3 +98,14 @@ def test_retention_counts_settling_and_completed_weeks():
     kept = sorted({r["week_start"] for r in wl.read()})
     assert len(kept) == wl.KEEP_COMPLETED_WEEKS
     assert kept[0] == "2026-08-08"
+
+
+def test_style_first_sold_mid_week_is_added_so_totals_match():
+    _save("2026-09-24", "2026-09-30", "2026-09-24", styles=("A",))
+    wl.update_actual("2026-09-24", "2026-09-30", {"A": 50, "NEW": 2, "ZERO": 0}, date(2026, 10, 2), date(2026, 10, 2),
+                     {"NEW": ("Kurta", "Ethnic")})
+    rows = {r["style"]: r for r in wl.read() if r["week_start"] == "2026-09-24"}
+    assert set(rows) == {"A", "NEW"}  # styles with no sale are not added
+    assert sum(r["actual_qty"] for r in rows.values()) == 52
+    new = rows["NEW"]
+    assert (new["forecast_qty"], new["forecast_2m_qty"], new["available_qty"], new["sub_category"], new["week"]) == (0, 0, 0, "Kurta", "W4")

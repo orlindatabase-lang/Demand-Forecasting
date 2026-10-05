@@ -5,6 +5,7 @@ import type {
   CatalogStyleTiersResponse,
   StyleLifecycleResponse,
   WeeklyProductionLogRow,
+  CategoryAnalysisResponse,
 } from "@/types";
 
 export interface AdminRefreshResponse {
@@ -16,21 +17,6 @@ export interface AdminRefreshResponse {
   forecastSnapshot: string; // snapshot the served model was trained on ("" = none)
   modelTraining: boolean;
   lgbmPending: boolean;
-}
-
-// --- Inventory Planning ----------------------------------------------------------- //
-export interface InventoryPlanningRow {
-  design: string;
-  size: string;
-  currentStock: number;
-  dailyRunRate: number;
-  daysToFinish: number;
-}
-
-export interface InventoryPlanningResponse {
-  available: boolean;
-  total: number;
-  items: InventoryPlanningRow[];
 }
 
 export const dataService = {
@@ -66,9 +52,10 @@ export const dataService = {
     return apiGet<WeeklyProductionLogRow[]>("/api/reports/weekly-production-log");
   },
 
-  /** Finished-goods inventory planning by design. */
-  async inventoryPlanning(limit = 500) {
-    return apiGet<InventoryPlanningResponse>(`/api/inventory/planning?limit=${limit}`);
+  /** Monthly styles / orders / units / order spike per Category or Sub
+   * Category, April 2025 to now - the Category Analysis page. */
+  async categoryAnalysis(level: "category" | "subCategory") {
+    return apiGet<CategoryAnalysisResponse>(`/api/reports/category-analysis?level=${level}`);
   },
 
   /** Per-marketplace week-wise Gross Sale for one Style, on the same week

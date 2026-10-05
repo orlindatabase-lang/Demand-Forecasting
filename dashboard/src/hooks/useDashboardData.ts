@@ -21,14 +21,6 @@ export function useWeeklyGrid(
   });
 }
 
-export function useInventoryPlanning() {
-  return useQuery({
-    queryKey: ["inventoryPlanning"],
-    queryFn: () => dataService.inventoryPlanning(500),
-    refetchInterval: REFRESH_MS,
-  });
-}
-
 export function useChannelSourceWeekly(style: string | null, weeks = 9) {
   return useQuery({
     queryKey: ["channelSourceWeekly", style, weeks],
@@ -77,5 +69,15 @@ export function useWeeklyProductionLog(enabled: boolean) {
     queryFn: () => dataService.weeklyProductionLog(),
     refetchInterval: REFRESH_MS,
     enabled,
+  });
+}
+
+/** Category Analysis page - one query per level (category / subCategory). */
+export function useCategoryAnalysis(level: "category" | "subCategory") {
+  return useQuery({
+    queryKey: ["categoryAnalysis", level],
+    queryFn: () => dataService.categoryAnalysis(level),
+    refetchInterval: 10 * REFRESH_MS,
+    placeholderData: keepPreviousData,
   });
 }

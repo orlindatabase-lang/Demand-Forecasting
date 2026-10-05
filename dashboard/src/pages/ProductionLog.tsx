@@ -3,11 +3,7 @@ import {
   Box,
   Button,
   Chip,
-  Dialog,
-  DialogContent,
-  DialogTitle,
   FormControl,
-  IconButton,
   InputAdornment,
   InputLabel,
   MenuItem,
@@ -26,7 +22,7 @@ import {
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import DownloadIcon from "@mui/icons-material/Download";
-import CloseIcon from "@mui/icons-material/Close";
+import PageHeader from "@/components/common/PageHeader";
 import { LoadingSkeleton, ErrorState } from "@/components/common/StateViews";
 import { rowsToCsv, downloadCsv } from "@/components/common/ExportButton";
 import { useCatalogStyleTiers, useWeeklyProductionLog } from "@/hooks/useDashboardData";
@@ -109,9 +105,10 @@ const numCell = {
 } as const;
 const styleCell = { width: STYLE_COL_WIDTH, minWidth: STYLE_COL_WIDTH, maxWidth: STYLE_COL_WIDTH } as const;
 
-/** Production Log popup, opened from the Weekly Sales Report toolbar. */
-export default function ProductionLogDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { data, isLoading, isError, refetch } = useWeeklyProductionLog(open);
+/** Production Log page (its own tab): per Style and report week, the
+ * forecast, stock + WIP, suggested production and actual sale. */
+export default function ProductionLog() {
+  const { data, isLoading, isError, refetch } = useWeeklyProductionLog(true);
   const [searchText, setSearchText] = useState("");
   const search = useDebouncedValue(searchText, 250);
   const [category, setCategory] = useState("all");
@@ -234,21 +231,10 @@ export default function ProductionLogDialog({ open, onClose }: { open: boolean; 
   };
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xl">
-      <DialogTitle sx={{ pr: 7 }}>
-        <Typography component="span" variant="h6" sx={{ fontWeight: 800, display: "block" }}>
-          Production Log
-        </Typography>
-        <Typography component="span" variant="body2" sx={{ color: "text.secondary", display: "block" }}>
-          For each report week: the style's forecast for the next ~2 months, stock + WIP, suggested production and actual
-          sale. Running weeks update with every data refresh. After a week ends it is "Settling" for 14 days - its actual still
-          updates as late marketplace orders arrive - then "Completed" and locked. Keeps the latest 8 finished weeks.
-        </Typography>
-        <IconButton aria-label="Close" onClick={onClose} sx={{ position: "absolute", top: 12, right: 12 }}>
-          <CloseIcon />
-        </IconButton>
-      </DialogTitle>
-      <DialogContent dividers>
+    <Box>
+      <PageHeader
+        title="Production Log"
+      />
       {isLoading ? (
         <LoadingSkeleton />
       ) : isError ? (
@@ -362,7 +348,7 @@ export default function ProductionLogDialog({ open, onClose }: { open: boolean; 
         </Paper>
       ) : (
         <Paper variant="outlined">
-          <TableContainer sx={{ maxHeight: "60vh" }}>
+          <TableContainer sx={{ maxHeight: "70vh" }}>
             <Table size="small" stickyHeader sx={{ width: "max-content", "& td, & th": { borderColor: "divider" } }}>
               <TableHead>
                 <TableRow>
@@ -499,15 +485,8 @@ export default function ProductionLogDialog({ open, onClose }: { open: boolean; 
           />
         </Paper>
       )}
-      <Typography variant="caption" sx={{ display: "block", mt: 1, color: "text.secondary" }}>
-        Forecast is the style's total forecast for the ~2 months from the week, Available is its stock + WIP, and Suggested =
-        Forecast − Available (0 when stock covers it). While a week is running these three update with every data refresh; when
-        the week ends they are locked and its Actual is filled in. The Actual keeps updating for 14 days (late marketplace orders),
-        then the week is completed and fully locked. Sorted by the latest week's suggested production.
-      </Typography>
       </>
       )}
-      </DialogContent>
-    </Dialog>
+    </Box>
   );
 }

@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Box, CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 
-import InventoryPlanning from "@/pages/InventoryPlanning";
-import WeeklySalesGrid from "@/pages/WeeklySalesGrid";
+import CategoryAnalysis from "@/pages/CategoryAnalysis";
+import ProductionLog from "@/pages/ProductionLog";
+import WeeklySalesGrid, { SharedOverview } from "@/pages/WeeklySalesGrid";
 import { ApiError } from "@/services/api";
 
 const isLoadingResponse = (error: unknown) => error instanceof ApiError && error.status === 503;
@@ -34,6 +36,17 @@ const theme = createTheme({
   },
 });
 
+/** Forecast overview (summary + festival/sale cards) and the tab bar above a
+ * page. The Weekly Sales Report renders its own, filter-aware version. */
+function WithOverview({ children }: { children: ReactNode }) {
+  return (
+    <>
+      <SharedOverview />
+      {children}
+    </>
+  );
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -45,7 +58,9 @@ export default function App() {
               <Box component="main" sx={{ p: 3 }}>
                 <Routes>
                   <Route path="/" element={<WeeklySalesGrid />} />
-                  <Route path="/inventory" element={<InventoryPlanning />} />
+                  <Route path="/analysis/sub-category" element={<WithOverview><CategoryAnalysis key="subCategory" level="subCategory" /></WithOverview>} />
+                  <Route path="/analysis/category" element={<WithOverview><CategoryAnalysis key="category" level="category" /></WithOverview>} />
+                  <Route path="/production-log" element={<WithOverview><ProductionLog /></WithOverview>} />
                   <Route path="/reports/weekly-sales" element={<WeeklySalesGrid />} />
                 </Routes>
               </Box>
