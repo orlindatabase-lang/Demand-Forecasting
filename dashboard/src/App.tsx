@@ -60,6 +60,7 @@ export default function App() {
                   <Route path="/" element={<WeeklySalesGrid />} />
                   <Route path="/analysis/sub-category" element={<WithOverview><CategoryAnalysis key="subCategory" level="subCategory" /></WithOverview>} />
                   <Route path="/analysis/category" element={<WithOverview><CategoryAnalysis key="category" level="category" /></WithOverview>} />
+                  <Route path="/analysis/tiers" element={<WithOverview><CategoryAnalysis key="style" level="style" /></WithOverview>} />
                   <Route path="/production-log" element={<WithOverview><ProductionLog /></WithOverview>} />
                   <Route path="/reports/weekly-sales" element={<WeeklySalesGrid />} />
                 </Routes>

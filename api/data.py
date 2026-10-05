@@ -1910,6 +1910,9 @@ def _warm_caches() -> None:
         # Also records the Sub Category rows' running-week forecasts (see
         # forecast_freeze.py) even on days nobody opens that grouping.
         get_weekly_grid("subCategory", 9, 200, 0, "", "", "")
+        # Sub Category / Category / Tiers Spike Rate tabs (2026-10-05).
+        for _level in ("subCategory", "category", "style"):
+            get_category_analysis(_level)
     except Exception as exc:  # noqa: BLE001 — a slow first request beats a broken rebuild
         print(f"[data] cache warm-up failed ({exc!r})", file=sys.stderr)
 
@@ -2783,8 +2786,8 @@ def get_category_analysis(level: str = "subCategory") -> dict:
     SAME days of the previous month (1..day) instead of the whole month."""
     import pandas as pd
 
-    if level not in ("category", "subCategory"):
-        raise ValueError(f"level must be 'category' or 'subCategory', got {level!r}")
+    if level not in ("category", "subCategory", "style"):
+        raise ValueError(f"level must be 'category', 'subCategory' or 'style', got {level!r}")
     cache_key = (_DATA_VERSION, level)
     if cache_key in _CATEGORY_ANALYSIS_CACHE:
         return _CATEGORY_ANALYSIS_CACHE[cache_key]
@@ -2796,45 +2799,54 @@ def get_category_analysis(level: str = "subCategory") -> dict:
     df = df[(df["order_date"] >= pd.Timestamp(_CATEGORY_ANALYSIS_START))
             & (df["order_date"] < pd.Timestamp(SNAPSHOT_DATE) + pd.Timedelta(days=1))]
     designs = df["DESIGN_NO"].astype(str)
-    group_of = design_attributes.category_of if level == "category" else design_attributes.sub_category_of
-    mapping = {d: (group_of(d) or "Unclassified") for d in designs.unique()}
+    if level == "style":
+        # One row per style (Tiers Spike Rate tab, 2026-10-05, user-requested);
+        # its Sub Category is sent alongside for display.
+        mapping = {d: d for d in designs.unique()}
+        plan_sub = {r.designNo: r.subCategory for r in PLAN_ROWS if r.designNo}
+        out["subCategoryOf"] = {d: plan_sub.get(d) or design_attributes.sub_category_of(d) or "" for d in mapping}
+    else:
+        group_of = design_attributes.category_of if level == "category" else design_attributes.sub_category_of
+        mapping = {d: (group_of(d) or "Unclassified") for d in designs.unique()}
+    # Months as "YYYY-MM" strings via the 12 possible period values (fast), and
+    # whole-column operations below instead of a per-row loop (2026-10-05:
+    # the style level has ~13k month x style rows).
     frame = pd.DataFrame({
         "month": df["_month"].astype(str),
         "group": designs.map(mapping),
-        "style": designs,
         "qty": pd.to_numeric(df["qty"], errors="coerce").fillna(0),
         "day": df["order_date"].dt.day,
     })
-    agg = frame.groupby(["month", "group"]).agg(
-        styles=("style", "nunique"), orders=("qty", "size"), units=("qty", "sum"))
+    if level != "style":
+        frame["style"] = designs
+    grouped = frame.groupby(["month", "group"], sort=False)
+    agg = grouped.agg(orders=("qty", "size"), units=("qty", "sum")).reset_index()
+    agg["styles"] = 1 if level == "style" else grouped["style"].nunique().to_numpy()
+    agg["units"] = agg["units"].round().astype(int)
 
     partial = f"{SNAPSHOT_DATE.year:04d}-{SNAPSHOT_DATE.month:02d}"
     is_partial = SNAPSHOT_DATE != (pd.Timestamp(SNAPSHOT_DATE) + pd.offsets.MonthEnd(0)).date()
     prev_partial = str(pd.Period(partial, freq="M") - 1)
-    # Previous month's units over the same days as the partial current month.
-    same_days_prev = (frame[(frame["month"] == prev_partial) & (frame["day"] <= SNAPSHOT_DATE.day)]
-                      .groupby("group")["qty"].sum())
-
-    units_by = agg["units"].to_dict()
-    rows = []
-    for (month, group), r in agg.iterrows():
-        prev_month = str(pd.Period(month, freq="M") - 1)
-        if is_partial and month == partial:
-            prev_units = int(round(float(same_days_prev.get(group, 0))))
-        else:
-            prev_units = int(round(float(units_by.get((prev_month, group), 0))))
-        units = int(round(float(r["units"])))
-        rows.append({
-            "month": month,
-            "group": group,
-            "styles": int(r["styles"]),
-            "orders": int(r["orders"]),
-            "units": units,
-            "prevUnits": prev_units,
-            "changePct": round((units - prev_units) / prev_units * 100, 1) if prev_units > 0 else None,
-            "partial": bool(is_partial and month == partial),
-        })
-    rows.sort(key=lambda x: (x["month"], x["units"]), reverse=True)
+    # Previous month's units: the whole previous month, except for the partial
+    # current month, which is compared with the same days (1..day) of the previous one.
+    agg["prev_month"] = (pd.PeriodIndex(agg["month"], freq="M") - 1).astype(str)
+    prev_full = agg[["month", "group", "units"]].rename(columns={"month": "prev_month", "units": "prevUnits"})
+    agg = agg.merge(prev_full, on=["prev_month", "group"], how="left")
+    agg["prevUnits"] = agg["prevUnits"].astype("float64")
+    agg["partial"] = bool(is_partial) & (agg["month"] == partial)
+    if is_partial:
+        same_days_prev = (frame[(frame["month"] == prev_partial) & (frame["day"] <= SNAPSHOT_DATE.day)]
+                          .groupby("group")["qty"].sum().round())
+        agg.loc[agg["partial"], "prevUnits"] = agg.loc[agg["partial"], "group"].map(same_days_prev).astype("float64").to_numpy()
+    agg["prevUnits"] = agg["prevUnits"].fillna(0).astype(int)
+    prev = agg["prevUnits"].where(agg["prevUnits"] > 0)
+    agg["changePct"] = ((agg["units"] - prev) / prev * 100).round(1)
+    agg = agg.sort_values(["month", "units"], ascending=False)
+    agg["changePct"] = agg["changePct"].astype(object).where(agg["changePct"].notna(), None)
+    rows = agg[["month", "group", "styles", "orders", "units", "prevUnits", "changePct", "partial"]].to_dict("records")
+    for r in rows:  # plain Python types for JSON
+        r["styles"], r["orders"], r["units"], r["prevUnits"] = int(r["styles"]), int(r["orders"]), int(r["units"]), int(r["prevUnits"])
+        r["partial"] = bool(r["partial"])
     out.update(partialMonth=partial if is_partial else "", rows=rows)
     if len(_CATEGORY_ANALYSIS_CACHE) > 8:
         _CATEGORY_ANALYSIS_CACHE.clear()

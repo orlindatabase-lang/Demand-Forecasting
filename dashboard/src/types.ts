@@ -186,8 +186,9 @@ export interface CategoryAnalysisRow {
 }
 
 export interface CategoryAnalysisResponse {
-  level: "category" | "subCategory";
+  level: "category" | "subCategory" | "style";
   dataThrough: string;
+  subCategoryOf?: Record<string, string>; // style level only
   partialMonth: string;
   rows: CategoryAnalysisRow[];
 }

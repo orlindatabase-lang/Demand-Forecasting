@@ -73,7 +73,7 @@ export function useWeeklyProductionLog(enabled: boolean) {
 }
 
 /** Category Analysis page - one query per level (category / subCategory). */
-export function useCategoryAnalysis(level: "category" | "subCategory") {
+export function useCategoryAnalysis(level: "category" | "subCategory" | "style") {
   return useQuery({
     queryKey: ["categoryAnalysis", level],
     queryFn: () => dataService.categoryAnalysis(level),

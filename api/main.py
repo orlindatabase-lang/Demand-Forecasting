@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 # Load the data in the background (see data.start_background_load) so the
@@ -135,6 +136,10 @@ async def _wait_for_data(request: Request, call_next):
 # real exposure beyond what's already decided: both services are deployed
 # with unauthenticated access, so an arbitrary script (not just a browser
 # bound by CORS) could call this API regardless of this regex.
+# Compress JSON responses (2026-10-05): the report payloads are 1-2 MB of
+# repetitive JSON and shrink ~8-10x, which matters most over the internet.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"https://[a-z0-9-]+-[a-z0-9]+\.[a-z0-9-]+\.run\.app|http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+):\d+",
@@ -236,8 +241,8 @@ def get_style_lifecycle(
 
 @app.get("/api/reports/category-analysis", tags=["plan"])
 def get_category_analysis(
-    level: str = Query("subCategory", pattern="^(category|subCategory)$",
-                       description="'category' or 'subCategory'"),
+    level: str = Query("subCategory", pattern="^(category|subCategory|style)$",
+                       description="'category', 'subCategory' or 'style' (one row per style)"),
 ) -> dict:
     """Per month (April 2025 to now) and Category / Sub Category: styles with a
     Gross sale, order count, units, and the units' % change vs the

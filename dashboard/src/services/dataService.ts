@@ -54,7 +54,7 @@ export const dataService = {
 
   /** Monthly styles / orders / units / order spike per Category or Sub
    * Category, April 2025 to now - the Category Analysis page. */
-  async categoryAnalysis(level: "category" | "subCategory") {
+  async categoryAnalysis(level: "category" | "subCategory" | "style") {
     return apiGet<CategoryAnalysisResponse>(`/api/reports/category-analysis?level=${level}`);
   },
 

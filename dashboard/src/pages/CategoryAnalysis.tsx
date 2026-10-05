@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   Button,
+  Chip,
   InputAdornment,
   Paper,
   Stack,
@@ -10,6 +11,7 @@ import {
   TableCell,
   TableContainer,
   TableHead,
+  TablePagination,
   TableRow,
   TextField,
   Tooltip,
@@ -21,12 +23,12 @@ import PageHeader from "@/components/common/PageHeader";
 import CategoryAnalysisCharts from "@/components/charts/CategoryAnalysisCharts";
 import { rowsToCsv, downloadCsv } from "@/components/common/ExportButton";
 import { LoadingSkeleton, ErrorState } from "@/components/common/StateViews";
-import { useCategoryAnalysis } from "@/hooks/useDashboardData";
+import { useCatalogStyleTiers, useCategoryAnalysis } from "@/hooks/useDashboardData";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { formatNumber } from "@/utils/format";
 import type { CategoryAnalysisRow } from "@/types";
 
-type Level = "category" | "subCategory";
+type Level = "category" | "subCategory" | "style";
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const HEADER_BG = "#eef0f5";
@@ -39,6 +41,7 @@ const DOWN_COLOR = "#dc2626";
 const GROUP_COL_WIDTH = 220;
 const NUM_COL_WIDTH = 84;
 const ROW_H1 = 38; // month header row height (the second header row sticks below it)
+const STYLE_PAGE_SIZE = 100; // style level: ~1,500 rows, rendered one page at a time
 
 const METRICS = [
   { key: "styles", label: "STYLES", color: STYLE_COLOR },
@@ -118,12 +121,26 @@ const groupCell = { width: GROUP_COL_WIDTH, minWidth: GROUP_COL_WIDTH, maxWidth:
 /** Category Analysis page: one row per Category / Sub Category, one column
  * group per month (April 2025 to now) - styles sold, orders, units and the
  * month-on-month spike in units sold. */
-/** One page per level: the app's SUB CATEGORY and CATEGORY tabs. */
+/** One page per level: the app's SUB CATEGORY, CATEGORY and TIERS SPIKE RATE
+ * (one row per style, with tier buttons) tabs. */
 export default function CategoryAnalysis({ level }: { level: Level }) {
   const [searchText, setSearchText] = useState("");
   const search = useDebouncedValue(searchText, 200);
+  const [tier, setTier] = useState("all");
+  const [page, setPage] = useState(0);
   const { data, isLoading, isError, refetch } = useCategoryAnalysis(level);
-  const groupName = level === "category" ? "Category" : "Sub Category";
+  const isStyle = level === "style";
+  const groupName = level === "category" ? "Category" : level === "style" ? "Style" : "Sub Category";
+  const metrics = isStyle ? METRICS.filter((mt) => mt.key !== "styles") : METRICS;
+
+  // Catalog tier per style (Cloud SQL CatalogStyle.forecastStatus) - the same
+  // tier lists as the Weekly Sales Report and Production Log.
+  const catalogQuery = useCatalogStyleTiers();
+  const tierOf = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const g of catalogQuery.data?.tiers ?? []) for (const st of g.styles) map.set(st.name, g.tier);
+    return map;
+  }, [catalogQuery.data]);
   const dataThrough = data?.dataThrough ?? "";
   const partialMonth = data?.partialMonth ?? "";
 
@@ -149,8 +166,21 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return q ? groups.filter((g) => g.group.toLowerCase().includes(q)) : groups;
-  }, [groups, search]);
+    return groups.filter(
+      (g) => (!q || g.group.toLowerCase().includes(q)) && (!isStyle || tier === "all" || tierOf.get(g.group) === tier),
+    );
+  }, [groups, search, isStyle, tier, tierOf]);
+  // Tier buttons: number of styles per tier that appear in this table.
+  const tierCounts = useMemo(() => {
+    if (!isStyle) return [];
+    const counts = new Map<string, number>();
+    for (const g of groups) {
+      const t = tierOf.get(g.group);
+      if (t) counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    return (catalogQuery.data?.tiers ?? []).map((g) => ({ tier: g.tier, count: counts.get(g.tier) ?? 0 })).filter((g) => g.count > 0);
+  }, [isStyle, groups, tierOf, catalogQuery.data]);
+  const pageRows = isStyle ? filtered.slice(page * STYLE_PAGE_SIZE, (page + 1) * STYLE_PAGE_SIZE) : filtered;
 
   // TOTAL row across the shown groups; its spike is recomputed from summed orders.
   const totals = useMemo(() => {
@@ -180,17 +210,21 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
   const handleExport = () => {
     const rows = [...filtered.map((g) => ({ name: g.group, months: g.months })), { name: "TOTAL", months: totals }].map(({ name, months: cells }) => {
       const out: Record<string, unknown> = { [groupName]: name };
+      if (isStyle) {
+        out.Tier = tierOf.get(name) ?? "";
+        out["Sub Category"] = data?.subCategoryOf?.[name] ?? "";
+      }
       for (const m of months) {
         const c = cells[m];
         const label = shortMonth(m) + (m === partialMonth ? ` (to ${dayLabel(dataThrough)})` : "");
-        out[`${label} Styles`] = c?.styles ?? "";
+        if (!isStyle) out[`${label} Styles`] = c?.styles ?? "";
         out[`${label} Orders`] = c?.orders ?? "";
         out[`${label} Units`] = c?.units ?? "";
         out[`${label} Spike %`] = c?.changePct ?? "";
       }
       return out;
     });
-    downloadCsv(rowsToCsv(rows), `category_analysis_${level}`);
+    downloadCsv(rowsToCsv(rows), isStyle ? "tiers_spike_rate" : `category_analysis_${level}`);
   };
 
   const renderCells = (cells: Record<string, Cell>, bold: boolean) =>
@@ -200,7 +234,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
       const base = { ...numCell, bgcolor: bold ? HEADER_BG : bg, fontWeight: bold ? 800 : 400 };
       return (
         <Fragment key={m}>
-          <TableCell sx={{ ...base, color: STYLE_COLOR }}>{c ? formatNumber(c.styles) : "—"}</TableCell>
+          {!isStyle && <TableCell sx={{ ...base, color: STYLE_COLOR }}>{c ? formatNumber(c.styles) : "—"}</TableCell>}
           <TableCell sx={{ ...base, color: ORDER_COLOR, fontWeight: bold ? 800 : 600 }}>{c ? formatNumber(c.orders) : "—"}</TableCell>
           <TableCell sx={{ ...base, color: UNIT_COLOR }}>{c ? formatNumber(c.units) : "—"}</TableCell>
           <TableCell sx={{ ...base, borderRight: 1, borderRightColor: "divider" }}>
@@ -213,7 +247,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
   return (
     <Box>
       <PageHeader
-        title={`${groupName} Analysis`}
+        title={isStyle ? "Tiers Spike Rate" : `${groupName} Analysis`}
       />
 
       {isLoading ? (
@@ -227,7 +261,10 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
               size="small"
               placeholder={`Search ${groupName.toLowerCase()}…`}
               value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
+              onChange={(e) => {
+                setSearchText(e.target.value);
+                setPage(0);
+              }}
               InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
               sx={{ minWidth: 260 }}
             />
@@ -243,6 +280,43 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
             </Button>
           </Stack>
 
+          {isStyle && tierCounts.length > 0 && (
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center", mb: 2 }}>
+              <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700, mr: 0.5 }}>
+                TIER:
+              </Typography>
+              {[{ tier: "all", count: groups.length }, ...tierCounts].map((o) => {
+                const active = tier === o.tier;
+                return (
+                  <Button
+                    key={o.tier}
+                    onClick={() => {
+                      setTier(o.tier);
+                      setPage(0);
+                    }}
+                    variant={active ? "contained" : "outlined"}
+                    size="small"
+                    sx={{
+                      borderRadius: 999, textTransform: "none", fontWeight: 700, px: 1.75,
+                      ...(active ? { bgcolor: ORDER_COLOR, "&:hover": { bgcolor: ORDER_COLOR } } : { color: ORDER_COLOR, borderColor: ORDER_COLOR }),
+                    }}
+                  >
+                    {o.tier === "all" ? "All Tiers" : o.tier}
+                    <Chip
+                      label={formatNumber(o.count)}
+                      size="small"
+                      sx={{
+                        ml: 0.75, height: 18, fontSize: "0.68rem", fontWeight: 700,
+                        bgcolor: active ? "rgba(255,255,255,0.25)" : "rgba(49,44,92,0.1)",
+                        color: active ? "#fff" : ORDER_COLOR,
+                      }}
+                    />
+                  </Button>
+                );
+              })}
+            </Box>
+          )}
+
           <Paper variant="outlined">
             <TableContainer ref={scrollRef} sx={{ maxHeight: "72vh" }}>
               <Table size="small" stickyHeader sx={{ width: "max-content", "& td, & th": { borderColor: "divider" } }}>
@@ -257,7 +331,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                     {months.map((m, i) => (
                       <TableCell
                         key={m}
-                        colSpan={4}
+                        colSpan={metrics.length}
                         align="center"
                         sx={{ bgcolor: i % 2 ? "#e6e9f1" : HEADER_BG, fontWeight: 800, borderRight: 1, borderRightColor: "divider", height: ROW_H1 }}
                       >
@@ -273,7 +347,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                   <TableRow>
                     {months.map((m, i) => (
                       <Fragment key={m}>
-                        {METRICS.map((mt) => (
+                        {metrics.map((mt) => (
                           <TableCell
                             key={mt.key}
                             sx={{
@@ -290,10 +364,22 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {filtered.map((g) => (
+                  {pageRows.map((g) => (
                     <TableRow key={g.group} hover>
                       <TableCell sx={{ ...groupCell, position: "sticky", left: 0, bgcolor: "background.paper", zIndex: 1, borderRight: 1, borderRightColor: "divider" }}>
-                        <Typography variant="body2" sx={{ fontWeight: 700 }}>{g.group}</Typography>
+                        <Stack direction="row" spacing={0.75} alignItems="center">
+                          <Typography variant="body2" sx={{ fontWeight: 700 }}>{g.group}</Typography>
+                          {isStyle && tierOf.get(g.group) && (
+                            <Chip
+                              label={tierOf.get(g.group)}
+                              size="small"
+                              sx={{ height: 18, fontSize: "0.65rem", fontWeight: 700, bgcolor: "rgba(49,44,92,0.1)", color: ORDER_COLOR }}
+                            />
+                          )}
+                        </Stack>
+                        {isStyle && data?.subCategoryOf?.[g.group] && (
+                          <Typography variant="caption" sx={{ color: "text.secondary" }}>{data.subCategoryOf[g.group]}</Typography>
+                        )}
                       </TableCell>
                       {renderCells(g.months, false)}
                     </TableRow>
@@ -302,7 +388,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                     <TableCell sx={{ ...groupCell, left: 0, zIndex: 2, bgcolor: HEADER_BG, fontWeight: 800, borderRight: 1, borderRightColor: "divider" }}>
                       TOTAL
                       <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
-                        {formatNumber(filtered.length)} {level === "category" ? "categories" : "sub categories"}
+                        {formatNumber(filtered.length)} {level === "category" ? "categories" : isStyle ? "styles" : "sub categories"}
                       </Typography>
                     </TableCell>
                     {renderCells(totals, true)}
@@ -310,11 +396,21 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                 </TableBody>
               </Table>
             </TableContainer>
+            {isStyle && (
+              <TablePagination
+                component="div"
+                count={filtered.length}
+                page={Math.min(page, Math.max(0, Math.ceil(filtered.length / STYLE_PAGE_SIZE) - 1))}
+                onPageChange={(_e, p) => setPage(p)}
+                rowsPerPage={STYLE_PAGE_SIZE}
+                rowsPerPageOptions={[STYLE_PAGE_SIZE]}
+              />
+            )}
           </Paper>
 
           <Box sx={{ mt: 3 }}>
             <CategoryAnalysisCharts
-              key={level}
+              key={`${level}-${tier}`}
               months={months}
               groups={filtered}
               totals={totals}
