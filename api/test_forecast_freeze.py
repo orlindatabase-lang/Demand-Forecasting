@@ -1,5 +1,5 @@
-"""Tests for forecast_freeze.py: completed report weeks keep the value saved
-while they were still open; running/upcoming weeks follow the live value.
+"""Tests for forecast_freeze.py: running and completed report weeks keep the
+value saved before they started; upcoming weeks follow the live value.
 
 Run: python -m pytest api/test_forecast_freeze.py -v
 """
@@ -23,19 +23,28 @@ def temp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(ff, "_DB", tmp_path / "freeze.sqlite")
 
 
-def test_open_weeks_follow_live_values():
-    ff.apply("s", {"A": {"2026-09-24": 10, "2026-10-01": 20}}, ENDS, date(2026, 9, 29))
-    out = ff.apply("s", {"A": {"2026-09-24": 12, "2026-10-01": 25}}, ENDS, date(2026, 9, 30))
-    assert out["A"] == {"2026-09-24": 12, "2026-10-01": 25}
+def test_upcoming_weeks_follow_live_values():
+    ff.apply("s", {"A": {"2026-10-01": 20}}, ENDS, date(2026, 9, 29))
+    out = ff.apply("s", {"A": {"2026-10-01": 25}}, ENDS, date(2026, 9, 30))
+    assert out["A"] == {"2026-10-01": 25}
 
 
-def test_completed_week_keeps_last_open_value():
-    ff.apply("s", {"A": {"2026-09-24": 12}}, ENDS, date(2026, 9, 30))       # last day of the week
-    out = ff.apply("s", {"A": {"2026-09-24": 99}}, ENDS, date(2026, 10, 1))  # week over, retrained
-    assert out["A"]["2026-09-24"] == 12
-    out = ff.apply("s", {"A": {"2026-09-24": 55}}, ENDS, date(2026, 10, 9))  # later refreshes
-    assert out["A"]["2026-09-24"] == 12
-    assert ff.locked("s") == {"A": {"2026-09-24": 12}}
+def test_running_week_keeps_value_saved_before_it_started():
+    ff.apply("s", {"A": {"2026-10-01": 12}}, ENDS, date(2026, 9, 30))       # day before the week
+    out = ff.apply("s", {"A": {"2026-10-01": 99}}, ENDS, date(2026, 10, 1))  # first day, retrained
+    assert out["A"]["2026-10-01"] == 12
+    out = ff.apply("s", {"A": {"2026-10-01": 40}}, ENDS, date(2026, 10, 5))  # mid-week refresh
+    assert out["A"]["2026-10-01"] == 12
+    out = ff.apply("s", {"A": {"2026-10-01": 55}}, ENDS, date(2026, 10, 9))  # after it ends
+    assert out["A"]["2026-10-01"] == 12
+    assert ff.locked("s") == {"A": {"2026-10-01": 12}}
+
+
+def test_running_week_first_seen_mid_week_locks_at_first_value():
+    out = ff.apply("s", {"A": {"2026-10-01": 30}}, ENDS, date(2026, 10, 3))
+    assert out["A"]["2026-10-01"] == 30
+    out = ff.apply("s", {"A": {"2026-10-01": 31}}, ENDS, date(2026, 10, 4))
+    assert out["A"]["2026-10-01"] == 30
 
 
 def test_week_first_seen_after_completion_locks_at_first_value():

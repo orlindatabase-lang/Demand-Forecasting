@@ -3136,9 +3136,9 @@ def _compute_weekly_grid(
 
     # Per-group forecast for every calendar-week cell (each Mon-Sun week's
     # total spread evenly over its 7 days, re-summed per cell), with every
-    # COMPLETED cell replaced by its locked value (2026-09-29, user-requested:
-    # completed weeks/months must not change on a data refresh - see
-    # forecast_freeze.py). Built for EVERY matching group, not just the page,
+    # STARTED (running or completed) cell replaced by its locked value
+    # (2026-09-29 / 2026-10-06, user-requested: completed and running weeks
+    # must not change on a data refresh - see forecast_freeze.py). Built for EVERY matching group, not just the page,
     # so the TOTAL row is the sum of the same frozen cells and every group's
     # running week gets recorded before it completes.
     chunk_parts: list[tuple[str, list[tuple[str, int]]]] = []

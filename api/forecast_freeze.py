@@ -5,13 +5,14 @@ data is refreshed - only the upcoming weeks' data changes").
 
 Every forecast cell the Weekly Sales Report (and its channel drill-downs)
 shows is keyed by (scope, key, period_start) - e.g. ("grid:style", "417-03",
-"2026-09-24"). While a period is still running or upcoming, its value is
-re-saved on every data refresh (status 'open'). Once its last day has passed,
-the value last saved while it was still open is locked (status 'locked') and
-returned from then on, regardless of what a later retrain or refresh would
-compute for it. A period first seen only after it had already finished (e.g.
-history from before this module existed) is locked at the value computed at
-that moment.
+"2026-09-24"). While a period is still upcoming, its value is re-saved on
+every data refresh (status 'open'). Once the period has started (2026-10-06,
+user-requested: the running week's forecast must be frozen too, not only
+completed weeks), the value last saved before it started is locked (status
+'locked') and returned from then on, regardless of what a later retrain or
+refresh would compute for it. A period first seen only after it had already
+started (e.g. history from before this module existed) is locked at the
+value computed at that moment.
 
 Stored as a SQLite table in api/.cache/ (a local cache, like weekly_log.py).
 """
@@ -45,15 +46,25 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _started(iso: str, end: date | None, today: date) -> bool:
+    """Has the period starting on ``iso`` begun as of ``today``?"""
+    try:
+        return date.fromisoformat(iso) <= today
+    except ValueError:
+        return end is not None and end < today
+
+
 def apply(
     scope: str,
     values: dict[str, dict[str, float]],
     period_end: dict[str, date],
     today: date | None = None,
 ) -> dict[str, dict[str, float]]:
-    """Return ``values`` ({key: {period_start_iso: qty}}) with every completed
-    period (``period_end[iso] < today``) replaced by its locked value, saving
-    open periods' current values and locking newly completed ones on the way."""
+    """Return ``values`` ({key: {period_start_iso: qty}}) with every started
+    period (start date <= ``today``, i.e. running or completed) replaced by
+    its locked value, saving upcoming periods' current values and locking
+    newly started ones on the way. ``period_end`` is kept for callers; a
+    period is also treated as started once its end date has passed."""
     today = today or date.today()
     out: dict[str, dict[str, float]] = {}
     writes: list[tuple] = []
@@ -73,7 +84,7 @@ def apply(
             for iso, qty in cells.items():
                 end = period_end.get(iso)
                 prev = stored.get((key, iso))
-                if end is not None and end < today:
+                if _started(iso, end, today):
                     if prev is None:
                         writes.append((scope, key, iso, qty, "locked", stamp))
                     elif prev[1] == "open":
@@ -84,7 +95,7 @@ def apply(
                 elif prev is None or prev[0] != qty:
                     writes.append((scope, key, iso, qty, "open", stamp))
                 row[iso] = qty
-            # A completed period locked earlier stays even if today's live
+            # A started period locked earlier stays even if today's live
             # values no longer include it (e.g. a cell that is now zero).
             for iso, q in locked_by_key.get(key, {}).items():
                 row.setdefault(iso, q)
