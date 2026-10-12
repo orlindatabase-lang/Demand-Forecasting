@@ -27,3 +27,7 @@ python-dotenv>=1.0
 # api/.cache kept in a Cloud Storage bucket on Cloud Run (api/cache_sync.py,
 # only when CACHE_BUCKET is set) so history survives restarts/redeploys.
 google-cloud-storage>=2.0
+# Season-wise design suggestions (api/design_suggest.py): attribute-effect
+# model on style x season rows. Optional - the add-on falls back to rankings
+# only if it is missing.
+catboost>=1.2

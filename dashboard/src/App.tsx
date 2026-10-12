@@ -5,6 +5,7 @@ import { Box, CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 
 import CategoryAnalysis from "@/pages/CategoryAnalysis";
 import ProductionLog from "@/pages/ProductionLog";
+import DesignSuggestions from "@/pages/DesignSuggestions";
 import WeeklySalesGrid, { SharedOverview } from "@/pages/WeeklySalesGrid";
 import { ApiError } from "@/services/api";
 
@@ -60,8 +61,9 @@ export default function App() {
                   <Route path="/" element={<WeeklySalesGrid />} />
                   <Route path="/analysis/sub-category" element={<WithOverview><CategoryAnalysis key="subCategory" level="subCategory" /></WithOverview>} />
                   <Route path="/analysis/category" element={<WithOverview><CategoryAnalysis key="category" level="category" /></WithOverview>} />
-                  <Route path="/analysis/tiers" element={<WithOverview><CategoryAnalysis key="style" level="style" /></WithOverview>} />
+                  <Route path="/analysis/tiers" element={<WithOverview><CategoryAnalysis key="tier" level="tier" /></WithOverview>} />
                   <Route path="/production-log" element={<WithOverview><ProductionLog /></WithOverview>} />
+                  <Route path="/design-suggestions" element={<WithOverview><DesignSuggestions /></WithOverview>} />
                   <Route path="/reports/weekly-sales" element={<WeeklySalesGrid />} />
                 </Routes>
               </Box>

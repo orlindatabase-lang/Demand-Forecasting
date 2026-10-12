@@ -8,6 +8,7 @@ const PAGES = [
   { path: "/analysis/sub-category", label: "Sub Category" },
   { path: "/analysis/category", label: "Category" },
   { path: "/analysis/tiers", label: "Tiers Spike Rate" },
+  { path: "/design-suggestions", label: "Design Suggestions" },
   { path: "/production-log", label: "Production Log" },
 ];
 

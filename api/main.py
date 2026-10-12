@@ -241,14 +241,25 @@ def get_style_lifecycle(
 
 @app.get("/api/reports/category-analysis", tags=["plan"])
 def get_category_analysis(
-    level: str = Query("subCategory", pattern="^(category|subCategory|style)$",
-                       description="'category', 'subCategory' or 'style' (one row per style)"),
+    level: str = Query("subCategory", pattern="^(category|subCategory|style|tier)$",
+                       description="'category', 'subCategory', 'style' (one row per style) or 'tier' (one row per catalog tier)"),
 ) -> dict:
     """Per month (April 2025 to now) and Category / Sub Category: styles with a
     Gross sale, order count, units, and the units' % change vs the
     previous month (the partial current month vs the same days of the
     previous month) - the Category Analysis page (2026-10-03, user-requested)."""
     return data.get_category_analysis(level)
+
+
+@app.get("/api/reports/category-analysis/channels", tags=["plan"])
+def get_category_analysis_channels(
+    level: str = Query("subCategory", pattern="^(category|subCategory|style|tier)$"),
+    group: str = Query(..., min_length=1, description="the Category / Sub Category / Style row to break down"),
+) -> dict:
+    """One Category Analysis row split by marketplace (Amazon, Flipkart, ...):
+    the same monthly styles / orders / units / spike - the row's channel
+    drill-down (2026-10-09, user-requested)."""
+    return data.get_category_analysis_channels(level, group)
 
 
 @app.get(
@@ -333,3 +344,15 @@ def debug_section_lookup(design: str = Query("")) -> dict:
         "bottom_sample": dict(list(sample_bottom.items())[:10]),
         "lookup": {design: data._design_section(design)} if design else {},
     }
+
+
+@app.get("/api/design/suggestions", tags=["design"])
+def get_design_suggestions() -> dict:
+    """Season-wise design suggestions for the running and upcoming season
+    (2026-10-08, user-requested add-on, see design_suggest.py): preferred
+    Category / Sub Category / Colour / Fabric, CatBoost attribute effects,
+    best and untried combinations, gaps / saturated / declining, and a
+    design-direction brief. Built in the background on first request per
+    data refresh; returns {"building": true} until ready."""
+    import design_suggest
+    return design_suggest.get_design_suggestions()

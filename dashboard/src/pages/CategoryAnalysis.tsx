@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Box,
   Button,
@@ -19,16 +19,18 @@ import {
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import DownloadIcon from "@mui/icons-material/Download";
+import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import PageHeader from "@/components/common/PageHeader";
 import CategoryAnalysisCharts from "@/components/charts/CategoryAnalysisCharts";
 import { rowsToCsv, downloadCsv } from "@/components/common/ExportButton";
 import { LoadingSkeleton, ErrorState } from "@/components/common/StateViews";
-import { useCatalogStyleTiers, useCategoryAnalysis } from "@/hooks/useDashboardData";
+import { useCatalogStyleTiers, useCategoryAnalysis, useCategoryAnalysisChannels } from "@/hooks/useDashboardData";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { formatNumber } from "@/utils/format";
 import type { CategoryAnalysisRow } from "@/types";
 
-type Level = "category" | "subCategory" | "style";
+type Level = "category" | "subCategory" | "style" | "tier";
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const HEADER_BG = "#eef0f5";
@@ -46,9 +48,22 @@ const STYLE_PAGE_SIZE = 100; // style level: ~1,500 rows, rendered one page at a
 const METRICS = [
   { key: "styles", label: "STYLES", color: STYLE_COLOR },
   { key: "orders", label: "ORDERS", color: ORDER_COLOR },
-  { key: "units", label: "UNITS", color: UNIT_COLOR },
+  // 2026-10-12, user-requested: the units cell also shows the average pieces
+  // per selling style (Units ÷ Styles) in brackets, e.g. "1,39,589 (274)".
+  { key: "units", label: "UNITS (PER STYLE)", color: UNIT_COLOR },
   { key: "spike", label: "SPIKE", color: STYLE_COLOR },
 ] as const;
+
+/** Units ÷ Styles - average pieces per style that sold that month (null when no style sold). */
+function unitsPerStyle(c: { styles: number; units: number } | undefined): number | null {
+  return c && c.styles > 0 ? c.units / c.styles : null;
+}
+
+/** Whole pieces from 10 up; one decimal below, so small averages still differ (e.g. 2.5). */
+function formatPerStyle(v: number | null): string {
+  if (v === null) return "—";
+  return v >= 10 ? formatNumber(v) : (Math.round(v * 10) / 10).toFixed(1);
+}
 
 interface Cell {
   styles: number;
@@ -117,6 +132,84 @@ const numCell = {
   width: NUM_COL_WIDTH, minWidth: NUM_COL_WIDTH,
 } as const;
 const groupCell = { width: GROUP_COL_WIDTH, minWidth: GROUP_COL_WIDTH, maxWidth: GROUP_COL_WIDTH } as const;
+const CHANNEL_BG = "#faf9ff"; // an expanded row's marketplace sub-rows
+const STYLE_ROW_BG = "#fcfcfe"; // an expanded tier's style rows
+
+/** main = a table row, child = a style inside an opened tier, channel = a marketplace row. */
+type RowVariant = "main" | "child" | "channel";
+
+/** Natural tier order: T0, T1, T2, T3, T11, T12, ... then Unclassified. */
+function tierRank(tier: string): number {
+  const n = Number(tier.replace(/\D/g, ""));
+  return /^T\d+$/i.test(tier) && Number.isFinite(n) ? n : 10_000;
+}
+
+/** Pivot flat (month, group) rows into one row per group, biggest latest-month
+ * orders first - shared by the main table and a row's channel drill-down. */
+function pivotRows(rows: CategoryAnalysisRow[]): { months: string[]; groups: GroupRow[] } {
+  const monthSet = new Set<string>();
+  const byGroup = new Map<string, GroupRow>();
+  for (const r of rows) {
+    monthSet.add(r.month);
+    let g = byGroup.get(r.group);
+    if (!g) {
+      g = { group: r.group, months: {}, latestOrders: 0 };
+      byGroup.set(r.group, g);
+    }
+    g.months[r.month] = { styles: r.styles, orders: r.orders, units: r.units, prevUnits: r.prevUnits, changePct: r.changePct };
+  }
+  const monthList = [...monthSet].sort();
+  const latest = monthList[monthList.length - 1];
+  for (const g of byGroup.values()) g.latestOrders = latest ? g.months[latest]?.orders ?? 0 : 0;
+  const groupList = [...byGroup.values()].sort((a, b) => b.latestOrders - a.latestOrders || a.group.localeCompare(b.group));
+  return { months: monthList, groups: groupList };
+}
+
+/** An expanded row's marketplace breakdown (Amazon, Flipkart, ...) - same
+ * month columns, fetched when the row is opened. */
+function ChannelRows({
+  level,
+  group,
+  colSpan,
+  renderCells,
+  indent = 4.5,
+}: {
+  level: Level;
+  group: string;
+  colSpan: number;
+  renderCells: (cells: Record<string, Cell>, bold: boolean, variant?: RowVariant) => ReactNode;
+  indent?: number;
+}) {
+  const { data, isLoading, isError } = useCategoryAnalysisChannels(level, group);
+  const channels = useMemo(() => pivotRows(data?.rows ?? []).groups, [data]);
+  const stickyCell = {
+    ...groupCell, position: "sticky", left: 0, zIndex: 1, bgcolor: CHANNEL_BG, borderRight: 1, borderRightColor: "divider", pl: indent,
+  } as const;
+  if (isLoading || isError || channels.length === 0) {
+    return (
+      <TableRow>
+        <TableCell sx={stickyCell}>
+          <Typography variant="caption" sx={{ color: isError ? DOWN_COLOR : "text.secondary" }}>
+            {isLoading ? "Loading channels…" : isError ? "Couldn't load channels" : "No channel data"}
+          </Typography>
+        </TableCell>
+        <TableCell colSpan={colSpan} sx={{ bgcolor: CHANNEL_BG }} />
+      </TableRow>
+    );
+  }
+  return (
+    <>
+      {channels.map((c) => (
+        <TableRow key={c.group}>
+          <TableCell sx={stickyCell}>
+            <Typography variant="body2" sx={{ color: "text.secondary", fontWeight: 600 }}>{c.group}</Typography>
+          </TableCell>
+          {renderCells(c.months, false, "channel")}
+        </TableRow>
+      ))}
+    </>
+  );
+}
 
 /** Category Analysis page: one row per Category / Sub Category, one column
  * group per month (April 2025 to now) - styles sold, orders, units and the
@@ -128,10 +221,33 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
   const search = useDebouncedValue(searchText, 200);
   const [tier, setTier] = useState("all");
   const [page, setPage] = useState(0);
+  // Rows opened to show their channel (marketplace) breakdown.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const toggleExpanded = (group: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(group)) next.delete(group);
+      else next.add(group);
+      return next;
+    });
   const { data, isLoading, isError, refetch } = useCategoryAnalysis(level);
   const isStyle = level === "style";
-  const groupName = level === "category" ? "Category" : level === "style" ? "Style" : "Sub Category";
-  const metrics = isStyle ? METRICS.filter((mt) => mt.key !== "styles") : METRICS;
+  // Tiers Spike Rate (2026-10-09, user-requested): one row per tier, each
+  // opening into its styles (the style-level rows), each style into its channels.
+  const isTier = level === "tier";
+  const styleQuery = useCategoryAnalysis(isTier ? "style" : level);
+  const [expandedStyles, setExpandedStyles] = useState<Set<string>>(() => new Set());
+  const toggleStyle = (style: string) =>
+    setExpandedStyles((prev) => {
+      const next = new Set(prev);
+      if (next.has(style)) next.delete(style);
+      else next.add(style);
+      return next;
+    });
+  const groupName = level === "category" ? "Category" : level === "style" ? "Style" : isTier ? "Tier" : "Sub Category";
+  const metrics = isStyle
+    ? METRICS.filter((mt) => mt.key !== "styles").map((mt) => (mt.key === "units" ? { ...mt, label: "UNITS" } : mt))
+    : METRICS;
 
   // Catalog tier per style (Cloud SQL CatalogStyle.forecastStatus) - the same
   // tier lists as the Weekly Sales Report and Production Log.
@@ -146,30 +262,31 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
 
   // Pivot the flat (month, group) rows: one row per group, months oldest -> newest.
   const { months, groups } = useMemo(() => {
-    const monthSet = new Set<string>();
-    const byGroup = new Map<string, GroupRow>();
-    for (const r of (data?.rows ?? []) as CategoryAnalysisRow[]) {
-      monthSet.add(r.month);
-      let g = byGroup.get(r.group);
-      if (!g) {
-        g = { group: r.group, months: {}, latestOrders: 0 };
-        byGroup.set(r.group, g);
-      }
-      g.months[r.month] = { styles: r.styles, orders: r.orders, units: r.units, prevUnits: r.prevUnits, changePct: r.changePct };
+    const pivot = pivotRows((data?.rows ?? []) as CategoryAnalysisRow[]);
+    if (isTier) pivot.groups.sort((a, b) => tierRank(a.group) - tierRank(b.group) || a.group.localeCompare(b.group));
+    return pivot;
+  }, [data, isTier]);
+
+  // Tiers tab: each tier's styles (biggest latest-month orders first), matching the search.
+  const q = search.trim().toLowerCase();
+  const stylesByTier = useMemo(() => {
+    const out = new Map<string, GroupRow[]>();
+    if (!isTier) return out;
+    for (const st of pivotRows((styleQuery.data?.rows ?? []) as CategoryAnalysisRow[]).groups) {
+      if (q && !st.group.toLowerCase().includes(q)) continue;
+      const t = data?.tierOf?.[st.group] ?? "Unclassified";
+      if (!out.has(t)) out.set(t, []);
+      out.get(t)!.push(st);
     }
-    const monthList = [...monthSet].sort();
-    const latest = monthList[monthList.length - 1];
-    for (const g of byGroup.values()) g.latestOrders = latest ? g.months[latest]?.orders ?? 0 : 0;
-    const groupList = [...byGroup.values()].sort((a, b) => b.latestOrders - a.latestOrders || a.group.localeCompare(b.group));
-    return { months: monthList, groups: groupList };
-  }, [data]);
+    return out;
+  }, [isTier, styleQuery.data, data, q]);
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    if (isTier) return q ? groups.filter((g) => stylesByTier.has(g.group)) : groups; // search finds styles
     return groups.filter(
       (g) => (!q || g.group.toLowerCase().includes(q)) && (!isStyle || tier === "all" || tierOf.get(g.group) === tier),
     );
-  }, [groups, search, isStyle, tier, tierOf]);
+  }, [groups, q, isStyle, isTier, stylesByTier, tier, tierOf]);
   // Tier buttons: number of styles per tier that appear in this table.
   const tierCounts = useMemo(() => {
     if (!isStyle) return [];
@@ -220,23 +337,66 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
         if (!isStyle) out[`${label} Styles`] = c?.styles ?? "";
         out[`${label} Orders`] = c?.orders ?? "";
         out[`${label} Units`] = c?.units ?? "";
+        if (!isStyle) {
+          const ups = unitsPerStyle(c);
+          out[`${label} Units/Style`] = ups === null ? "" : Math.round(ups * 10) / 10;
+        }
         out[`${label} Spike %`] = c?.changePct ?? "";
       }
       return out;
     });
-    downloadCsv(rowsToCsv(rows), isStyle ? "tiers_spike_rate" : `category_analysis_${level}`);
+    if (isTier) {
+      for (const g of filtered) {
+        for (const st of stylesByTier.get(g.group) ?? []) {
+          const out: Record<string, unknown> = { Tier: `${g.group} · ${st.group}` };
+          for (const m of months) {
+            const c = st.months[m];
+            const label = shortMonth(m) + (m === partialMonth ? ` (to ${dayLabel(dataThrough)})` : "");
+            out[`${label} Styles`] = c ? 1 : "";
+            out[`${label} Orders`] = c?.orders ?? "";
+            out[`${label} Units`] = c?.units ?? "";
+            out[`${label} Units/Style`] = c?.units ?? "";
+            out[`${label} Spike %`] = c?.changePct ?? "";
+          }
+          rows.push(out);
+        }
+      }
+    }
+    downloadCsv(rowsToCsv(rows), isStyle || isTier ? "tiers_spike_rate" : `category_analysis_${level}`);
   };
 
-  const renderCells = (cells: Record<string, Cell>, bold: boolean) =>
+  const renderCells = (cells: Record<string, Cell>, bold: boolean, variant: RowVariant = "main") =>
     months.map((m, i) => {
       const c = cells[m];
-      const bg = MONTH_BG[i % 2];
-      const base = { ...numCell, bgcolor: bold ? HEADER_BG : bg, fontWeight: bold ? 800 : 400 };
+      const bg = variant === "channel" ? CHANNEL_BG : variant === "child" ? STYLE_ROW_BG : MONTH_BG[i % 2];
+      const base = {
+        ...numCell, bgcolor: bold ? HEADER_BG : bg, fontWeight: bold ? 800 : 400,
+        ...(variant === "main" ? {} : { fontSize: "0.8rem" }),
+      };
       return (
         <Fragment key={m}>
-          {!isStyle && <TableCell sx={{ ...base, color: STYLE_COLOR }}>{c ? formatNumber(c.styles) : "—"}</TableCell>}
+          {!isStyle && (
+            <TableCell sx={{ ...base, color: STYLE_COLOR }}>
+              {/* a single style's own "styles" count is always 1 - leave it blank */}
+              {c && !(isTier && variant !== "main") ? formatNumber(c.styles) : variant === "main" || !c ? "—" : ""}
+            </TableCell>
+          )}
           <TableCell sx={{ ...base, color: ORDER_COLOR, fontWeight: bold ? 800 : 600 }}>{c ? formatNumber(c.orders) : "—"}</TableCell>
-          <TableCell sx={{ ...base, color: UNIT_COLOR }}>{c ? formatNumber(c.units) : "—"}</TableCell>
+          <TableCell sx={{ ...base, color: UNIT_COLOR, whiteSpace: "nowrap" }}>
+            {!c ? "—" : isStyle || (isTier && variant !== "main") || c.styles <= 0 ? (
+              // a single style: units per style would just repeat its units
+              formatNumber(c.units)
+            ) : (
+              <Tooltip
+                title={`${formatNumber(c.units)} units ÷ ${formatNumber(c.styles)} styles = ${formatPerStyle(unitsPerStyle(c))} units per style${m === partialMonth ? ` (month so far, to ${dayLabel(dataThrough)})` : ""}`}
+              >
+                <span>
+                  {formatNumber(c.units)}{" "}
+                  <Box component="span" sx={{ color: STYLE_COLOR, fontWeight: bold ? 700 : 500 }}>({formatPerStyle(unitsPerStyle(c))})</Box>
+                </span>
+              </Tooltip>
+            )}
+          </TableCell>
           <TableCell sx={{ ...base, borderRight: 1, borderRightColor: "divider" }}>
             <Spike cell={c} month={m} partial={m === partialMonth} dataThrough={dataThrough} />
           </TableCell>
@@ -247,7 +407,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
   return (
     <Box>
       <PageHeader
-        title={isStyle ? "Tiers Spike Rate" : `${groupName} Analysis`}
+        title={isStyle || isTier ? "Tiers Spike Rate" : `${groupName} Analysis`}
       />
 
       {isLoading ? (
@@ -259,7 +419,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
           <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 2 }}>
             <TextField
               size="small"
-              placeholder={`Search ${groupName.toLowerCase()}…`}
+              placeholder={`Search ${isTier ? "style" : groupName.toLowerCase()}…`}
               value={searchText}
               onChange={(e) => {
                 setSearchText(e.target.value);
@@ -364,31 +524,103 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {pageRows.map((g) => (
-                    <TableRow key={g.group} hover>
-                      <TableCell sx={{ ...groupCell, position: "sticky", left: 0, bgcolor: "background.paper", zIndex: 1, borderRight: 1, borderRightColor: "divider" }}>
-                        <Stack direction="row" spacing={0.75} alignItems="center">
-                          <Typography variant="body2" sx={{ fontWeight: 700 }}>{g.group}</Typography>
-                          {isStyle && tierOf.get(g.group) && (
-                            <Chip
-                              label={tierOf.get(g.group)}
-                              size="small"
-                              sx={{ height: 18, fontSize: "0.65rem", fontWeight: 700, bgcolor: "rgba(49,44,92,0.1)", color: ORDER_COLOR }}
-                            />
-                          )}
-                        </Stack>
-                        {isStyle && data?.subCategoryOf?.[g.group] && (
-                          <Typography variant="caption" sx={{ color: "text.secondary" }}>{data.subCategoryOf[g.group]}</Typography>
+                  {pageRows.map((g) => {
+                    // Searching the Tiers tab opens every tier that has a matching style.
+                    const open = expanded.has(g.group) || (isTier && q !== "");
+                    const tierStyles = isTier ? stylesByTier.get(g.group) ?? [] : [];
+                    return (
+                      <Fragment key={g.group}>
+                        <TableRow hover>
+                          <TableCell
+                            onClick={() => toggleExpanded(g.group)}
+                            title={isTier ? (open ? "Hide styles" : "Show this tier's styles") : open ? "Hide channel breakdown" : "Show channel breakdown"}
+                            sx={{
+                              ...groupCell, position: "sticky", left: 0, bgcolor: "background.paper", zIndex: 1, borderRight: 1, borderRightColor: "divider",
+                              cursor: "pointer", userSelect: "none", "&:hover": { bgcolor: "#f4f3fb" },
+                            }}
+                          >
+                            <Stack direction="row" spacing={0.5} alignItems="center">
+                              {open ? (
+                                <KeyboardArrowDownIcon fontSize="small" sx={{ color: ORDER_COLOR, ml: -0.75 }} />
+                              ) : (
+                                <KeyboardArrowRightIcon fontSize="small" sx={{ color: "text.secondary", ml: -0.75 }} />
+                              )}
+                              <Typography variant="body2" sx={{ fontWeight: 700 }}>{g.group}</Typography>
+                              {isTier && styleQuery.data && (
+                                <Chip
+                                  label={`${formatNumber(tierStyles.length)} styles`}
+                                  size="small"
+                                  sx={{ height: 18, fontSize: "0.65rem", fontWeight: 700, bgcolor: "rgba(49,44,92,0.1)", color: ORDER_COLOR }}
+                                />
+                              )}
+                              {isStyle && tierOf.get(g.group) && (
+                                <Chip
+                                  label={tierOf.get(g.group)}
+                                  size="small"
+                                  sx={{ height: 18, fontSize: "0.65rem", fontWeight: 700, bgcolor: "rgba(49,44,92,0.1)", color: ORDER_COLOR }}
+                                />
+                              )}
+                            </Stack>
+                            {isStyle && data?.subCategoryOf?.[g.group] && (
+                              <Typography variant="caption" sx={{ color: "text.secondary", pl: 2.25 }}>{data.subCategoryOf[g.group]}</Typography>
+                            )}
+                          </TableCell>
+                          {renderCells(g.months, false)}
+                        </TableRow>
+                        {open && !isTier && (
+                          <ChannelRows level={level} group={g.group} colSpan={months.length * metrics.length} renderCells={renderCells} />
                         )}
-                      </TableCell>
-                      {renderCells(g.months, false)}
-                    </TableRow>
-                  ))}
+                        {open && isTier && styleQuery.isLoading && (
+                          <TableRow>
+                            <TableCell sx={{ ...groupCell, position: "sticky", left: 0, zIndex: 1, bgcolor: STYLE_ROW_BG, borderRight: 1, borderRightColor: "divider", pl: 4 }}>
+                              <Typography variant="caption" sx={{ color: "text.secondary" }}>Loading styles…</Typography>
+                            </TableCell>
+                            <TableCell colSpan={months.length * metrics.length} sx={{ bgcolor: STYLE_ROW_BG }} />
+                          </TableRow>
+                        )}
+                        {open && isTier && tierStyles.map((st) => {
+                          const stOpen = expandedStyles.has(st.group);
+                          return (
+                            <Fragment key={st.group}>
+                              <TableRow hover>
+                                <TableCell
+                                  onClick={() => toggleStyle(st.group)}
+                                  title={stOpen ? "Hide channel breakdown" : "Show channel breakdown"}
+                                  sx={{
+                                    ...groupCell, position: "sticky", left: 0, zIndex: 1, bgcolor: STYLE_ROW_BG, borderRight: 1, borderRightColor: "divider",
+                                    pl: 3.5, cursor: "pointer", userSelect: "none", "&:hover": { bgcolor: "#f4f3fb" },
+                                  }}
+                                >
+                                  <Stack direction="row" spacing={0.5} alignItems="center">
+                                    {stOpen ? (
+                                      <KeyboardArrowDownIcon sx={{ fontSize: 18, color: ORDER_COLOR, ml: -0.75 }} />
+                                    ) : (
+                                      <KeyboardArrowRightIcon sx={{ fontSize: 18, color: "text.secondary", ml: -0.75 }} />
+                                    )}
+                                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{st.group}</Typography>
+                                  </Stack>
+                                  {styleQuery.data?.subCategoryOf?.[st.group] && (
+                                    <Typography variant="caption" sx={{ color: "text.secondary", pl: 2.25 }}>
+                                      {styleQuery.data.subCategoryOf[st.group]}
+                                    </Typography>
+                                  )}
+                                </TableCell>
+                                {renderCells(st.months, false, "child")}
+                              </TableRow>
+                              {stOpen && (
+                                <ChannelRows level="style" group={st.group} colSpan={months.length * metrics.length} renderCells={renderCells} indent={7} />
+                              )}
+                            </Fragment>
+                          );
+                        })}
+                      </Fragment>
+                    );
+                  })}
                   <TableRow sx={{ "& td": { position: "sticky", bottom: 0 } }}>
                     <TableCell sx={{ ...groupCell, left: 0, zIndex: 2, bgcolor: HEADER_BG, fontWeight: 800, borderRight: 1, borderRightColor: "divider" }}>
                       TOTAL
                       <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
-                        {formatNumber(filtered.length)} {level === "category" ? "categories" : isStyle ? "styles" : "sub categories"}
+                        {formatNumber(filtered.length)} {level === "category" ? "categories" : isStyle ? "styles" : isTier ? "tiers" : "sub categories"}
                       </Typography>
                     </TableCell>
                     {renderCells(totals, true)}

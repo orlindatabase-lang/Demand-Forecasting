@@ -344,17 +344,6 @@ function formatDateWithYear(iso: string): string {
   });
 }
 
-// "High Sale" color-coding for the festival/sale outlook's ranked lists
-// (2026-09-14, user-requested) - a sub-category/color that sold MUCH higher
-// than its own normal (pre-event) level stands out from one that just
-// happens to be a naturally big seller with little real festival lift.
-const HIGH_UPLIFT_COLOR = "#dc2626";
-function upliftColor(pct: number | null): string {
-  if (pct !== null && pct >= 100) return HIGH_UPLIFT_COLOR; // 2x+ vs normal
-  if (pct !== null && pct >= 30) return FORECAST_COLOR; // notably elevated
-  return ACTUAL_COLOR; // normal / no real lift / no baseline to compare
-}
-
 const FESTIVAL_ACCENT = "#f97316";
 const SALE_ACCENT = "#a855f7";
 // A week with BOTH a Festival and a Sale overlapping (2026-09-24, user-
@@ -374,149 +363,10 @@ function eventTint(category: string): string | undefined {
   return undefined;
 }
 
-// Best-effort swatch for a garment color name (2026-09-14, user-requested
-// visual redesign) - covers the color names actually seen in the SKU master
-// sheet's Top_Color column. Falls back to a stable hash-derived hue so an
-// unmapped name still gets a distinct, legible bar instead of one flat gray.
-const COLOR_SWATCHES: Record<string, string> = {
-  coffee: "#6f4e37",
-  grey: "#9ca3af",
-  gray: "#9ca3af",
-  "rose pink": "#f472b6",
-  pink: "#f9a8d4",
-  orange: "#f97316",
-  mustard: "#d4a017",
-  "teal blue": "#0d9488",
-  teal: "#14b8a6",
-  violet: "#8b5cf6",
-  red: "#ef4444",
-  lavender: "#c4b5fd",
-  "royal blue": "#2563eb",
-  blue: "#3b82f6",
-  neon: "#a3e635",
-  black: "#111827",
-  white: "#d1d5db",
-  beige: "#e8dcc8",
-  olive: "#808000",
-  peach: "#ffcba4",
-  magenta: "#d946ef",
-  turquoise: "#2dd4bf",
-  wine: "#722f37",
-  rust: "#b7410e",
-  coral: "#fb7185",
-  maroon: "#7f1d1d",
-  green: "#22c55e",
-  "bottle green": "#0b6623",
-  mint: "#86efac",
-  yellow: "#eab308",
-  gold: "#d4af37",
-  silver: "#c0c0c0",
-  brown: "#92400e",
-  navy: "#1e3a8a",
-  purple: "#9333ea",
-  cream: "#fdf6e3",
-  mauve: "#b784a7",
-  copper: "#b87333",
-  "sea green": "#2e8b57",
-  multi: "#94a3b8",
-};
-function colorSwatch(name: string): string {
-  const key = name.trim().toLowerCase();
-  if (COLOR_SWATCHES[key]) return COLOR_SWATCHES[key];
-  const lastWord = key.split(" ").pop() ?? key;
-  if (COLOR_SWATCHES[lastWord]) return COLOR_SWATCHES[lastWord];
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
-  return `hsl(${hash % 360}, 55%, 55%)`;
-}
-
 function daysBetween(startIso: string, endIso: string): number {
   const start = Date.parse(`${startIso}T00:00:00Z`);
   const end = Date.parse(`${endIso}T00:00:00Z`);
   return Math.round((end - start) / 86400000) + 1;
-}
-
-// Ranked mini-table (rank / label / units + proportional bar) shared by the
-// "Top Selling Sub Categories" and "Top Selling Design Colors" panels below -
-// same data shape, just a different bar color rule per list.
-function MiniRankTable({
-  title,
-  columnLabel,
-  items,
-  barColor,
-}: {
-  title: string;
-  columnLabel: string;
-  items: { key: string; label: string; qty: number; upliftPct: number | null }[];
-  barColor: (label: string) => string;
-}) {
-  const maxQty = Math.max(1, ...items.map((i) => i.qty));
-  return (
-    <Box sx={{ flex: 1, minWidth: 0 }}>
-      <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.75 }}>
-        {title}
-      </Typography>
-      <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1.5, overflow: "hidden" }}>
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: "24px 1fr 90px",
-            gap: 1,
-            px: 1.25,
-            py: 0.6,
-            bgcolor: SHADE_COLOR,
-            fontSize: "0.68rem",
-            fontWeight: 700,
-            color: "text.secondary",
-            textTransform: "uppercase",
-            letterSpacing: 0.3,
-          }}
-        >
-          <span>#</span>
-          <span>{columnLabel}</span>
-          <span style={{ textAlign: "right" }}>Units</span>
-        </Box>
-        {items.map((item, i) => (
-          <Box
-            key={item.key}
-            sx={{
-              display: "grid",
-              gridTemplateColumns: "24px 1fr 90px",
-              alignItems: "center",
-              gap: 1,
-              px: 1.25,
-              py: 0.85,
-              borderTop: "1px solid",
-              borderColor: "divider",
-            }}
-          >
-            <Typography variant="body2" sx={{ color: "text.secondary" }}>
-              {i + 1}
-            </Typography>
-            <Typography variant="body2" noWrap title={item.label}>
-              {item.label}
-            </Typography>
-            <Box>
-              <Typography variant="body2" sx={{ fontWeight: 700, textAlign: "right", color: upliftColor(item.upliftPct) }}>
-                {formatNumber(item.qty)}
-              </Typography>
-              <Box sx={{ height: 5, borderRadius: 3, bgcolor: "action.hover", mt: 0.4, overflow: "hidden" }}>
-                <Box
-                  sx={{
-                    height: "100%",
-                    width: `${Math.max(6, (item.qty / maxQty) * 100)}%`,
-                    bgcolor: barColor(item.label),
-                    borderRadius: 3,
-                    ml: "auto",
-                  }}
-                />
-              </Box>
-            </Box>
-          </Box>
-        ))}
-      </Box>
-    </Box>
-  );
 }
 
 function EventPanel({
@@ -545,11 +395,15 @@ function EventPanel({
   }
 
   const days = daysBetween(event.eventStart, event.eventEnd);
+  // Overlapping events arrive as one "A + B + C" name - show each as its own
+  // chip so a long combined name wraps neatly instead of a giant heading.
+  const names = event.eventName.split(" + ").map((n) => n.trim()).filter(Boolean);
 
   return (
-    <Paper variant="outlined" sx={{ flex: 1, minWidth: 320, overflow: "hidden" }}>
+    <Paper variant="outlined" sx={{ flex: 1, minWidth: 320, overflow: "hidden", display: "flex" }}>
       <Box
         sx={{
+          flex: 1,
           px: 2.5,
           py: 2,
           borderLeft: `4px solid ${accent}`,
@@ -559,7 +413,7 @@ function EventPanel({
               : "linear-gradient(135deg, #faf0fd 0%, #f6e0fa 100%)",
         }}
       >
-        <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mb: 0.5 }}>
+        <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mb: 1 }}>
           <Box
             sx={{
               width: 22,
@@ -575,63 +429,48 @@ function EventPanel({
           >
             <Icon sx={{ fontSize: 14 }} />
           </Box>
-          <Typography variant="caption" sx={{ fontWeight: 700, letterSpacing: 0.4, color: "text.secondary" }}>
+          <Typography variant="caption" sx={{ fontWeight: 700, letterSpacing: 0.4, color: "text.secondary", flex: 1 }}>
             {label.toUpperCase()}
           </Typography>
+          <Typography variant="body2" sx={{ color: "text.secondary", fontWeight: 600, whiteSpace: "nowrap" }}>
+            {formatDateShort(event.eventStart)} – {formatDateShort(event.eventEnd)} · {days} day{days === 1 ? "" : "s"}
+          </Typography>
         </Stack>
-        <Typography variant="h6" sx={{ fontWeight: 800, color: accent, lineHeight: 1.25 }}>
-          {event.eventName}
-        </Typography>
-        <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          {formatDateShort(event.eventStart)} – {formatDateShort(event.eventEnd)} ({days} day{days === 1 ? "" : "s"})
-        </Typography>
+        {names.length === 1 ? (
+          <Typography variant="h6" sx={{ fontWeight: 800, color: accent, lineHeight: 1.25 }}>
+            {names[0]}
+          </Typography>
+        ) : (
+          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+            {names.map((n) => (
+              <Box
+                key={n}
+                sx={{
+                  px: 1.25,
+                  py: 0.4,
+                  borderRadius: 999,
+                  bgcolor: "rgba(255,255,255,0.75)",
+                  border: `1px solid ${accent}`,
+                  color: accent,
+                  fontWeight: 700,
+                  fontSize: "0.8rem",
+                  lineHeight: 1.4,
+                }}
+              >
+                {n}
+              </Box>
+            ))}
+          </Box>
+        )}
 
         {event.spikeLeadDays !== null && (
-          <Typography variant="caption" sx={{ color: ACTUAL_COLOR, fontWeight: 600, display: "block", mt: 0.5 }}>
+          <Typography variant="caption" sx={{ color: ACTUAL_COLOR, fontWeight: 600, display: "block", mt: 1 }}>
             🔥 Demand historically starts rising ~{event.spikeLeadDays} day{event.spikeLeadDays === 1 ? "" : "s"}{" "}
             before this event
           </Typography>
         )}
       </Box>
 
-      <Box sx={{ p: 2 }}>
-        {event.topSubCategories.length === 0 ? (
-          <Typography variant="body2" sx={{ color: "text.disabled" }}>
-            No historical sales data available for this event yet.
-          </Typography>
-        ) : (
-          <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-            <MiniRankTable
-              title={`Top Selling Sub Categories in ${event.historicalYear} (${formatDateShort(
-                event.historicalStart,
-              )} – ${formatDateShort(event.historicalEnd)})`}
-              columnLabel="Sub Category"
-              items={event.topSubCategories.map((s) => ({
-                key: s.subCategory,
-                label: s.subCategory,
-                qty: s.qty,
-                upliftPct: s.upliftPct,
-              }))}
-              barColor={() => accent}
-            />
-            {event.topColors.length > 0 && (
-              <MiniRankTable
-                title={`Top Selling Design Colors in ${event.historicalYear} (${formatDateShort(
-                  event.historicalStart,
-                )} – ${formatDateShort(event.historicalEnd)})`}
-                columnLabel="Color"
-                items={event.topColors.map((c) => ({
-                  key: c.color,
-                  label: c.color,
-                  qty: c.qty,
-                  upliftPct: c.upliftPct,
-                }))}
-                barColor={colorSwatch}
-              />
-            )}
-          </Stack>
-        )}
-      </Box>
     </Paper>
   );
 }
