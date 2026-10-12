@@ -5,7 +5,9 @@ import type {
   CatalogStyleTiersResponse,
   StyleLifecycleResponse,
   WeeklyProductionLogRow,
+  CategoryAnalysisChannelsResponse,
   CategoryAnalysisResponse,
+  DesignSuggestionsResponse,
 } from "@/types";
 
 export interface AdminRefreshResponse {
@@ -54,8 +56,20 @@ export const dataService = {
 
   /** Monthly styles / orders / units / order spike per Category or Sub
    * Category, April 2025 to now - the Category Analysis page. */
-  async categoryAnalysis(level: "category" | "subCategory" | "style") {
+  async categoryAnalysis(level: "category" | "subCategory" | "style" | "tier") {
     return apiGet<CategoryAnalysisResponse>(`/api/reports/category-analysis?level=${level}`);
+  },
+
+  /** One Category Analysis row split by marketplace (channel drill-down). */
+  async categoryAnalysisChannels(level: "category" | "subCategory" | "style" | "tier", group: string) {
+    return apiGet<CategoryAnalysisChannelsResponse>(
+      `/api/reports/category-analysis/channels?level=${level}&group=${encodeURIComponent(group)}`,
+    );
+  },
+
+  /** Season-wise design suggestions (running + upcoming season). */
+  async designSuggestions() {
+    return apiGet<DesignSuggestionsResponse>("/api/design/suggestions");
   },
 
   /** Per-marketplace week-wise Gross Sale for one Style, on the same week

@@ -186,9 +186,228 @@ export interface CategoryAnalysisRow {
 }
 
 export interface CategoryAnalysisResponse {
-  level: "category" | "subCategory" | "style";
+  level: "category" | "subCategory" | "style" | "tier";
   dataThrough: string;
   subCategoryOf?: Record<string, string>; // style level only
+  tierOf?: Record<string, string>; // tier level only: style -> tier
   partialMonth: string;
   rows: CategoryAnalysisRow[];
+}
+
+/** One Category Analysis row split by marketplace - rows' `group` is the marketplace. */
+export interface CategoryAnalysisChannelsResponse {
+  level: "category" | "subCategory" | "style" | "tier";
+  group: string;
+  dataThrough: string;
+  partialMonth: string;
+  rows: CategoryAnalysisRow[];
+}
+
+// --- Design Suggestions (GET /api/design/suggestions) ---------------------
+export interface DesignRankItem {
+  value: string;
+  units: number;
+  styles: number;
+  share: number; // % of the season's units
+  lift: number; // season share / usual share
+  perStyle: number; // units per style (shrunk toward the average)
+  perStyleRaw: number;
+  momentum: number | null; // % vs same 8 weeks last year
+  confidence: number; // 0..1
+  score: number; // 0..100
+  reasons: string;
+  trend?: number | null; // share of the last 4 weeks' sales vs the 4 weeks before, %
+  nowShare?: number; // % of the last 4 weeks' units
+  activeStyles?: number; // styles with a sale in the last 4 weeks
+  nowUnits?: number; // units in the last 4 weeks
+  nowPerStyle?: number; // last 4 weeks' units per selling style (shrunk toward the average)
+  lastSeason?: boolean; // false = not sold in last year's same season
+  stage?: DesignStage | "none" | null; // trend stage (Category / Sub Category / Colour / Fabric); suggestions are trending / in trend only
+  spike?: DesignSpike | null; // sudden jump in its share of sales in one report week (window.spike.week)
+}
+export interface DesignSpike {
+  ratio: number | null; // share in the spike week / share of the 4 report weeks before (null = new)
+  lastWeekUnits: number;
+  lastWeekShare: number;
+  usualShare: number;
+  activeStyles: number;
+  new: boolean;
+}
+
+export interface DesignDriver {
+  attribute: string;
+  value: string;
+  effectPct: number; // model effect on units, %
+  rows: number;
+}
+
+export type DesignLevel = "strong" | "good" | "trySmall";
+/** One product (Sub Category) card on the Suggestion tab - every part from
+ * that product's own ranking (api design_suggest._products). */
+export interface DesignProductCard {
+  subCategory: string;
+  category: string; // its Category (e.g. Ethnic)
+  stage: DesignStage | "none" | null;
+  score: number;
+  level: DesignLevel;
+  nowShare: number; // % of all sales, last 4 weeks
+  activeStyles: number;
+  vsAverage: number | null; // a design of it sells this x an average design now
+  lastSeason: boolean;
+  lift: number; // share in this season last year vs its usual
+  trend: number | null;
+  use: {
+    colour: { value: string; stage: DesignStage | "none" | null; trend: number | null }[];
+    fabric: { value: string; stage: DesignStage | "none" | null; trend: number | null }[];
+    details: Partial<Record<"embroidery" | "neck" | "sleeve" | "topType", string>>;
+  };
+  mixes: { colour: string; fabric: string; tried: boolean; level: DesignLevel; vsAveragePct: number }[];
+  makeMore: { attribute: string; value: string; styles: number; times: number }[];
+  cutBack: { attribute: string; value: string; reason: string; styles: number }[];
+}
+
+export interface DesignOpportunity {
+  type: "gap" | "rising" | "declining" | "saturated";
+  subCategory: string;
+  attribute: "colour" | "fabric";
+  value: string;
+  styles: number;
+  units: number;
+  perStyle: number;
+  subCategoryPerStyle: number;
+  momentum: number | null;
+  trend?: number | null; // share within the sub category, last 4 weeks vs the 4 before, %
+  basis?: "now" | "lastSeason"; // what perStyle / subCategoryPerStyle measure
+  score?: number; // the same score as in the ranked cards, within the sub category
+}
+
+/** Trend status of one Category / Sub Category / Colour / Fabric value. */
+export type DesignStage = "trending" | "steady" | "fading" | "out";
+export interface DesignLifecycleItem {
+  value: string;
+  stage: DesignStage;
+  share: number[]; // % of sales in each 4-week block, oldest -> newest
+  nowShare: number;
+  change: number | null; // latest block vs the one before, %
+  fromPeakPct: number | null; // latest share vs its best block, %
+  peakBlock: number;
+  nowUnits: number; // last block's units incl. the running week's expected rest
+  realNowUnits?: number; // real pieces sold so far in the last block
+  expectedUnits?: number; // the running week's expected rest (forecast x this week's pace)
+  activeStyles: number;
+  onSale: boolean;
+  gain: number; // share points gained vs the block before
+  spike?: DesignSpike | null; // sudden jump in its share of one report week (window.spike.week)
+}
+/** The report weeks behind every "now" number (Weekly Sales Report's W1-W4). */
+export interface DesignWindow {
+  runningWeek: string; // e.g. "Oct W2"
+  from: string;
+  to: string;
+  actualThrough: string; // real sales up to this day; the rest of the week is its weekly forecast
+  forecastDays: number;
+  frozenStyles: number;
+  estimatedStyles: number;
+  realDays?: number;
+  pace?: Record<string, number>; // per Sub Category: this week's real pace vs its forecast (1 = on forecast)
+  spike?: { week: string; from: string; to: string; baseWeeks: string; includesForecast: boolean };
+}
+export interface DesignLifecycle {
+  blocks: { from: string; to: string; weeks?: string }[];
+  category?: DesignLifecycleItem[];
+  subCategory?: DesignLifecycleItem[];
+  colour?: DesignLifecycleItem[];
+  fabric?: DesignLifecycleItem[];
+}
+
+/** The one rule set every section of the page uses (api design_suggest.rules()). */
+export interface DesignRules {
+  trendWeeks: number; // report weeks (W1-W4 of each month) in the trend window
+  momentumWeeks: number;
+  trendStrong: number; // % share change that counts as rising / falling
+  onSaleMinUnits: number;
+  minStyles: number;
+  gapRatio: number;
+  saturatedRatio: number;
+  saturatedMinStyles: number;
+}
+
+/** "Trending now" - the last 4 weeks vs the 4 weeks before. */
+export interface DesignTrendingStyle {
+  style: string;
+  nowUnits: number; // real pieces sold so far in the last 4 report weeks
+  expectedUnits?: number; // + the running week's expected rest
+  beforeUnits: number; // real pieces in the 4 report weeks before
+  growthPct: number | null;
+  newLaunch: boolean;
+  subCategory: string;
+  colour: string;
+  fabric: string;
+  neck: string;
+  sleeve: string;
+}
+export interface DesignTrendingNow {
+  windowWeeks: number;
+  nowWeeks?: string; // e.g. "Sep W3 – Oct W2"
+  nowFrom: string;
+  nowTo: string;
+  beforeFrom: string;
+  beforeTo: string;
+  beforeWeeks?: string;
+  runningWeek?: string;
+  styles: DesignTrendingStyle[];
+}
+
+
+export interface DesignSeason {
+  role: "running" | "upcoming";
+  season: string;
+  label: string;
+  months: string;
+  occasion: string;
+  start: string;
+  end: string;
+  reference: string;
+  referenceCoverage: string;
+  note?: string;
+  rankings: Record<string, DesignRankItem[]>;
+  opportunities: DesignOpportunity[];
+  products?: DesignProductCard[];
+  overview?: { focus: string[]; colours: string[]; fabrics: string[] };
+  drivers: DesignDriver[];
+}
+
+export interface DesignSuggestionsResponse {
+  available: boolean;
+  building?: boolean;
+  error?: string;
+  dataThrough?: string;
+  historyFrom?: string;
+  measure?: string;
+  tiers?: string[]; // catalog tiers included (T1, T2, T3)
+  tierStyles?: number; // styles in those tiers with sales
+  model?: {
+    type: string;
+    rows: number;
+    styles: number;
+    seasons: string[];
+    holdoutWape: number;
+    baselineWape: number;
+    validation?: string;
+    cvFolds?: number;
+    cvFoldWape?: number[];
+    params?: Record<string, string | number>;
+    paramSetsTried?: number;
+    topPickHitPct?: number | null; // % of predicted top-20% designs that really were top 20% (out-of-sample)
+    allTiersWape?: number;
+    trainingTiers?: string[];
+    focusTiers?: string[];
+    focusRows?: number;
+    focusStyles?: number;
+  } | null;
+  trendingNow?: DesignTrendingNow;
+  rules?: DesignRules;
+  lifecycle?: DesignLifecycle;
+  window?: DesignWindow;
+  seasons: DesignSeason[];
 }

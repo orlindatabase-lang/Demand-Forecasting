@@ -175,6 +175,22 @@ def _clean_display(v) -> str:
     return "" if s.upper() in _NULL_VALUES else s
 
 
+def _unify_case(mapping: dict[str, str]) -> dict[str, str]:
+    """{style: name} with names that differ only in capitals made identical:
+    the most used mixed-case spelling wins ("shirt" + "Shirt" -> "Shirt");
+    a name only ever written in one case is title-cased if all caps or all
+    lower case ("WESTERN" -> "Western"), otherwise kept as written."""
+    from collections import Counter
+
+    counts = Counter(mapping.values())
+    best: dict[str, str] = {}
+    for key in {v.lower() for v in counts}:
+        variants = [v for v in counts if v.lower() == key]
+        mixed = [v for v in variants if v != v.upper() and v != v.lower()]
+        best[key] = max(mixed, key=lambda v: counts[v]) if mixed else max(variants, key=lambda v: counts[v]).title()
+    return {style: best[name.lower()] for style, name in mapping.items()}
+
+
 def _load() -> None:
     global _DESIGN_ATTRS, _DESIGN_CATEGORY, _DESIGN_CATEGORY_DISPLAY, _DESIGN_SUBCATEGORY, _DESIGN_COLOR, _DESIGN_FORECAST_ATTRS, _NEIGHBORS, _LOADED
     if not _CSV_PATH.exists():
@@ -237,6 +253,11 @@ def _load() -> None:
             attrs[style] = toks
 
     neighbors = _build_neighbors(attrs, category)
+    # One display name per group regardless of capitals (2026-10-09 data
+    # diagnosis: the sheet has "shirt" and "Shirt", which showed as two
+    # Categories). Display only - forecast_attrs keeps the sheet's values.
+    category_display = _unify_case(category_display)
+    subcategory = _unify_case(subcategory)
 
     with _LOCK:
         _DESIGN_ATTRS = attrs

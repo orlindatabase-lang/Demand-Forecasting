@@ -758,6 +758,9 @@ _OMS_MARKETPLACE_KEYWORDS = [
     ("myntra", "Myntra"),
     ("nykaa", "Nykaa"),
     ("wishlink", "Amazon"),
+    # "DiEGO International - Ajio Api" - first orders October 2026 (2026-10-09,
+    # user-requested: show it as its own "Ajio" marketplace row).
+    ("ajio", "Ajio"),
 ]
 
 
@@ -1911,8 +1914,10 @@ def _warm_caches() -> None:
         # forecast_freeze.py) even on days nobody opens that grouping.
         get_weekly_grid("subCategory", 9, 200, 0, "", "", "")
         # Sub Category / Category / Tiers Spike Rate tabs (2026-10-05).
-        for _level in ("subCategory", "category", "style"):
+        for _level in _CATEGORY_LEVELS:
             get_category_analysis(_level)
+        # ...and their rows' channel drill-down (2026-10-09).
+        _category_channel_frame()
     except Exception as exc:  # noqa: BLE001 — a slow first request beats a broken rebuild
         print(f"[data] cache warm-up failed ({exc!r})", file=sys.stderr)
 
@@ -2775,7 +2780,22 @@ def get_channel_source_weekly_total(
 # Gross sale - the SAME units as the Weekly Sales Report's Actual Sale (one
 # definition everywhere, 2026-10-03, user-requested); the spike is on units too.
 _CATEGORY_ANALYSIS_START = date(2025, 4, 1)
+_CATEGORY_LEVELS = ("category", "subCategory", "style", "tier")
+
+
+def _style_tier_map() -> dict[str, str]:
+    """{STYLE (upper-cased): current catalog tier} - Cloud SQL CatalogStyle,
+    the same tiers as the Weekly Sales Report / Production Log. Empty if the
+    catalog is unavailable."""
+    try:
+        import catalog_style
+        return {str(k).strip().upper(): v for k, v in catalog_style.get_current_tier_map().items() if v}
+    except Exception as exc:  # noqa: BLE001
+        print(f"[data] catalog tiers unavailable ({exc!r})", file=sys.stderr)
+        return {}
 _CATEGORY_ANALYSIS_CACHE: dict[tuple, dict] = {}
+_CATEGORY_CHANNELS_CACHE: dict[tuple, dict] = {}  # (data version, level, group) -> channel drill-down
+_CATEGORY_CHANNEL_FRAME = None  # (data version, frame) - see _category_channel_frame()
 
 
 def get_category_analysis(level: str = "subCategory") -> dict:
@@ -2786,8 +2806,8 @@ def get_category_analysis(level: str = "subCategory") -> dict:
     SAME days of the previous month (1..day) instead of the whole month."""
     import pandas as pd
 
-    if level not in ("category", "subCategory", "style"):
-        raise ValueError(f"level must be 'category', 'subCategory' or 'style', got {level!r}")
+    if level not in _CATEGORY_LEVELS:
+        raise ValueError(f"level must be one of {_CATEGORY_LEVELS}, got {level!r}")
     cache_key = (_DATA_VERSION, level)
     if cache_key in _CATEGORY_ANALYSIS_CACHE:
         return _CATEGORY_ANALYSIS_CACHE[cache_key]
@@ -2805,6 +2825,13 @@ def get_category_analysis(level: str = "subCategory") -> dict:
         mapping = {d: d for d in designs.unique()}
         plan_sub = {r.designNo: r.subCategory for r in PLAN_ROWS if r.designNo}
         out["subCategoryOf"] = {d: plan_sub.get(d) or design_attributes.sub_category_of(d) or "" for d in mapping}
+    elif level == "tier":
+        # One row per catalog tier (Tiers Spike Rate tab, 2026-10-09,
+        # user-requested: T0 / T1 / T2 / T3 / T11 / T12 rows, each opening
+        # into its styles); a style's CURRENT tier, "Unclassified" if none.
+        tier_of = _style_tier_map()
+        mapping = {d: tier_of.get(d.strip().upper()) or "Unclassified" for d in designs.unique()}
+        out["tierOf"] = mapping
     else:
         group_of = design_attributes.category_of if level == "category" else design_attributes.sub_category_of
         mapping = {d: (group_of(d) or "Unclassified") for d in designs.unique()}
@@ -2819,9 +2846,23 @@ def get_category_analysis(level: str = "subCategory") -> dict:
     })
     if level != "style":
         frame["style"] = designs
+    rows, partial_month = _month_group_rows(frame, count_styles=level != "style")
+    out.update(partialMonth=partial_month, rows=rows)
+    if len(_CATEGORY_ANALYSIS_CACHE) > 8:
+        _CATEGORY_ANALYSIS_CACHE.clear()
+    _CATEGORY_ANALYSIS_CACHE[cache_key] = out
+    return out
+
+
+def _month_group_rows(frame, count_styles: bool) -> tuple[list[dict], str]:
+    """Shared month x group aggregation behind get_category_analysis() and
+    its channel drill-down: ``frame`` has month ("YYYY-MM"), group, qty, day
+    (and style when ``count_styles``). Returns (rows, partial month or "")."""
+    import pandas as pd
+
     grouped = frame.groupby(["month", "group"], sort=False)
     agg = grouped.agg(orders=("qty", "size"), units=("qty", "sum")).reset_index()
-    agg["styles"] = 1 if level == "style" else grouped["style"].nunique().to_numpy()
+    agg["styles"] = grouped["style"].nunique().to_numpy() if count_styles else 1
     agg["units"] = agg["units"].round().astype(int)
 
     partial = f"{SNAPSHOT_DATE.year:04d}-{SNAPSHOT_DATE.month:02d}"
@@ -2847,10 +2888,73 @@ def get_category_analysis(level: str = "subCategory") -> dict:
     for r in rows:  # plain Python types for JSON
         r["styles"], r["orders"], r["units"], r["prevUnits"] = int(r["styles"]), int(r["orders"]), int(r["units"]), int(r["prevUnits"])
         r["partial"] = bool(r["partial"])
-    out.update(partialMonth=partial if is_partial else "", rows=rows)
-    if len(_CATEGORY_ANALYSIS_CACHE) > 8:
-        _CATEGORY_ANALYSIS_CACHE.clear()
-    _CATEGORY_ANALYSIS_CACHE[cache_key] = out
+    return rows, (partial if is_partial else "")
+
+
+def _category_channel_frame():
+    """Every Gross sale row of the Category Analysis window as (month, group =
+    marketplace, qty, day, style) - built once per _DATA_VERSION, so opening a
+    row's channel drill-down only filters it (~0.2 s instead of ~1.5 s)."""
+    global _CATEGORY_CHANNEL_FRAME
+    if _CATEGORY_CHANNEL_FRAME is not None and _CATEGORY_CHANNEL_FRAME[0] == _DATA_VERSION:
+        return _CATEGORY_CHANNEL_FRAME[1]
+    import pandas as pd
+
+    df = _channel_source_base_df()
+    if df is None:
+        return None
+    df = df[(df["order_date"] >= pd.Timestamp(_CATEGORY_ANALYSIS_START))
+            & (df["order_date"] < pd.Timestamp(SNAPSHOT_DATE) + pd.Timedelta(days=1))]
+    # Marketplace per row, resolved once per distinct (channel_name, source).
+    pair = df["channel_name"].astype(str) + "\x1f" + df["source"].astype(str)
+    resolved = {p: _marketplace_of(*p.split("\x1f", 1)) for p in pair.unique()}
+    frame = pd.DataFrame({
+        "month": df["_month"].astype(str),
+        "group": pair.map(resolved),
+        "qty": pd.to_numeric(df["qty"], errors="coerce").fillna(0),
+        "day": df["order_date"].dt.day,
+        "style": df["DESIGN_NO"].astype(str),
+    })
+    _CATEGORY_CHANNEL_FRAME = (_DATA_VERSION, frame)
+    return frame
+
+
+def get_category_analysis_channels(level: str, group: str) -> dict:
+    """Channel drill-down of one Category / Sub Category / Style row of the
+    Category Analysis tables (2026-10-09, user-requested): the same monthly
+    styles / orders / units / spike, one row per marketplace (Amazon,
+    Flipkart, ... - the same rollup as the Weekly Sales Report's Channel &
+    Source drill-down, _marketplace_of)."""
+    import pandas as pd
+
+    if level not in _CATEGORY_LEVELS:
+        raise ValueError(f"level must be one of {_CATEGORY_LEVELS}, got {level!r}")
+    cache_key = (_DATA_VERSION, level, group)
+    if cache_key in _CATEGORY_CHANNELS_CACHE:
+        return _CATEGORY_CHANNELS_CACHE[cache_key]
+
+    out = {"level": level, "group": group, "dataThrough": SNAPSHOT_DATE.isoformat(), "partialMonth": "", "rows": []}
+    base = _category_channel_frame()
+    if base is None or base.empty:
+        return out
+    if level == "style":
+        mask = base["style"] == group
+    elif level == "tier":
+        tier_of = _style_tier_map()
+        members = {d for d in base["style"].unique() if (tier_of.get(d.strip().upper()) or "Unclassified") == group}
+        mask = base["style"].isin(members)
+    else:
+        group_of = design_attributes.category_of if level == "category" else design_attributes.sub_category_of
+        members = {d for d in base["style"].unique() if (group_of(d) or "Unclassified") == group}
+        mask = base["style"].isin(members)
+    frame = base[mask]
+    if frame.empty:
+        return out
+    rows, partial_month = _month_group_rows(frame, count_styles=True)
+    out.update(partialMonth=partial_month, rows=rows)
+    if len(_CATEGORY_CHANNELS_CACHE) > 256:
+        _CATEGORY_CHANNELS_CACHE.clear()
+    _CATEGORY_CHANNELS_CACHE[cache_key] = out
     return out
 
 

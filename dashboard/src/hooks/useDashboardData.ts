@@ -73,11 +73,31 @@ export function useWeeklyProductionLog(enabled: boolean) {
 }
 
 /** Category Analysis page - one query per level (category / subCategory). */
-export function useCategoryAnalysis(level: "category" | "subCategory" | "style") {
+export function useCategoryAnalysis(level: "category" | "subCategory" | "style" | "tier") {
   return useQuery({
     queryKey: ["categoryAnalysis", level],
     queryFn: () => dataService.categoryAnalysis(level),
     refetchInterval: 10 * REFRESH_MS,
     placeholderData: keepPreviousData,
+  });
+}
+
+/** Channel (marketplace) drill-down of one Category Analysis row - fetched
+ * only once that row is expanded. */
+export function useCategoryAnalysisChannels(level: "category" | "subCategory" | "style" | "tier", group: string) {
+  return useQuery({
+    queryKey: ["categoryAnalysisChannels", level, group],
+    queryFn: () => dataService.categoryAnalysisChannels(level, group),
+    refetchInterval: 10 * REFRESH_MS,
+  });
+}
+
+/** Design Suggestions tab. The API builds the result in the background on
+ * first request (~1-2 min); poll every 5 s while it says "building". */
+export function useDesignSuggestions() {
+  return useQuery({
+    queryKey: ["designSuggestions"],
+    queryFn: () => dataService.designSuggestions(),
+    refetchInterval: (query) => (query.state.data?.building ? 5_000 : 10 * REFRESH_MS),
   });
 }
