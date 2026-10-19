@@ -37,7 +37,7 @@ Read-only: no cache files written, no production code touched while running
 (GROSS/NET target swap is a monkeypatch of lgbm_forecast._GROSS_SALE_NORM,
 restored in a finally block either way).
 
-Run: venv/Scripts/python.exe retro_backtest.py
+Run: venv/Scripts/python.exe api/tools/retro_backtest.py
 """
 from __future__ import annotations
 
@@ -50,6 +50,9 @@ os.environ.setdefault("DAILY_REFRESH", "off")
 
 import pandas as pd  # noqa: E402
 
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))   # the api/ modules
 import data  # noqa: E402
 import lgbm_forecast  # noqa: E402
 

@@ -24,7 +24,7 @@ const LEVEL: Record<DesignLevel, { label: string; bars: number; color: string }>
 function Level({ level, suffix }: { level: DesignLevel; suffix?: string }) {
   const l = LEVEL[level];
   return (
-    <Stack direction="row" spacing={0.5} alignItems="center" sx={{ whiteSpace: "nowrap" }}>
+    <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", whiteSpace: "nowrap" }}>
       <Stack direction="row" spacing={0.25} aria-hidden="true">
         {[0, 1, 2].map((i) => (
           <Box key={i} sx={{ width: 4, height: 10, borderRadius: 0.5, bgcolor: i < l.bars ? l.color : "rgba(100,116,139,0.25)" }} />
@@ -62,7 +62,7 @@ function ValueChip({ value, stage, more }: { value: string; stage?: DesignStage 
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <Stack direction="row" spacing={1.5} alignItems="baseline" sx={{ py: 0.5 }}>
+    <Stack direction="row" spacing={1.5} sx={{ alignItems: "baseline", py: 0.5 }}>
       <Typography variant="caption" sx={{ color: MUTED, width: 64, flexShrink: 0, fontWeight: 700 }}>{label}</Typography>
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, minWidth: 0 }}>{children}</Box>
     </Stack>
@@ -205,7 +205,7 @@ function ProductCard({ card, rank, reference, seasonLabel }: { card: DesignProdu
   ].filter(Boolean);
   return (
     <Paper variant="outlined" sx={{ p: 2, flex: "1 1 460px", minWidth: 300, borderLeft: 4, borderLeftColor: ACCENT }}>
-      <Stack direction="row" spacing={1} alignItems="center">
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
         <Typography variant="body2" sx={{ color: MUTED, fontWeight: 800, width: 18 }}>{rank}</Typography>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
           {card.category && (
@@ -245,7 +245,7 @@ function ProductCard({ card, rank, reference, seasonLabel }: { card: DesignProdu
       {card.mixes.length > 0 && (
         <Part title="BEST MIXES">
           {card.mixes.map((m) => (
-            <Stack key={`${m.colour}-${m.fabric}`} direction="row" spacing={1} alignItems="center" sx={{ py: 0.4 }}>
+            <Stack key={`${m.colour}-${m.fabric}`} direction="row" spacing={1} sx={{ alignItems: "center", py: 0.4 }}>
               <Typography variant="body2" sx={{ fontWeight: 700, flexGrow: 1 }}>{m.colour} + {m.fabric}</Typography>
               <Chip
                 size="small"
@@ -283,7 +283,7 @@ function ProductCard({ card, rank, reference, seasonLabel }: { card: DesignProdu
 }
 
 /** Suggestion tab: the top line + one card per product, all from one ranking. */
-export default function ProductCards({ season, hitPct }: { season: DesignSeason; hitPct?: number | null }) {
+export default function ProductCards({ season }: { season: DesignSeason }) {
   const [all, setAll] = useState(false);
   const cards = season.products ?? [];
   const o = season.overview;
@@ -291,7 +291,7 @@ export default function ProductCards({ season, hitPct }: { season: DesignSeason;
   return (
     <Stack spacing={2}>
       <Paper variant="outlined" sx={{ p: 2, borderLeft: 4, borderLeftColor: ACCENT, bgcolor: "#fbfaff" }}>
-        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 1 }}>
+        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 1 }}>
           <LightbulbOutlinedIcon fontSize="small" sx={{ color: ACCENT }} />
           <Typography variant="subtitle1" sx={{ fontWeight: 800, flexGrow: 1 }}>In short — {season.label}</Typography>
           <AboutButton topic="products" />
@@ -300,13 +300,6 @@ export default function ProductCards({ season, hitPct }: { season: DesignSeason;
           {o?.focus?.length ? <Typography variant="body2"><Box component="span" sx={{ color: MUTED }}>Focus on: </Box><b>{o.focus.join(", ")}</b></Typography> : null}
           {o?.colours?.length ? <Typography variant="body2"><Box component="span" sx={{ color: MUTED }}>Top colours: </Box><b>{o.colours.join(", ")}</b></Typography> : null}
           {o?.fabrics?.length ? <Typography variant="body2"><Box component="span" sx={{ color: MUTED }}>Top fabrics: </Box><b>{o.fabrics.join(", ")}</b></Typography> : null}
-          {hitPct != null && (
-            <Typography variant="body2">
-              <Box component="span" sx={{ color: MUTED }}>How reliable: </Box>
-              <b>top picks were right {Math.round(hitPct)} out of 100 times</b>
-              <Box component="span" sx={{ color: MUTED }}> in past seasons (guessing: 20)</Box>
-            </Typography>
-          )}
         </Box>
       </Paper>
       {cards.length === 0 && <Paper variant="outlined" sx={{ p: 3, color: MUTED }}>No product is trending or in trend for this season yet.</Paper>}

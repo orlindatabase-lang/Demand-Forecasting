@@ -1,6 +1,6 @@
 """Tests for design_suggest.py (season-wise design suggestions).
 
-Run: python -m pytest api/test_design_suggest.py -v
+Run: python -m pytest api/tests/test_design_suggest.py -v
 """
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # the api/ modules
 
 import pandas as pd
 
@@ -311,8 +311,8 @@ def test_running_week_rest_follows_this_weeks_pace(monkeypatch):
     import types
     import forecast_freeze
     snap = date(2026, 10, 9)                       # Oct W2 (8-15): 2 real days, 6 to come
-    # Frozen weekly forecast 80 for the 8-day week = 10 a day; it really sold 40 in 2 days (2x pace).
-    monkeypatch.setattr(forecast_freeze, "locked", lambda scope: {"A1": {"2026-10-08": 80.0}})
+    # The report's weekly forecast 80 for the 8-day week = 10 a day; it really sold 40 in 2 days (2x pace).
+    monkeypatch.setattr(forecast_freeze, "stored", lambda scope: {"A1": {"2026-10-08": 80.0}})
     data = types.SimpleNamespace(PLAN_ROWS=[], _NAIVE_WEEK={})
     sales = pd.DataFrame([{"style": "A1", "date": pd.Timestamp("2026-10-08"), "qty": 40.0, "channel": "Website"}])
     sales["ord"] = ds._add_chunk_ord(sales)

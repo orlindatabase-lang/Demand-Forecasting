@@ -140,7 +140,6 @@ export const ABOUT: Record<AboutKey, AboutContent> = {
           "Next season: we also look at how it sold in the same season last year.",
           "Only items that are ▲ Trending or ● In trend are suggested.",
           "We show Strong / Good / Try small instead of exact numbers, because the system is good at telling which choice is better, but not at guessing the exact pieces.",
-          "\"How reliable\" — we tested the system on past seasons. Of the designs it picked as the top ones, about this many out of 100 really were top sellers. Picking at random would get about 20.",
         ],
       },
     ],

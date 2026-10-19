@@ -16,12 +16,15 @@ Docs:  http://localhost:8000/docs
 """
 from __future__ import annotations
 
+import math
 import os
 import sys
+import threading
+import time
 import urllib.request
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
@@ -100,9 +103,10 @@ app = FastAPI(
     title="Orlin · SKU Production Plan API",
     version="1.0.0",
     description=(
-        "Serves the SKU Production Plan table, the per-SKU date-wise breakdown, "
-        "and the top-selling state / city / warehouse tables. All figures are "
-        "derived from real order history (final_merged_data.csv)."
+        "Demand forecasting dashboard API: Weekly Sales Report (forecast vs "
+        "actual, production suggestion), channel drill-downs, Sub Category / "
+        "Category / Tiers analysis, Production Log and Design Suggestions. "
+        "Data: BigQuery sales + ERP views (offline fallback: final_merged_data.csv)."
     ),
 )
 
@@ -160,16 +164,41 @@ def health() -> dict:
     }
 
 
+# The dashboard's Refresh button calls this without credentials (a key in a
+# public web page would not stay secret), so it is protected by a lock - one
+# refresh at a time - and a cooldown between refreshes instead (2026-10-19
+# security fix: anyone reaching the API could trigger rebuilds back to back).
+REFRESH_COOLDOWN_SECS = int(os.getenv("REFRESH_COOLDOWN_SECS", "600"))
+_REFRESH_LOCK = threading.Lock()
+_LAST_REFRESH = 0.0
+
+
 @app.post("/admin/refresh", tags=["meta"])
 def refresh() -> dict:
     """Re-fetch the source data (live BigQuery + ERP, or CSV) and rebuild all
     in-memory tables. Use this to pull fresh data without restarting.
     With SERVING_MODE=snapshot it starts the daily Cloud Run Job instead; the
-    API picks up the job's new snapshot within SNAPSHOT_CHECK_SECS."""
-    if data.SERVING_MODE == "snapshot":
-        return {"status": "job started", **data.start_daily_job()}
-    result = data.rebuild()
-    return {"status": "refreshed", **result}
+    API picks up the job's new snapshot within SNAPSHOT_CHECK_SECS.
+    409 while a refresh is running; 429 within REFRESH_COOLDOWN_SECS of the last one."""
+    global _LAST_REFRESH
+    if not _REFRESH_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "A refresh is already running - please wait for it to finish.")
+    try:
+        wait = REFRESH_COOLDOWN_SECS - (time.time() - _LAST_REFRESH)
+        if wait > 0:
+            raise HTTPException(
+                429, f"Data was refreshed less than {REFRESH_COOLDOWN_SECS // 60} min ago - "
+                     f"try again in {math.ceil(wait / 60)} min.",
+                headers={"Retry-After": str(math.ceil(wait))},
+            )
+        if data.SERVING_MODE == "snapshot":
+            result = {"status": "job started", **data.start_daily_job()}
+        else:
+            result = {"status": "refreshed", **data.rebuild()}
+        _LAST_REFRESH = time.time()
+        return result
+    finally:
+        _REFRESH_LOCK.release()
 
 
 @app.get("/api/reports/weekly-grid", response_model=WeeklyGridResponse, tags=["plan"])
@@ -229,6 +258,14 @@ def get_catalog_style_tiers() -> CatalogStyleTiersResponse:
     return CatalogStyleTiersResponse(tiers=catalog_style.get_style_tiers())
 
 
+@app.get("/api/catalog/tier-movement", tags=["plan"])
+def get_tier_movement() -> dict:
+    """How long styles stay in each catalog tier and where they move, from the
+    Cloud SQL tier-change log (2026-10-13, user-requested Tier movement tab):
+    per-tier summary, from -> to moves and each style's tier journey."""
+    return data.get_tier_movement()
+
+
 @app.get("/api/catalog/style-lifecycle", tags=["plan"])
 def get_style_lifecycle(
     subCategory: str = Query("", description="Exact Sub Category name; blank returns every Sub Category"),
@@ -243,23 +280,44 @@ def get_style_lifecycle(
 def get_category_analysis(
     level: str = Query("subCategory", pattern="^(category|subCategory|style|tier)$",
                        description="'category', 'subCategory', 'style' (one row per style) or 'tier' (one row per catalog tier)"),
+    category: str = Query("", description="Only styles in this Category (Tiers Spike Rate filter); blank = all"),
+    subCategory: str = Query("", description="Only styles in this Sub Category (Tiers Spike Rate filter); blank = all"),
+    tierMode: str = Query("current", pattern="^(current|sale)$",
+                          description="tier level: 'current' tier for every month, or the tier at the time of 'sale'"),
 ) -> dict:
     """Per month (April 2025 to now) and Category / Sub Category: styles with a
     Gross sale, order count, units, and the units' % change vs the
     previous month (the partial current month vs the same days of the
     previous month) - the Category Analysis page (2026-10-03, user-requested)."""
-    return data.get_category_analysis(level)
+    return data.get_category_analysis(level, category, subCategory, tierMode)
 
 
 @app.get("/api/reports/category-analysis/channels", tags=["plan"])
 def get_category_analysis_channels(
     level: str = Query("subCategory", pattern="^(category|subCategory|style|tier)$"),
     group: str = Query(..., min_length=1, description="the Category / Sub Category / Style row to break down"),
+    category: str = Query("", description="Only styles in this Category; blank = all"),
+    subCategory: str = Query("", description="Only styles in this Sub Category; blank = all"),
+    tierMode: str = Query("current", pattern="^(current|sale)$"),
 ) -> dict:
     """One Category Analysis row split by marketplace (Amazon, Flipkart, ...):
     the same monthly styles / orders / units / spike - the row's channel
     drill-down (2026-10-09, user-requested)."""
-    return data.get_category_analysis_channels(level, group)
+    return data.get_category_analysis_channels(level, group, category, subCategory, tierMode)
+
+
+@app.get("/api/reports/category-analysis/filtered", tags=["plan"])
+def get_category_analysis_filtered(
+    tier: str = Query("", description="Catalog tier (T0, T1, ... or Unclassified); blank = all"),
+    category: str = Query("", description="Category; blank = all"),
+    subCategory: str = Query("", description="Sub Category; blank = all"),
+    style: str = Query("", description="One style (design number); blank = all"),
+    brand: str = Query("", description="Brand (Mokosh, J.Turritopsis, Curly Tales, C.O.E, ...); blank = all"),
+) -> dict:
+    """Monthly styles / orders / units / spike for the styles matching all the
+    filters - the Tiers Spike Rate chart (2026-10-13, user-requested). Also
+    lists every style's tier / category / sub category for the filter menus."""
+    return data.get_category_analysis_filtered(tier, category, subCategory, style, brand)
 
 
 @app.get(
@@ -276,26 +334,6 @@ def get_channel_source_weekly(
     the inline expandable-row drill-down behind the Demand Forecasting
     page's per-Style rows."""
     return data.get_channel_source_weekly(style, weeks)
-
-
-@app.get("/api/inventory/planning", tags=["plan"])
-def inventory_planning(
-    limit: int = Query(500, ge=1, le=5000, description="Max designs to return"),
-) -> dict:
-    """Optimal finished-goods stock levels by design: current stock, demand,
-    weeks of cover, safety stock, reorder point, and production suggestion."""
-    return data.get_inventory_planning(limit=limit)
-
-
-
-@app.get("/api/debug/rebuild", tags=["debug"])
-def debug_rebuild() -> dict:
-    """Trigger a data rebuild (re-fetches all ERP views) and return immediately.
-    The background delay thread runs asynchronously; poll /api/debug/allocation to confirm."""
-    result = data.rebuild()
-    return {"triggered": True, "rebuild_result": result}
-
-
 
 
 @app.get("/api/debug/tier-accuracy", tags=["debug"])
@@ -321,28 +359,15 @@ def debug_overall_accuracy() -> dict:
     backtest (see data.RUN_BACKTEST)."""
     return {
         "runBacktest": data.RUN_BACKTEST,
+        # 2026-10-19: say plainly what the numbers are - with the backtest off
+        # they score the naive run-rate, not the forecasting model.
+        "measures": "model walk-forward backtest" if data.RUN_BACKTEST
+        else "naive run-rate proxy - NOT the model's accuracy (backtest off; set RUN_BACKTEST=1 to measure the model)",
         "overallAccuracySku": data.OVERALL_ACCURACY,
         "designAccuracy": data.DESIGN_ACCURACY,
         "latestWeekAccuracy": data.LATEST_WEEK_ACCURACY,
         "latestWeekIso": data.LATEST_WEEK_ISO,
         "dataSource": data.DATA_SOURCE,
-    }
-
-
-@app.get("/api/debug/section-lookup", tags=["debug"])
-def debug_section_lookup(design: str = Query("")) -> dict:
-    """Show section dict size, sample entries, and look up a specific design."""
-    sec_map = data._DESIGN_SECTION
-    sample_bottom = {k: v for k, v in sec_map.items() if v == "Bottom"}
-    sample_top    = {k: v for k, v in sec_map.items() if v == "Top"}
-    sample_dup    = {k: v for k, v in sec_map.items() if v == "Dupatta"}
-    return {
-        "total_designs": len(sec_map),
-        "bottom_count": len(sample_bottom),
-        "top_count": len(sample_top),
-        "dupatta_count": len(sample_dup),
-        "bottom_sample": dict(list(sample_bottom.items())[:10]),
-        "lookup": {design: data._design_section(design)} if design else {},
     }
 
 

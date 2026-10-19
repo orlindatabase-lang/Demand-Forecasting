@@ -85,7 +85,7 @@ function ItemRow({ item, color, blocks, spikeWeek }: { item: DesignLifecycleItem
   return (
     <Tooltip title={tip} placement="left">
       <Box sx={{ py: 0.6, borderTop: "1px solid", borderColor: "divider" }}>
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
           <Typography variant="body2" sx={{ fontWeight: 700, flexGrow: 1, minWidth: 0 }} noWrap>{item.value}</Typography>
           {item.spike && <SpikeBadge spike={item.spike} week={spikeWeek} />}
           <Sparkline values={item.share} color={color} />
@@ -108,7 +108,7 @@ function StageColumn({ stage, items, blocks, spikeWeek }: { stage: (typeof STAGE
   const { Icon } = stage;
   return (
     <Paper variant="outlined" sx={{ p: 1.5, flex: "1 1 260px", minWidth: 240, borderTop: 3, borderTopColor: stage.color }}>
-      <Stack direction="row" spacing={0.75} alignItems="center">
+      <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
         <Icon fontSize="small" sx={{ color: stage.color }} />
         <Typography variant="subtitle2" sx={{ fontWeight: 800, flexGrow: 1 }}>{stage.title}</Typography>
         <Chip size="small" label={items.length} sx={{ height: 18, fontSize: "0.68rem", fontWeight: 700 }} />
@@ -138,9 +138,9 @@ export default function TrendStatus({ lifecycle, note = "", spikeWeek = "this we
   const last = lifecycle.blocks[lifecycle.blocks.length - 1];
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
-      <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} alignItems={{ md: "center" }} sx={{ mb: 1.5 }}>
+      <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} sx={{ alignItems: { md: "center" }, mb: 1.5 }}>
         <Box sx={{ flexGrow: 1 }}>
-          <Stack direction="row" spacing={0.75} alignItems="center">
+          <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
             <AutoGraphIcon fontSize="small" sx={{ color: ACCENT }} />
             <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>Trend status</Typography>
             <AboutButton topic="lifecycle" />

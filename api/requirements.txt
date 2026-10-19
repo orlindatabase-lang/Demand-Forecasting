@@ -3,21 +3,17 @@ uvicorn[standard]>=0.32
 pydantic>=2.9
 pandas>=2.0
 numpy>=1.24
-# Live data source: BigQuery for sales (live_source.py uses stdlib urllib for
-# this), ERP PowerBI views via requests (closed_lot.py, embroidery.py,
-# inhouse.py, job_work.py, fob.py, debit_note.py, purchase_order.py, main.py).
+# Live data source (api/live_source.py): BigQuery for sales; the ERP report
+# API is called with the standard library (urllib).
 google-cloud-bigquery>=3.0
 google-cloud-bigquery-storage>=2.0   # faster bulk download of the sales table
 db-dtypes>=1.0
-requests>=2.31
 # Weekly demand forecasting (api/lgbm_forecast.py): rolling-origin CV
 # grid-search over LightGBM configs (Tweedie objective), best by average
-# validation WAPE. xgboost is used only by production-delay prediction
-# (api/delay_predict_*.py).
-xgboost>=2.0
+# validation WAPE.
 lightgbm>=4.0
 scikit-learn>=1.3
-# Dev-only: api/test_lgbm_forecast.py
+# Dev-only: the tests in api/tests/
 pytest>=8.0
 # Catalog style tier/image gallery (api/catalog_style.py): Cloud SQL
 # (Postgres) holding the CatalogStyle table - username/password from

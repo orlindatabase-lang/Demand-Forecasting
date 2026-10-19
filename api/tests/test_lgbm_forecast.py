@@ -9,14 +9,14 @@ inline inside ``compute()`` rather than in an extracted helper (the
 point-in-time ``design_level`` feature), the test instead verifies the same
 pandas expression pattern used there in isolation.
 
-Run: python -m pytest api/test_lgbm_forecast.py -v
+Run: python -m pytest api/tests/test_lgbm_forecast.py -v
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # the api/ modules
 
 import numpy as np
 import pandas as pd

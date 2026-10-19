@@ -146,7 +146,13 @@ _LGBM_GRID = [
 ]
 
 _CACHE_DIR = Path(__file__).resolve().parent / ".cache"
-_CACHE_VERSION = "v49"
+# v50 / d37 (2026-10-19): promo_discount / promotion_flag removed from both
+# models' features - they are known only after the week (summed discounts of
+# that week's orders) and are always 0 when forecasting, so production
+# predicted every future week as "no promotion" (measured on the training
+# panel with promo = 0 as in production: SKU WAPE 68.6% -> 53.8% without
+# them, bias -59% -> -20%; style 47.2% -> 43.1%, bias -32% -> -14%).
+_CACHE_VERSION = "v50"
 
 
 def _cache_file(snapshot: str) -> Path:
@@ -168,7 +174,7 @@ def save_cache(snapshot: str, forecasts: dict) -> None:
     _cache_file(snapshot).write_text(json.dumps(forecasts))
 
 
-_DESIGN_CACHE_VERSION = "d36"
+_DESIGN_CACHE_VERSION = "d37"
 
 
 def _design_cache_file(snapshot: str) -> Path:
@@ -580,8 +586,7 @@ def compute(df_full) -> dict:
                       "category_festival"] if _USE_FESTIVAL_FEATURES else []
     feature_cols = (lag_cols + roll_cols + trend_cols + calendar_cols
                     + prod_cat + ["design_no", "size", "product_age_weeks",
-                                  "design_level", "similar_design_level", "launch_drr",
-                                  "promo_discount", "promotion_flag"]
+                                  "design_level", "similar_design_level", "launch_drr"]
                     + festival_cols)
     cat_cols = prod_cat + ["design_no", "size"] + \
         (["festival_event", "category_festival"] if _USE_FESTIVAL_FEATURES else [])
@@ -917,7 +922,7 @@ def compute_design(df_full) -> dict:
     festival_cols = ["festival_mult", "is_festival", "festival_event", "days_to_festival_peak",
                       "category_festival"] if _USE_FESTIVAL_FEATURES else []
     feature_cols = (lag_cols + roll_cols + trend_cols + calendar_cols
-                    + prod_cat + ["product_age_weeks", "launch_drr", "promo_discount", "promotion_flag"]
+                    + prod_cat + ["product_age_weeks", "launch_drr"]
                     + festival_cols)
     cat_cols = prod_cat + (["festival_event", "category_festival"] if _USE_FESTIVAL_FEATURES else [])
     for c in cat_cols:

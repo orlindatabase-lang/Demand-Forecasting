@@ -6,6 +6,8 @@ import type {
   StyleLifecycleResponse,
   WeeklyProductionLogRow,
   CategoryAnalysisChannelsResponse,
+  CategoryAnalysisFilteredResponse,
+  TierMovementResponse,
   CategoryAnalysisResponse,
   DesignSuggestionsResponse,
 } from "@/types";
@@ -20,6 +22,14 @@ export interface AdminRefreshResponse {
   modelTraining: boolean;
   lgbmPending: boolean;
 }
+
+/** Category / Sub Category filter of the Tiers Spike Rate table (blank = all). */
+export interface CategoryFilter {
+  category: string;
+  subCategory: string;
+  tierMode?: "current" | "sale"; // tier level: current tier, or the tier at the time of sale
+}
+export const NO_FILTER: CategoryFilter = { category: "", subCategory: "" };
 
 export const dataService = {
   /** Forecasted + Actual sales pivoted by week/month, one row per Sub
@@ -56,15 +66,27 @@ export const dataService = {
 
   /** Monthly styles / orders / units / order spike per Category or Sub
    * Category, April 2025 to now - the Category Analysis page. */
-  async categoryAnalysis(level: "category" | "subCategory" | "style" | "tier") {
-    return apiGet<CategoryAnalysisResponse>(`/api/reports/category-analysis?level=${level}`);
+  async categoryAnalysis(level: "category" | "subCategory" | "style" | "tier", f: CategoryFilter = NO_FILTER) {
+    const params = new URLSearchParams({ level, category: f.category, subCategory: f.subCategory, tierMode: f.tierMode ?? "current" });
+    return apiGet<CategoryAnalysisResponse>(`/api/reports/category-analysis?${params.toString()}`);
+  },
+
+  /** Monthly totals for the styles matching Tier / Category / Sub Category /
+   * Style together - the Tiers Spike Rate chart. */
+  async categoryAnalysisFiltered(f: { brand: string; tier: string; category: string; subCategory: string; style: string }) {
+    const params = new URLSearchParams({ brand: f.brand, tier: f.tier, category: f.category, subCategory: f.subCategory, style: f.style });
+    return apiGet<CategoryAnalysisFilteredResponse>(`/api/reports/category-analysis/filtered?${params.toString()}`);
+  },
+
+  /** How long styles stay in each catalog tier and where they move (Tier movement tab). */
+  async tierMovement() {
+    return apiGet<TierMovementResponse>("/api/catalog/tier-movement");
   },
 
   /** One Category Analysis row split by marketplace (channel drill-down). */
-  async categoryAnalysisChannels(level: "category" | "subCategory" | "style" | "tier", group: string) {
-    return apiGet<CategoryAnalysisChannelsResponse>(
-      `/api/reports/category-analysis/channels?level=${level}&group=${encodeURIComponent(group)}`,
-    );
+  async categoryAnalysisChannels(level: "category" | "subCategory" | "style" | "tier", group: string, f: CategoryFilter = NO_FILTER) {
+    const params = new URLSearchParams({ level, group, category: f.category, subCategory: f.subCategory, tierMode: f.tierMode ?? "current" });
+    return apiGet<CategoryAnalysisChannelsResponse>(`/api/reports/category-analysis/channels?${params.toString()}`);
   },
 
   /** Season-wise design suggestions (running + upcoming season). */

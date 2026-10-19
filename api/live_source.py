@@ -27,6 +27,16 @@ import urllib.request
 
 import pandas as pd
 
+# Settings come from the environment (Cloud Run) or api/.env (local); a real
+# environment variable always wins over the file.
+try:
+    from pathlib import Path
+
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:
+    pass
+
 # --------------------------------------------------------------------------- #
 # Configuration (env-overridable)
 # --------------------------------------------------------------------------- #
@@ -39,7 +49,9 @@ ERP_URL = os.getenv(
     "ERP_URL",
     "http://195.250.31.101/DigiBizzErpApi/api/UnknownCallerApi/GetPowerBiReports",
 )
-ERP_TOKEN = os.getenv("ERP_TOKEN", "aaaqqqwww111")
+# Secret: set ERP_TOKEN in api/.env (local) or the Cloud Run environment -
+# never in code (2026-10-19 security fix: it used to be a hard-coded default).
+ERP_TOKEN = os.getenv("ERP_TOKEN", "")
 ERP_COMPANY_YEAR_ID = os.getenv("ERP_COMPANY_YEAR_ID", "83")
 ERP_TIMEOUT = int(os.getenv("ERP_TIMEOUT", "120"))
 
@@ -47,7 +59,6 @@ VIEW_MASTER = "View_Dboard_Master_Design_Wise_Fabric_Detail_For_BI"
 VIEW_PLANNING = "View_Program_Planning_For_Rdp"
 VIEW_INVENTORY = "View_Dboard_Trans_Final_Inventory_Data_For_Rdp"
 # Lot-journey: one row per (lot, process) with entry/exit dates + vendor.
-VIEW_PRODUCTION = "View_Dboard_Trans_Production_Analysis_For_BI"
 
 # WIP = in-house WIP + job-work WIP + allocation (2026-09-28, user-specified;
 # replaces open production order + in-house + job-work). ALLOCATION_QTY is
@@ -121,6 +132,10 @@ def fetch_erp_view(
         retries:          Max attempts (default: ERP_RETRIES).
         company_year_id:  Override CompanyYearId header (default: ERP_COMPANY_YEAR_ID).
     """
+    if not ERP_TOKEN:
+        print(f"[live_source] {view_name}: ERP_TOKEN is not set (api/.env or the environment) - "
+              f"ERP data unavailable")
+        return pd.DataFrame()
     failed_at = _UNAVAILABLE_VIEWS.get(view_name)
     if failed_at is not None and time.time() - failed_at < _UNAVAILABLE_TTL_S:
         return pd.DataFrame()
@@ -194,18 +209,6 @@ def strip_prefix(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
     return df.rename(columns={c: c[len(prefix):] for c in df.columns if c.startswith(prefix)})
 
 
-
-
-def fetch_production_analysis() -> pd.DataFrame:
-    """Fetch the lot-journey view (one row per lot×process, with FIRST/LAST dates).
-
-    Raw ERP columns: LOT_NO, MAIN_DESIGN_NAME, PROCESS_NAME, PARTY_NAME,
-                     FIRST_DATE, LAST_DATE, BAL_QTY, PRO_ORD_STATUS, ...
-    Returned columns (PA_ prefix): LOT_NO (kept), PA_MAIN_DESIGN_NAME,
-        PA_PROCESS_NAME, PA_PARTY_NAME, PA_FIRST_DATE, PA_LAST_DATE, ...
-    """
-    df = fetch_erp_view(VIEW_PRODUCTION)
-    return prefix_cols(df, "PA_") if not df.empty else df
 
 
 def fetch_master() -> pd.DataFrame:

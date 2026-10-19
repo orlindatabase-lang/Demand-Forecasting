@@ -1,5 +1,5 @@
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { dataService } from "@/services/dataService";
+import { dataService, NO_FILTER, type CategoryFilter } from "@/services/dataService";
 
 const REFRESH_MS = 60_000;
 
@@ -73,10 +73,31 @@ export function useWeeklyProductionLog(enabled: boolean) {
 }
 
 /** Category Analysis page - one query per level (category / subCategory). */
-export function useCategoryAnalysis(level: "category" | "subCategory" | "style" | "tier") {
+export function useCategoryAnalysis(level: "category" | "subCategory" | "style" | "tier", f: CategoryFilter = NO_FILTER) {
   return useQuery({
-    queryKey: ["categoryAnalysis", level],
-    queryFn: () => dataService.categoryAnalysis(level),
+    queryKey: ["categoryAnalysis", level, f.category, f.subCategory, f.tierMode ?? "current"],
+    queryFn: () => dataService.categoryAnalysis(level, f),
+    refetchInterval: 10 * REFRESH_MS,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** Tier movement tab: tier stays, moves and each style's tier journey. */
+export function useTierMovement(enabled: boolean) {
+  return useQuery({
+    queryKey: ["tierMovement"],
+    queryFn: () => dataService.tierMovement(),
+    enabled,
+    refetchInterval: 10 * REFRESH_MS,
+  });
+}
+
+/** Tiers Spike Rate chart: monthly totals for the chosen Tier / Category /
+ * Sub Category / Style (keeps showing the previous result while a new one loads). */
+export function useCategoryAnalysisFiltered(f: { brand: string; tier: string; category: string; subCategory: string; style: string }) {
+  return useQuery({
+    queryKey: ["categoryAnalysisFiltered", f.brand, f.tier, f.category, f.subCategory, f.style],
+    queryFn: () => dataService.categoryAnalysisFiltered(f),
     refetchInterval: 10 * REFRESH_MS,
     placeholderData: keepPreviousData,
   });
@@ -84,10 +105,14 @@ export function useCategoryAnalysis(level: "category" | "subCategory" | "style" 
 
 /** Channel (marketplace) drill-down of one Category Analysis row - fetched
  * only once that row is expanded. */
-export function useCategoryAnalysisChannels(level: "category" | "subCategory" | "style" | "tier", group: string) {
+export function useCategoryAnalysisChannels(
+  level: "category" | "subCategory" | "style" | "tier",
+  group: string,
+  f: CategoryFilter = NO_FILTER,
+) {
   return useQuery({
-    queryKey: ["categoryAnalysisChannels", level, group],
-    queryFn: () => dataService.categoryAnalysisChannels(level, group),
+    queryKey: ["categoryAnalysisChannels", level, group, f.category, f.subCategory, f.tierMode ?? "current"],
+    queryFn: () => dataService.categoryAnalysisChannels(level, group, f),
     refetchInterval: 10 * REFRESH_MS,
   });
 }

@@ -1,7 +1,7 @@
 """Tests for weekly_log.py's settling period: a finished week's actual keeps
 updating for SETTLE_DAYS days (late marketplace orders), then locks.
 
-Run: python -m pytest api/test_weekly_log.py -v
+Run: python -m pytest api/tests/test_weekly_log.py -v
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # the api/ modules
 
 import pytest
 

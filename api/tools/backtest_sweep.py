@@ -17,7 +17,7 @@ then restoring them. No cache files are written, no model is retrained, no
 production code is modified: this only READS already-cached forecasts and
 real sales history.
 
-Run: python api/backtest_sweep.py
+Run: python api/tools/backtest_sweep.py
 """
 from __future__ import annotations
 
@@ -32,6 +32,9 @@ os.environ.setdefault("DAILY_REFRESH", "off")
 
 import pandas as pd
 
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))   # the api/ modules
 import data
 
 _BLEND_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)

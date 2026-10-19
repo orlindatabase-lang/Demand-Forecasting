@@ -7,6 +7,13 @@ api/.env
 dashboard/node_modules/
 dashboard/dist/
 dashboard/.env
+.pytest_cache/
+*.log
+
+# Local reports / exports - not for the public repo
+Orlin_API_Endpoint_Map.pdf
+Deployment_Guide.pdf
+Missing_Master_Designs.csv
 
 # Large/legacy data exports kept locally but not tracked in history
 # (scratch pulls from earlier debugging, not referenced by any live code).

@@ -81,6 +81,14 @@ class WeeklyGridCell(BaseModel):
     actual: int | None = None
     forecast: int = 0
     partial: bool = False  # the current, still-in-progress week
+    # Frozen vs unfrozen (2026-10-14, user-requested): frozenForecast = running
+    # and upcoming weeks (~2 months) as forecast at the start of the current
+    # week, a completed week as forecast when it began (None if not recorded);
+    # liveForecast = today's forecast for a running or upcoming week (None for
+    # a completed week, which is not re-forecast). ``forecast`` stays what the
+    # report shows: completed weeks locked at their end, others live.
+    liveForecast: int | None = None
+    frozenForecast: int | None = None
 
 
 class WeeklyGridEvent(BaseModel):
@@ -129,6 +137,8 @@ class WeeklyGridTotals(BaseModel):
     cells: dict[str, WeeklyGridCell]  # weekStart (ISO) -> cell, summed across every matching group
     monthActualTotal: dict[str, int]     # month label -> summed actual, every matching group
     monthForecastTotal: dict[str, int]   # month label -> summed forecast, every matching group
+    frozenOn: str = ""     # date the active 2-month forecast freeze was taken ("" = none yet)
+    frozenUntil: str = ""  # end of its window - the next freeze is taken then
 
 
 class FestivalSubCategorySales(BaseModel):
