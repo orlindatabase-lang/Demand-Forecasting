@@ -173,6 +173,17 @@ _REFRESH_LOCK = threading.Lock()
 _LAST_REFRESH = 0.0
 
 
+@app.get("/api/data-health", tags=["meta"])
+def data_health() -> dict:
+    """Checks run on the loaded data: failed ERP stock / WIP (Suggested
+    Production overstated), incomplete or stale sales, a sale spike inside the
+    run-rate, sale-calendar mismatches, low accuracy of the last completed week,
+    selling styles with no master data. {checkedOn, dataThrough, issues: [...]}"""
+    if not data.DATA_READY:
+        return {"checkedOn": "", "dataThrough": "", "issues": []}
+    return data.data_health()
+
+
 @app.post("/admin/refresh", tags=["meta"])
 def refresh() -> dict:
     """Re-fetch the source data (live BigQuery + ERP, or CSV) and rebuild all

@@ -98,8 +98,8 @@ def test_start_value_unknown_when_nothing_was_saved_before_the_start():
     assert ff.start_values("s") == {}
 
 
-def test_no_two_month_snapshot_by_default():
-    # 2026-10-19: the 2-month freeze is off - only completed weeks are frozen.
+def test_no_two_month_snapshot_when_switched_off(monkeypatch):
+    monkeypatch.setattr(ff, "SNAPSHOT_ENABLED", False)   # FORECAST_2M_FREEZE=off
     ff.apply("s", {"A": {"2026-10-01": 10, "2026-10-08": 20, "2026-10-16": 30}}, ENDS, date(2026, 10, 3))
     assert ff.frozen_values("s") == ({}, "", "")
 

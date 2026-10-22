@@ -10,6 +10,7 @@ import type {
   TierMovementResponse,
   CategoryAnalysisResponse,
   DesignSuggestionsResponse,
+  DataHealthResponse,
 } from "@/types";
 
 export interface AdminRefreshResponse {
@@ -135,6 +136,13 @@ export const dataService = {
    * in-memory table — the "Refresh" button in the top bar. Does not restart
    * the actual API process (that's watchdog-managed); this is the safe,
    * no-downtime equivalent an admin can trigger from the UI at any time. */
+  /** Data checks: failed ERP stock / WIP, incomplete or stale sales, a sale
+   * spike inside the run-rate, calendar mismatches, low accuracy, missing
+   * master data (2026-10-19). */
+  async dataHealth() {
+    return apiGet<DataHealthResponse>("/api/data-health");
+  },
+
   async adminRefresh() {
     return apiPost<AdminRefreshResponse>("/admin/refresh");
   },

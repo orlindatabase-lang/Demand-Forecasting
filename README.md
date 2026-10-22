@@ -731,7 +731,7 @@ designs have already been through.
 ```mermaid
 flowchart TD
     MO["Model forecast, 13 weeks"] --> BL["Shrink towards baseline<br/>f = α · model + (1 − α) · naive · festival<br/>α = FORECAST_BLEND = 0.5"]
-    NV["Naive run-rate<br/>= gross units in last 35 days ÷ 5"] --> BL
+    NV["Naive run-rate<br/>= gross units in the last 60 days ÷ (60/7)<br/>RUNRATE_DAYS, was 35 until 19 Oct 2026"] --> BL
     BL --> FL["floor at 0"]
     FL --> SKU["SKU weekly series"]
     SKU --> H7["7-day = week 1"]
@@ -816,13 +816,15 @@ stateDiagram-v2
 - **Completed weeks** are locked at the last value they had while they ran, so past
   weeks never change when the model is retrained.
 - A week first seen after it had already ended is locked at the value computed then.
-- **Frozen view: past weeks only (since 19 Oct 2026).** The Weekly Sales Report's
-  **Forecast: Latest / Frozen (past weeks)** switch shows, for each completed week, the
-  forecast it had when the week began (or in the 15 Oct 2026 snapshot); running and
-  upcoming weeks show "—" there. Hovering a forecast shows both. No forecast snapshot of
-  the next 2 months is taken any more; the one taken on 15 Oct 2026 stays in
-  `frozen_snapshot` and is used for its completed weeks only. `FORECAST_2M_FREEZE=on`
-  brings the 2-month freeze back.
+- **Frozen view.** The Weekly Sales Report's **Forecast: Latest / Frozen** switch shows:
+  - **Running and upcoming weeks:** the 2-month snapshot (`frozen_snapshot`). The forecast
+    of the running week and the next ~2 months is saved once and kept unchanged until the
+    window ends (62 days); then the next 2 months are frozen. The current one was taken on
+    15 Oct 2026; the next is on 16 Dec 2026.
+  - **Completed weeks:** each week's forecast as it stood when it began (the freeze store's
+    start value, else the Production Log), else the value locked when it ended.
+
+  Hovering a forecast shows both. `FORECAST_2M_FREEZE=off` shows completed weeks only.
 
 The Weekly Production Log is separate: it records each week's forecast and suggested
 production as they were when the week started ([section 19.3](#193-weekly-production-log-lifecycle)).
@@ -1382,6 +1384,7 @@ erDiagram
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | Service, data-source and model status |
+| GET | `/api/data-health` | Data checks on the loaded data (see below) |
 | POST | `/admin/refresh` | Re-run the full pipeline (one at a time: 409 while running; 429 within `REFRESH_COOLDOWN_SECS` of the last one) |
 | GET | `/api/reports/weekly-grid` | Weekly Sales Report data |
 | GET | `/api/reports/channel-source/{style}/weekly` | Channel drill-down for one Style |
@@ -1398,6 +1401,26 @@ erDiagram
 
 Interactive documentation: `http://localhost:8000/docs`.
 
+### Data checks (`/api/data-health`)
+
+Data and business problems cannot be prevented, so every refresh checks for them. The
+results are available at `GET /api/data-health` (not shown on the dashboard, by request,
+19 Oct 2026). Nothing is changed by the checks.
+
+| Level | Check | Why it matters |
+|---|---|---|
+| Error | ERP stock or WIP view failed to load | Available = 0, so every Suggested Production is overstated |
+| Error | Sales download incomplete (rows vs BigQuery count) | Actuals and run-rate too low |
+| Error | Live data failed, offline CSV or sample data served | Every number out of date |
+| Warning | Sales data older than `HEALTH_STALE_DAYS` | Running week and run-rate miss recent days |
+| Warning | A sale spike (> `HEALTH_SPIKE_RATIO` × a normal day) inside the run-rate window (`RUNRATE_DAYS`), with the date it clears | Upcoming forecasts and production may be too high until then |
+| Warning | A spike on days with no event in the sale calendar | The calendar needs the real sale dates |
+| Warning | The calendar expects a sale in the last 7 days but sales are normal | Sale ended or dates wrong; running and upcoming weeks over-forecast |
+| Warning | Last completed week's accuracy below `HEALTH_ACCURACY_MIN` % (Production Log) | Review before trusting the next weeks |
+| Info | Selling styles with no Sub Category | Missing from the SKU master CSV |
+
+Regression tests for the forecast fixes and these checks: `api/tests/test_forecast_safeguards.py`.
+
 ### 24.3 Configuration
 
 | Variable | Default | Meaning |
@@ -1405,8 +1428,11 @@ Interactive documentation: `http://localhost:8000/docs`.
 | `DATA_SOURCE` | `live` | `live` (BigQuery + ERP) or `csv` |
 | `FORECAST_MODEL` | `lgbm` | `lgbm` (ML models) or `naive` (baseline only) |
 | `FORECAST_BLEND` | `0.5` | Weight α of the model vs the naive run-rate (was 0.25 until 19 Oct 2026) |
-| `FORECAST_2M_FREEZE` | `off` | `on`: also freeze the forecast of the next 2 months (the Frozen view's upcoming weeks); `off`: the Frozen view shows completed weeks only |
+| `RUNNING_WEEK_PACE_DAYS` | `7` | The running week is shown as actual so far + this many days' average daily sales × the days left (the model value is still what is locked and scored) |
+| `HEALTH_STALE_DAYS`, `HEALTH_SPIKE_RATIO`, `HEALTH_ACCURACY_MIN` | `2`, `2.0`, `70` | Data-check thresholds: data age in days, a sale day vs a normal day, last completed week's accuracy % |
+| `FORECAST_2M_FREEZE` | `on` | `on`: the Frozen view also shows the next 2 months as frozen in the active 2-month snapshot; `off`: completed weeks only |
 | `FESTIVAL_ON` | `runrate` | `runrate`: forecast = α · model + (1 − α) · naive · festival (the model already learns events); `both`: (α · model + (1 − α) · naive) · festival, the setup before 19 Oct 2026 |
+| `RUNRATE_DAYS` | `60` | Days in the naive run-rate (was 35 until 19 Oct 2026; backtest: weekly-total error 22.7% → 21.4%, sale weeks 33.5% → 29.8%, per style 61.0% → 61.6%) |
 | `FORECAST_LEVEL` | `style` | `style`: only the style (design) model is trained and served; `both`: also the SKU model (the setup before 19 Oct 2026) |
 | `RUN_BACKTEST` | `0` | Enable walk-forward evaluation |
 | `DAILY_REFRESH`, `REFRESH_HOUR`, `REFRESH_MINUTE` | `on`, `6`, `0` | Daily pipeline schedule |

@@ -52,12 +52,11 @@ CREATE TABLE IF NOT EXISTS frozen_snapshot (
 # starting within SNAPSHOT_DAYS, kept unchanged until that window ends; then
 # the next 2 months are frozen.
 SNAPSHOT_DAYS = 62
-# 2026-10-19, user-requested: no forecast snapshot of the NEXT 2 months - the
-# frozen view keeps past (completed) weeks only. New 2-month snapshots are no
-# longer taken; the existing one stays in the table (used for its completed
-# weeks only). FORECAST_2M_FREEZE=on brings the 2-month freeze back.
+# On by default (2026-10-19, user-requested: brought back after briefly
+# showing past weeks only). FORECAST_2M_FREEZE=off: no new 2-month snapshots,
+# and the frozen view shows completed weeks only.
 import os as _os
-SNAPSHOT_ENABLED = _os.getenv("FORECAST_2M_FREEZE", "off").strip().lower() in ("1", "on", "true")
+SNAPSHOT_ENABLED = _os.getenv("FORECAST_2M_FREEZE", "on").strip().lower() in ("1", "on", "true")
 
 
 def _connect() -> sqlite3.Connection:

@@ -484,3 +484,16 @@ export interface DesignSuggestionsResponse {
   window?: DesignWindow;
   seasons: DesignSeason[];
 }
+
+/** GET /api/data-health - checks on the loaded data (2026-10-19). */
+export interface DataHealthIssue {
+  level: "error" | "warning" | "info";
+  code: string;
+  title: string;
+  detail: string;
+}
+export interface DataHealthResponse {
+  checkedOn: string;
+  dataThrough: string;
+  issues: DataHealthIssue[];
+}

@@ -251,6 +251,13 @@ def fetch_inventory() -> pd.DataFrame:
 
 
 
+# What the last assemble() actually got from each source (2026-10-19, data
+# health checks - see data.data_health()): a source that silently fell back
+# (e.g. WIP / stock = 0 when an ERP view failed) must be visible, because it
+# changes the production suggestion.
+LAST_LOAD: dict = {}
+
+
 def fetch_sales_bigquery() -> pd.DataFrame:
     """Fetch sales orders from BigQuery (Application Default Credentials)."""
     from google.cloud import bigquery  # imported lazily so the API starts without the lib
@@ -280,6 +287,7 @@ def fetch_sales_bigquery() -> pd.DataFrame:
         expected_n = list(client.query(
             f"SELECT COUNT(*) AS n FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}` WHERE {where}"
         ).result())[0]["n"]
+        LAST_LOAD["sales_rows_expected"] = int(expected_n)
         if len(df) != expected_n:
             print(f"[live_source] sales fetch returned {len(df):,} rows but {expected_n:,} exist "
                   f"— retrying via REST row iterator", flush=True)
@@ -345,7 +353,9 @@ def assemble() -> pd.DataFrame:
     Returns a DataFrame with the same columns as final_merged_data.csv.
     """
     # 1) Sales (BigQuery) ----------------------------------------------------- #
+    LAST_LOAD.clear()
     sales = fetch_sales_bigquery()
+    LAST_LOAD["sales_rows"] = int(len(sales))
     sales["order_date"] = pd.to_datetime(sales["order_date"], errors="coerce")
 
     # Exclude combo-SKU order lines (2026-09-16, user-requested) - a bundle of
@@ -422,6 +432,7 @@ def assemble() -> pd.DataFrame:
     # physical SKU splits across several per-channel listing codes). See
     # lgbm_forecast.py's COL_SKU comment for the full numbers.
     master = fetch_master()
+    LAST_LOAD["master_ok"] = "MASTER_DESIGN_NO" in master.columns and not master.empty
     master_cols = ["MASTER_DESIGN_NO", "MASTER_DESIGN_GROUP", "MASTER_CATALOG_NAME",
                    "MASTER_COLOR", "MASTER_LAUNCH_DATE", "MASTER_SECTION"]
     merged = sales.assign(design_key=_design_key(sales["product_sku_code"]))
@@ -464,6 +475,7 @@ def assemble() -> pd.DataFrame:
     # 3) WIP (planning view), aggregated by design+size ----------------------- #
     # fetch_planning() returns PLAN_-prefixed columns (e.g. PLAN_DESIGN_NAME).
     plan = fetch_planning()
+    LAST_LOAD["wip_ok"] = True
     _WIP_COLS_PLAN = [f"PLAN_{c}" for c in _WIP_COLS]
     if {"PLAN_DESIGN_NAME", "PLAN_SIZE"}.issubset(plan.columns):
         plan[_WIP_COLS_PLAN] = (
@@ -481,11 +493,13 @@ def assemble() -> pd.DataFrame:
         )
     else:
         print("[live_source] planning view unavailable; WIP defaults to 0")
+        LAST_LOAD["wip_ok"] = False
         wip = pd.DataFrame(columns=["_design", "_size", "TOTAL_WIP_QTY"])
 
     # 4) Pending pieces (inventory view), aggregated by design+size ----------- #
     # fetch_inventory() returns INV_-prefixed columns (e.g. INV_DESIGN_NO).
     inv = fetch_inventory()
+    LAST_LOAD["stock_ok"] = True
     if {"INV_DESIGN_NO", "INV_SIZE", "INV_PENDING_QTY_PIECES"}.issubset(inv.columns):
         inv["INV_PENDING_QTY_PIECES"] = pd.to_numeric(
             inv["INV_PENDING_QTY_PIECES"], errors="coerce"
@@ -501,6 +515,7 @@ def assemble() -> pd.DataFrame:
         )
     else:
         print("[live_source] inventory view unavailable; PENDING defaults to 0")
+        LAST_LOAD["stock_ok"] = False
         pend = pd.DataFrame(columns=["_design", "_size", "PENDING_QTY_PIECES"])
 
     # 5) Join WIP + pending onto the sales panel ------------------------------ #

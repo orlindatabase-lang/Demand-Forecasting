@@ -84,6 +84,17 @@ FORECAST_BLEND = float(os.getenv("FORECAST_BLEND", "0.5"))
 # its output again double-counted them (sale weeks +34% with the model alone).
 # "both" = the old way: (blend) x festival.
 FESTIVAL_ON = os.getenv("FESTIVAL_ON", "runrate").strip().lower()
+# Running week shown as actual so far + this pace (Gross units per day over the
+# last N days of data) for the days left - see _compute_weekly_grid().
+RUNNING_WEEK_PACE_DAYS = int(os.getenv("RUNNING_WEEK_PACE_DAYS", "7"))
+# Naive run-rate = Gross units of the last RUNRATE_DAYS days, per week
+# (2026-10-19, user-approved: 60, was 35). Walk-forward backtest, 6 cutoffs
+# May-Sep 2026, 50/50 blend: weekly-total error 22.7% -> 21.4%, Sub Category
+# 31.8% -> 30.7%, sale weeks 33.5% -> 29.8%, right after the August sale
+# 27.9% -> 19.0%; per style 61.0% -> 61.6%. A sale stays in it longer but
+# weighs less.
+RUNRATE_DAYS = int(os.getenv("RUNRATE_DAYS", "60"))
+RUNRATE_WEEKS = RUNRATE_DAYS / 7.0
 
 
 def _blend(model: float | None, naive: float, mult: float) -> float:
@@ -314,6 +325,8 @@ def _source_dataframe():
     """
     import pandas as pd
 
+    global _LOADED_FROM
+    _LOADED_FROM = DATA_SOURCE
     if DATA_SOURCE == "live":
         try:
             import live_source
@@ -323,6 +336,7 @@ def _source_dataframe():
             return df
         except Exception as exc:  # noqa: BLE001
             print(f"[data] live fetch failed ({exc!r}); falling back to CSV", file=sys.stderr)
+            _LOADED_FROM = "csv-fallback"
 
     cols = [c for c in _FULL_COLS]  # read what both the plan and forecaster need
     return pd.read_csv(DATA_FILE, usecols=lambda c: c in cols, parse_dates=["order_date"])
@@ -480,9 +494,9 @@ def _backtest_model_accuracy(
         # Naive run-rate AS OF the snapshot date (last 35 days up to it) —
         # reconstructed from today's full history since only the model's own
         # weekly output was ever cached, not the naive figure alongside it.
-        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=34)
+        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=RUNRATE_DAYS - 1)
         hist = sales[(sales["order_date"] >= lo) & (sales["order_date"] <= pd.Timestamp(snap_date))]
-        naive_week = hist.groupby("product_sku_code")["qty"].sum() / 5.0
+        naive_week = hist.groupby("product_sku_code")["qty"].sum() / RUNRATE_WEEKS
 
         mult = _week_festival(week1_start)[0]
         week_iso = week1_start.isoformat()
@@ -562,9 +576,9 @@ def _backtest_model_accuracy(
             continue
 
         max_horizon = max((len(fc.get("weekly") or []) for fc in forecasts.values()), default=0)
-        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=34)
+        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=RUNRATE_DAYS - 1)
         hist = sales[(sales["order_date"] >= lo) & (sales["order_date"] <= pd.Timestamp(snap_date))]
-        naive_week = hist.groupby("product_sku_code")["qty"].sum() / 5.0
+        naive_week = hist.groupby("product_sku_code")["qty"].sum() / RUNRATE_WEEKS
 
         for w in range(max_horizon):
             week_start = _forecast_week_start(snap_date, w)
@@ -670,9 +684,9 @@ def _backtest_design_model_accuracy(
         ]
         actual = wk_sales.groupby("DESIGN_NO")["qty"].sum()
 
-        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=34)
+        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=RUNRATE_DAYS - 1)
         hist = sales[(sales["order_date"] >= lo) & (sales["order_date"] <= pd.Timestamp(snap_date))]
-        naive_week = hist.groupby("DESIGN_NO")["qty"].sum() / 5.0
+        naive_week = hist.groupby("DESIGN_NO")["qty"].sum() / RUNRATE_WEEKS
 
         mult = _week_festival(week1_start)[0]
         week_iso = week1_start.isoformat()
@@ -1123,7 +1137,7 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
     # FORECAST_BLEND=0.25, 75% of every published forecast was a NET run-rate
     # shown against a GROSS actual, a structural downward bias having nothing
     # to do with model quality.
-    last35 = window_sum(35, src=gross_sales)
+    last35 = window_sum(RUNRATE_DAYS, src=gross_sales)   # name kept; RUNRATE_DAYS days (60)
     # Realized avg selling price (revenue/qty) over the last 90 days.
     qty90 = window_sum(90)
     revenue90 = window_sum(90, col="total")
@@ -1270,7 +1284,7 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
     for sku in df["product_sku_code"].unique():
         skey = str(sku)
         naive35 = int(last35.get(sku, 0))
-        naive_week = naive35 / 5.0          # avg weekly run-rate (last 5 weeks ≈ 35 days)
+        naive_week = naive35 / RUNRATE_WEEKS   # avg weekly run-rate over the last RUNRATE_DAYS days
         q90 = float(qty90.get(sku, 0))
         price = round(float(revenue90.get(sku, 0)) / q90, 2) if q90 > 0 else 0.0
         fc = forecasts.get(skey) if forecasts else None
@@ -1893,7 +1907,7 @@ def rebuild() -> dict:
     Called once at import, by the daily auto-refresh, and by
     ``POST /admin/refresh``. Falls back to mock data on failure.
     """
-    global _SOURCE_DF, ACTIVE_FORECAST_MODEL, _LGBM_THREAD, FORECAST_SNAPSHOT
+    global _SOURCE_DF, ACTIVE_FORECAST_MODEL, _LGBM_THREAD, FORECAST_SNAPSHOT, _LOADED_FROM
     global _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN
     try:
         df = _source_dataframe()
@@ -1927,6 +1941,7 @@ def rebuild() -> dict:
             ACTIVE_FORECAST_MODEL = "naive"
             FORECAST_SNAPSHOT = ""
         _warm_caches()
+        _record_stock_snapshot()
         if forecasts is not None and (forecasts or STYLE_ONLY) and not needs_training:
             _record_weekly_production()
         if needs_training and not (_LGBM_THREAD and _LGBM_THREAD.is_alive()):
@@ -1943,6 +1958,7 @@ def rebuild() -> dict:
             [TopWarehouse(**d) for d in _aggregate("warehouse")],
         ))
         source = "mock"
+        _LOADED_FROM = "mock"
 
     return {
         "source": source,
@@ -1950,6 +1966,151 @@ def rebuild() -> dict:
         "snapshot": SNAPSHOT_DATE.isoformat(),
         **model_status(),
     }
+
+
+# --------------------------------------------------------------------------- #
+# Data health (2026-10-19, user-requested: "make sure the data / business
+# problems do not come back and give a wrong forecast or production
+# suggestion"). They cannot be prevented - a sale, estimated sale dates or a
+# failed ERP feed will happen again - so every refresh checks for them and the
+# dashboard shows a warning before a wrong number is acted on. Read-only: no
+# forecast or production number is changed here.
+# --------------------------------------------------------------------------- #
+_LOADED_FROM = ""                   # live / csv / csv-fallback / mock
+_HEALTH_CACHE: tuple | None = None  # (_DATA_VERSION, today, result)
+HEALTH_STALE_DAYS = int(os.getenv("HEALTH_STALE_DAYS", "2"))
+HEALTH_SPIKE_RATIO = float(os.getenv("HEALTH_SPIKE_RATIO", "2.0"))     # a day vs a normal day
+HEALTH_ACCURACY_MIN = float(os.getenv("HEALTH_ACCURACY_MIN", "70"))    # %, last completed week
+
+
+def _daily_gross_total() -> dict[str, int]:
+    """{day ISO: Gross units, all SKUs} from the loaded plan."""
+    out: dict[str, int] = {}
+    for days in _DAY_ACTUAL_GROSS.values():
+        for d, q in days.items():
+            out[d] = out.get(d, 0) + q
+    return out
+
+
+def data_health() -> dict:
+    """{"checkedOn", "dataThrough", "issues": [{level, code, title, detail}]}.
+    level: "error" (a number on the dashboard is wrong now), "warning" (numbers
+    are likely to be off), "info" (data quality to fix)."""
+    global _HEALTH_CACHE
+    today = date.today()
+    if _HEALTH_CACHE and _HEALTH_CACHE[0] == _DATA_VERSION and _HEALTH_CACHE[1] == today:
+        return _HEALTH_CACHE[2]
+    issues: list[dict] = []
+
+    def add(level, code, title, detail):
+        issues.append({"level": level, "code": code, "title": title, "detail": detail})
+
+    # 1. Was the source data loaded completely?
+    if _LOADED_FROM in ("csv-fallback", "mock"):
+        what = "the offline CSV" if _LOADED_FROM == "csv-fallback" else "sample data"
+        add("error", "source_fallback", "Live data could not be loaded",
+            f"Serving {what} - every number may be out of date. Check the BigQuery / ERP "
+            f"connection and refresh.")
+    try:
+        import live_source
+        ll = dict(live_source.LAST_LOAD)
+    except Exception:  # noqa: BLE001
+        ll = {}
+    if _LOADED_FROM == "live":
+        missing = [n for n, k in (("stock", "stock_ok"), ("WIP", "wip_ok")) if ll.get(k) is False]
+        if missing:
+            m = " and ".join(missing)
+            add("error", "erp_stock_missing", f"ERP {m} not loaded - Suggested Production is overstated",
+                f"The ERP {m} view failed, so the available quantity counts it as 0 and every "
+                f"Suggested Production is too high. Do not release production from it; refresh "
+                f"once the ERP is reachable.")
+        if ll.get("master_ok") is False:
+            add("warning", "erp_master_missing", "ERP design master not loaded",
+                "Launch dates and design details are missing for this load; forecasts for new "
+                "styles are less reliable.")
+        exp, got = ll.get("sales_rows_expected"), ll.get("sales_rows")
+        if exp and got is not None and got < exp * 0.995:
+            add("error", "sales_incomplete", "Sales download incomplete",
+                f"{got:,} of {exp:,} sales rows were downloaded ({(1 - got / exp) * 100:.1f}% "
+                f"missing): actual sales and the run-rate are too low. Refresh.")
+    # 2. Is the data fresh?
+    lag = (today - SNAPSHOT_DATE).days
+    if lag > HEALTH_STALE_DAYS:
+        add("warning", "data_stale", f"Sales data is {lag} days old",
+            f"The latest order is from {SNAPSHOT_DATE.isoformat()}: the running week and the "
+            f"run-rate miss the last {lag - 1} days.")
+
+    daily = _daily_gross_total()
+    vals = sorted(daily.get((SNAPSHOT_DATE - timedelta(days=i)).isoformat(), 0) for i in range(91))
+    normal = vals[len(vals) // 2] if daily else 0
+    if normal > 0:
+        # 3. A sale spike inside the run-rate window (RUNRATE_DAYS).
+        window = [SNAPSHOT_DATE - timedelta(days=i) for i in range(RUNRATE_DAYS)]
+        spikes = [d for d in window if daily.get(d.isoformat(), 0) > HEALTH_SPIKE_RATIO * normal]
+        if spikes:
+            rr = sum(daily.get(d.isoformat(), 0) for d in window) / RUNRATE_WEEKS
+            clears = max(spikes) + timedelta(days=RUNRATE_DAYS)
+            add("warning", "runrate_spike", "A sale spike is inside the run-rate",
+                f"{len(spikes)} day(s) between {min(spikes):%d %b} and {max(spikes):%d %b} sold "
+                f"over {HEALTH_SPIKE_RATIO:g}x a normal day ({normal:,} units). The run-rate "
+                f"({rr:,.0f}/week, {rr / (normal * 7):.1f}x normal) carries them until about "
+                f"{clears:%d %b}: upcoming weeks' forecast and Suggested Production may be too high "
+                f"until then. Check the running week's real pace before releasing production.")
+        # 4a. A spike with no event in the sale calendar.
+        recent = [SNAPSHOT_DATE - timedelta(days=i) for i in range(21)]
+        unlisted = [d for d in recent if daily.get(d.isoformat(), 0) > 1.8 * normal
+                    and not festival_calendar.events_overlapping(d, d)]
+        if unlisted:
+            add("warning", "calendar_missing_event", "Sales spike not in the sale calendar",
+                f"{', '.join(f'{d:%d %b}' for d in sorted(unlisted))} sold far above normal but the "
+                f"festival / sale calendar has no event on those days. Add the real sale dates to "
+                f"Indian_Festivals_Ecommerce_Sales_2025_2028.csv.")
+        # 4b. A calendar sale that is not showing in sales (dates wrong or ended).
+        last7 = [SNAPSHOT_DATE - timedelta(days=i) for i in range(7)]
+        cal = sum(festival.festival_factor(d)[0] for d in last7) / 7
+        real = sum(daily.get(d.isoformat(), 0) for d in last7) / 7
+        if cal >= 1.25 and real < 1.25 * normal:
+            add("warning", "calendar_event_not_seen", "Calendar sale not showing in sales",
+                f"The calendar expects x{cal:.2f} sales over the last 7 days, but they ran at "
+                f"{real / normal:.1f}x normal. The sale may have ended or have other dates - correct "
+                f"the calendar, or the running and upcoming weeks stay over-forecast.")
+    # 5. Accuracy of the last completed week (Production Log: forecast at week start).
+    try:
+        import weekly_log
+        done = [r for r in weekly_log.read("", "")
+                if r.get("status") == "completed" and r.get("actual_qty") is not None]
+        if done:
+            wk = max(r["week_start"] for r in done)
+            f = sum(r["forecast_qty"] or 0 for r in done if r["week_start"] == wk)
+            a = sum(r["actual_qty"] or 0 for r in done if r["week_start"] == wk)
+            if a > 0:
+                acc = max(0.0, (1 - abs(f - a) / a) * 100)
+                if acc < HEALTH_ACCURACY_MIN:
+                    add("warning", "accuracy_low", f"Last completed week's accuracy {acc:.0f}%",
+                        f"Week from {wk}: forecast {f:,} vs actual {a:,} ({(f / a - 1) * 100:+.0f}%). "
+                        f"Review before trusting the next weeks' numbers.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[data] health: production log unavailable ({exc!r})", file=sys.stderr)
+    # 6. Selling styles with no master data.
+    cutoff = (SNAPSHOT_DATE - timedelta(days=55)).isoformat()
+    selling: dict[str, int] = {}
+    for r in PLAN_ROWS:
+        if r.designNo and r.subCategory in ("", "Unclassified"):
+            q = sum(v for d, v in _DAY_ACTUAL_GROSS.get(r.skuCode, {}).items() if d >= cutoff)
+            if q:
+                selling[r.designNo] = selling.get(r.designNo, 0) + q
+    if selling:
+        top = sorted(selling.items(), key=lambda kv: -kv[1])[:5]
+        add("info", "master_missing", f"{len(selling)} selling styles have no Sub Category",
+            f"{sum(selling.values()):,} units in the last 8 weeks (largest: "
+            f"{', '.join(f'{k} {v:,}' for k, v in top)}). Add them to "
+            f"SKU_Master_Data_Final_Cleaned.csv so they group and filter correctly.")
+
+    order = {"error": 0, "warning": 1, "info": 2}
+    issues.sort(key=lambda i: order[i["level"]])
+    result = {"checkedOn": today.isoformat(), "dataThrough": SNAPSHOT_DATE.isoformat(), "issues": issues}
+    _HEALTH_CACHE = (_DATA_VERSION, today, result)
+    return result
 
 
 def model_status() -> dict:
@@ -3299,6 +3460,26 @@ def get_style_lifecycle(sub_category: str = "") -> dict:
 _LOG_WEEKS = 9
 
 
+def _record_stock_snapshot() -> None:
+    """Save today's ERP stock + WIP per SKU to the daily stock history
+    (stock_log.py, 2026-10-20). Live loads only, and only when both ERP views
+    loaded - a failed view's 0s would be recorded as stock-outs. Never fails
+    the refresh."""
+    try:
+        if _LOADED_FROM != "live":
+            return
+        import live_source
+        ll = live_source.LAST_LOAD
+        if not (ll.get("stock_ok") and ll.get("wip_ok")):
+            print("[stock_log] ERP stock / WIP not loaded - no snapshot today", file=sys.stderr)
+            return
+        import stock_log
+        n = stock_log.save([(r.skuCode, r.designNo, r.inventoryQty, r.wipQty) for r in PLAN_ROWS], date.today())
+        print(f"[stock_log] stock snapshot saved ({n:,} SKUs, {date.today().isoformat()})", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[stock_log] snapshot failed ({exc!r})", file=sys.stderr)
+
+
 def _record_weekly_production() -> None:
     """Weekly production log (weekly_log.py), run after every up-to-date
     model publish: first (re)reads the actual sale of every logged week the
@@ -3597,6 +3778,44 @@ def _compute_weekly_grid(
         print(f"[data] forecast freeze unavailable ({exc!r}); serving live values", file=sys.stderr)
         fc_cells = live_cells
 
+    # Running week = actual so far + current pace for the days left (2026-10-19,
+    # user-requested: the running week's model forecast was far above how it was
+    # actually selling, e.g. Oct W3 127,963 vs ~88k at the real pace). Shown
+    # only: the freeze store above already saved the MODEL forecast, so the
+    # value a week is locked at when it ends - and its accuracy - stays the
+    # model's. Pace = each row's own Gross units per day over the last
+    # RUNNING_WEEK_PACE_DAYS days of data. Applied once at least one day of the
+    # week has data.
+    if cur_chunk is not None and SNAPSHOT_DATE >= cur_chunk[0]:
+        cur_iso = cur_chunk[0].isoformat()
+        done_days = [(cur_chunk[0] + timedelta(days=i)).isoformat()
+                     for i in range((min(SNAPSHOT_DATE, cur_chunk[1]) - cur_chunk[0]).days + 1)]
+        pace_days = [(SNAPSHOT_DATE - timedelta(days=i)).isoformat() for i in range(RUNNING_WEEK_PACE_DAYS)]
+        days_left = max(0, (cur_chunk[1] - SNAPSHOT_DATE).days)
+        fc_cells = {k: dict(v) for k, v in fc_cells.items()}
+        live_cells = {k: dict(v) for k, v in live_cells.items()}
+        for key, skus in groups.items():
+            so_far = recent = 0
+            for s in skus:
+                dm = _DAY_ACTUAL_GROSS.get(s)
+                if dm:
+                    so_far += sum(dm.get(d, 0) for d in done_days)
+                    recent += sum(dm.get(d, 0) for d in pace_days)
+            est = so_far + round(recent / RUNNING_WEEK_PACE_DAYS * days_left)
+            fc_cells.setdefault(key, {})[cur_iso] = est
+            live_cells.setdefault(key, {})[cur_iso] = est
+
+    # Production Log: each style's forecast as captured when the week began
+    # ({style: {week_start: qty}}), for the frozen view's completed weeks.
+    plog: dict[str, dict[str, float]] = {}
+    try:
+        import weekly_log
+        for r in weekly_log.read("", ""):
+            if r.get("forecast_qty") is not None:
+                plog.setdefault(str(r["style"]), {})[str(r["week_start"])] = float(r["forecast_qty"])
+    except Exception as exc:  # noqa: BLE001 — only fills the frozen view's gaps
+        print(f"[data] production log unavailable for the frozen view ({exc!r})", file=sys.stderr)
+
     def _frozen_live(keys, c_start, c_end) -> tuple[int | None, int | None]:
         """(frozen, latest) forecast of a week summed over ``keys``
         (2026-10-14 / 2026-10-15, user-requested frozen vs unfrozen view):
@@ -3618,7 +3837,22 @@ def _compute_weekly_grid(
             return None, live
         vals = [snap_cells[k][iso] for k in keys if iso in snap_cells.get(k, {})]
         if not vals and c_end < today:
-            vals = [start_cells[k][iso] for k in keys if iso in start_cells.get(k, {})]
+            # A completed week (2026-10-19, user-requested: fill the Frozen
+            # (past weeks) view): per row, its forecast when the week began -
+            # the freeze store's start value, else the Production Log's
+            # start-of-week forecast for the row's styles - else the value it
+            # was locked at when the week ended (all that exists for weeks
+            # before the Production Log, Sep W4 2026).
+            vals = []
+            for k in keys:
+                if iso in start_cells.get(k, {}):
+                    vals.append(start_cells[k][iso])
+                    continue
+                logged = [plog[s][iso] for s in group_styles.get(k, ()) if iso in plog.get(s, {})]
+                if logged:
+                    vals.append(sum(logged))
+                elif iso in fc_cells.get(k, {}):
+                    vals.append(fc_cells[k][iso])
         return (int(sum(round(v) for v in vals)) if vals else None), live
     # Headline totals across EVERY matching group (search-filtered, but not
     # paginated) - each SKU belongs to exactly one Sub Category and exactly
