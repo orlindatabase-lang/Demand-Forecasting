@@ -22,6 +22,8 @@ import {
   TableHead,
   TableRow,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -193,7 +195,7 @@ function Cell({
       </TableCell>
     );
   }
-  const accuracy = showAccuracy && cell.actual !== null ? monthAccuracy(cell.actual, cell.forecast) : null;
+  const accuracy = showAccuracy && cell.actual !== null && !cell.frozenMissing ? monthAccuracy(cell.actual, cell.forecast) : null;
   return (
     <TableCell
       align="right"
@@ -209,9 +211,11 @@ function Cell({
       <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: 1.3 }}>
         {cell.actual === null ? <span style={{ color: "#94a3b8" }}>—</span> : formatNumber(cell.actual)}
       </Typography>
-      <Typography variant="caption" sx={{ color: FORECAST_COLOR, lineHeight: 1.3, display: "block" }}>
-        {formatNumber(cell.forecast)}
-      </Typography>
+      <Tooltip title={forecastTip(cell)} placement="top">
+        <Typography variant="caption" sx={{ color: FORECAST_COLOR, lineHeight: 1.3, display: "block", cursor: "help" }}>
+          {cell.frozenMissing ? "—" : formatNumber(cell.forecast)}
+        </Typography>
+      </Tooltip>
       {accuracy !== null && (
         <Typography
           variant="caption"
@@ -222,6 +226,61 @@ function Cell({
       )}
     </TableCell>
   );
+}
+
+// The active 2-month freeze ("frozen on" / "until"), set from the grid response.
+const FREEZE = { on: "", until: "" };
+const shortIso = (iso: string) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "");
+
+/** Frozen (2-month freeze) vs unfrozen (latest / at week end) forecast of one
+ * week (2026-10-14 / 2026-10-15, user-requested). */
+function forecastTip(cell: WeeklyGridCell): string {
+  if (cell.frozenMissing) {
+    return FREEZE.on
+      ? `Not in the 2-month freeze taken on ${shortIso(FREEZE.on)} - it is frozen in the next freeze${FREEZE.until ? ` (${shortIso(FREEZE.until)})` : ""}. Latest: ${formatNumber(cell.liveForecast ?? 0)}`
+      : `Frozen view shows past weeks only - this week is not finished yet. Latest: ${formatNumber(cell.liveForecast ?? 0)}`;
+  }
+  if (cell.liveForecast === undefined && cell.frozenForecast === undefined) return "";
+  const start = cell.frozenForecast;
+  const startText = start == null ? "not frozen" : formatNumber(start);
+  const frozenLabel = FREEZE.on ? `Frozen on ${shortIso(FREEZE.on)}` : "Frozen";
+  const pct = (a: number, b: number) => (b > 0 ? ` (${a >= b ? "+" : ""}${(((a - b) / b) * 100).toFixed(1)}%)` : "");
+  if (cell.actual === null) {
+    const now = cell.liveForecast ?? cell.forecast;
+    return start == null
+      ? `Latest forecast: ${formatNumber(now)} · beyond this week's 2-month freeze, or not recorded yet`
+      : `${frozenLabel}: ${formatNumber(start)} · Latest: ${formatNumber(now)}${pct(now, start)}`;
+  }
+  if (cell.partial) {
+    const now = cell.liveForecast ?? cell.forecast;
+    return `${frozenLabel}: ${startText} · Latest: ${formatNumber(now)}${start != null ? pct(now, start) : ""}`;
+  }
+  return `${frozenLabel}: ${startText} · At week end (locked): ${formatNumber(cell.forecast)}${start != null ? pct(cell.forecast, start) : ""}`;
+}
+
+/** The grid with every started week's forecast as it was AT THE WEEK'S START
+ * (the frozen view); weeks with no recorded start value keep their figure.
+ * Month and grand totals re-summed. */
+function toWeekStart(data: WeeklyGridResponse): WeeklyGridResponse {
+  // A running / upcoming week with no frozen value yet shows "—", never the
+  // latest forecast (which changes every day); a completed week keeps its
+  // locked value. (2026-10-15, user-reported: frozen numbers were changing.)
+  const swap = (c: WeeklyGridCell): WeeklyGridCell => {
+    if (c.frozenForecast != null) return { ...c, forecast: c.frozenForecast };
+    return c.partial || c.actual === null ? { ...c, forecast: 0, frozenMissing: true } : c;
+  };
+  const monthTotals = (cells: Record<string, WeeklyGridCell>) => {
+    const out: Record<string, number> = {};
+    for (const m of data.months) out[m.label] = m.weeks.reduce((a, w) => a + (cells[w.weekStart]?.forecast ?? 0), 0);
+    return out;
+  };
+  const rows = data.rows.map((r) => {
+    const cells = Object.fromEntries(Object.entries(r.cells).map(([k, c]) => [k, swap(c)]));
+    const monthForecastTotal = monthTotals(cells);
+    return { ...r, cells, monthForecastTotal, grandForecastTotal: Object.values(monthForecastTotal).reduce((a, b) => a + b, 0) };
+  });
+  const tCells = Object.fromEntries(Object.entries(data.weeklyTotals.cells).map(([k, c]) => [k, swap(c)]));
+  return { ...data, rows, weeklyTotals: { ...data.weeklyTotals, cells: tCells, monthForecastTotal: monthTotals(tCells) } };
 }
 
 // One marketplace's actual Gross Sale for one week (2026-09-16,
@@ -413,7 +472,7 @@ function EventPanel({
               : "linear-gradient(135deg, #faf0fd 0%, #f6e0fa 100%)",
         }}
       >
-        <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mb: 1 }}>
+        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 1 }}>
           <Box
             sx={{
               width: 22,
@@ -703,13 +762,25 @@ export default function WeeklySalesGrid() {
   // CSV export already uses) and filter client-side, rather than trying to
   // paginate a set the backend doesn't know how to slice by tier.
   const tierFilterActive = tierStyleSet !== null;
-  const { data, isLoading, isError, refetch } = useWeeklyGrid("style", {
+  const { data: gridData, isLoading, isError, refetch } = useWeeklyGrid("style", {
     limit: tierFilterActive ? FULL_EXPORT_LIMIT : PAGE_SIZE,
     offset: tierFilterActive ? 0 : offset,
     search: debouncedSearch,
     subCategory: subCategoryFilter === "all" ? "" : subCategoryFilter,
     category: categoryFilter === "all" ? "" : categoryFilter,
   });
+  // Forecast: Latest (default - what the report always showed: running and
+  // upcoming weeks live, completed weeks locked at their end) or Frozen (each
+  // started week as forecast at its start) - 2026-10-14, user-requested.
+  const [forecastView, setForecastView] = useState<"frozen" | "latest">("latest");
+  if (gridData) {
+    FREEZE.on = gridData.weeklyTotals.frozenOn ?? "";
+    FREEZE.until = gridData.weeklyTotals.frozenUntil ?? "";
+  }
+  const data = useMemo(
+    () => (gridData && forecastView === "frozen" ? toWeekStart(gridData) : gridData),
+    [gridData, forecastView],
+  );
 
   const visibleRows = useMemo(() => {
     if (!data) return [];
@@ -971,12 +1042,14 @@ export default function WeeklySalesGrid() {
             setSearchText(e.target.value);
             setOffset(0);
           }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon fontSize="small" />
-              </InputAdornment>
-            ),
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" />
+                </InputAdornment>
+              ),
+            },
           }}
           sx={{ minWidth: 220 }}
         />
@@ -1032,13 +1105,29 @@ export default function WeeklySalesGrid() {
           </Select>
         </FormControl>
 
+        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", ml: "auto" }}>
+          <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700 }}>FORECAST:</Typography>
+          <Tooltip title={FREEZE.on
+            ? `Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: the forecast of the next 2 months frozen on ${shortIso(FREEZE.on)} and kept unchanged${FREEZE.until ? ` until ${shortIso(FREEZE.until)}` : ""}. Hover any forecast figure to see both.`
+            : "Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: past (completed) weeks only, each with the forecast it had when the week began; running and upcoming weeks show —. Hover any forecast figure to see both."}>
+            <ToggleButtonGroup
+              exclusive
+              size="small"
+              value={forecastView}
+              onChange={(_e, v) => v && setForecastView(v)}
+              sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontWeight: 700, px: 1.25, py: 0.4 } }}
+            >
+              <ToggleButton value="latest">Latest</ToggleButton>
+              <ToggleButton value="frozen">{FREEZE.on ? `Frozen (${shortIso(FREEZE.on)})` : "Frozen (past weeks)"}</ToggleButton>
+            </ToggleButtonGroup>
+          </Tooltip>
+        </Stack>
         <Button
           size="small"
           variant="outlined"
           startIcon={<DownloadIcon fontSize="small" />}
           onClick={handleExportAll}
           disabled={exporting || data.total === 0}
-          sx={{ ml: "auto" }}
         >
           {exporting ? "Exporting…" : "Export Full Report"}
         </Button>
@@ -1141,7 +1230,7 @@ export default function WeeklySalesGrid() {
           ["Sale", SALE_ACCENT, eventTint("sale")],
           ["Both", BOTH_EVENTS_ACCENT, eventTint("both")],
         ] as const).map(([label, accent, tint]) => (
-          <Stack key={label} direction="row" alignItems="center" spacing={0.5}>
+          <Stack key={label} direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
             <Box
               sx={{
                 width: 14,
@@ -1432,7 +1521,7 @@ export default function WeeklySalesGrid() {
                             bgcolor: "background.paper",
                           }}
                         >
-                          <Stack direction="row" alignItems="center" spacing={0.5}>
+                          <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
                             {(() => {
                               const catalogInfo = styleTierMap.get(r.key);
                               return catalogInfo?.imageUrl ? (
@@ -1475,7 +1564,7 @@ export default function WeeklySalesGrid() {
                           <Typography variant="caption" sx={{ color: "text.secondary", display: "block", pl: 3.5 }}>
                             {r.subCategory || "Unclassified"}
                           </Typography>
-                          <Stack direction="row" alignItems="center" spacing={0.5} sx={{ pl: 3.5 }}>
+                          <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", pl: 3.5 }}>
                             <Typography variant="caption" sx={{ color: "text.secondary" }}>
                               {r.skuCount} SKU{r.skuCount === 1 ? "" : "s"}
                             </Typography>
@@ -1569,7 +1658,7 @@ export default function WeeklySalesGrid() {
                     borderColor: "divider",
                   }}
                 >
-                  <Stack direction="row" alignItems="center" spacing={0.25}>
+                  <Stack direction="row" spacing={0.25} sx={{ alignItems: "center" }}>
                     <IconButton
                       size="small"
                       onClick={() => setTotalExpanded((e) => !e)}
@@ -1805,7 +1894,7 @@ export default function WeeklySalesGrid() {
               Showing every matching Style at once - clear the tier filter to page normally.
             </Typography>
           ) : (
-            <Stack direction="row" alignItems="center" spacing={1.5}>
+            <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
               <Button
                 size="small"
                 disabled={offset === 0}
@@ -1862,7 +1951,7 @@ export default function WeeklySalesGrid() {
                 sx={{ maxWidth: "92vw", maxHeight: "82vh", objectFit: "contain" }}
               />
             ) : (
-              <Stack alignItems="center" spacing={1} sx={{ color: "rgba(255,255,255,0.7)" }}>
+              <Stack spacing={1} sx={{ alignItems: "center", color: "rgba(255,255,255,0.7)" }}>
                 <ImageNotSupportedIcon sx={{ fontSize: 64 }} />
                 <Typography>No image on file</Typography>
               </Stack>
@@ -1870,8 +1959,8 @@ export default function WeeklySalesGrid() {
             <Stack
               direction="row"
               spacing={1}
-              alignItems="center"
-              sx={{ position: "absolute", bottom: 24, color: "#fff" }}
+             
+              sx={{ alignItems: "center", position: "absolute", bottom: 24, color: "#fff" }}
             >
               <Typography variant="h6" sx={{ fontWeight: 700 }}>
                 {lightboxStyle.name}
@@ -1903,7 +1992,7 @@ export default function WeeklySalesGrid() {
             <Stack spacing={1} sx={{ mt: 1 }}>
               {eventPopover.week.events.map((ev, i) => (
                 <Stack key={`${ev.name}-${i}`} spacing={0.25}>
-                  <Stack direction="row" alignItems="center" spacing={0.75}>
+                  <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
                     <Box
                       sx={{
                         width: 10,

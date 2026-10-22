@@ -26,7 +26,7 @@ import PageHeader from "@/components/common/PageHeader";
 import AboutButton from "@/components/design/AboutButton";
 import TrendStatus from "@/components/design/TrendStatus";
 import ProductCards from "@/components/design/ProductCards";
-import TrendBadge, { RULES } from "@/components/design/TrendBadge";
+import { RULES } from "@/components/design/TrendBadge";
 import type { AboutKey } from "@/components/design/aboutContent";
 import { LoadingSkeleton, ErrorState } from "@/components/common/StateViews";
 import { useDesignSuggestions } from "@/hooks/useDashboardData";
@@ -64,7 +64,7 @@ function Momentum({ value, label }: { value: number | null | undefined; label?: 
 function SectionTitle({ icon, title, hint, topic }: { icon?: React.ReactNode; title: string; hint: string; topic?: AboutKey }) {
   return (
     <Box sx={{ mb: 1.25 }}>
-      <Stack direction="row" spacing={0.75} alignItems="center">
+      <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
         {icon}
         <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>{title}</Typography>
         {topic && <AboutButton topic={topic} />}
@@ -78,14 +78,14 @@ function DriverList({ title, items, positive }: { title: string; items: DesignDr
   const max = Math.max(1, ...items.map((d) => Math.abs(d.effectPct)));
   return (
     <Box sx={{ flex: "1 1 320px" }}>
-      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mb: 1 }}>
+      <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 1 }}>
         {positive ? <TrendingUpIcon fontSize="small" sx={{ color: UP }} /> : <TrendingDownIcon fontSize="small" sx={{ color: DOWN }} />}
         <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>{title}</Typography>
       </Stack>
       <Stack spacing={0.8}>
         {items.map((d) => (
           <Box key={`${d.attribute}-${d.value}`}>
-            <Stack direction="row" spacing={1} alignItems="baseline">
+            <Stack direction="row" spacing={1} sx={{ alignItems: "baseline" }}>
               <Typography variant="caption" sx={{ color: MUTED, width: 82, flexShrink: 0 }}>{ATTR_LABEL[d.attribute] ?? d.attribute}</Typography>
               <Typography variant="body2" sx={{ fontWeight: 600, flexGrow: 1 }} noWrap>{d.value}</Typography>
               <Typography variant="body2" sx={{ fontWeight: 800, color: positive ? UP : DOWN }}>
@@ -187,14 +187,12 @@ function SeasonView({
   trending,
   lifecycle,
   view,
-  hitPct,
   window,
 }: {
   season: DesignSeason;
   trending?: DesignTrendingNow;
   lifecycle?: DesignLifecycle;
   view: View;
-  hitPct?: number | null;
   window?: DesignWindow;
 }) {
   const boosts = useMemo(() => season.drivers.filter((d) => d.effectPct > 0).slice(0, 8), [season]);
@@ -203,7 +201,7 @@ function SeasonView({
   if (season.note) {
     return <Paper variant="outlined" sx={{ p: 3, color: MUTED }}>{season.note}</Paper>;
   }
-  if (view === "suggestion") return <ProductCards season={season} hitPct={hitPct} />;
+  if (view === "suggestion") return <ProductCards season={season} />;
   return (
     <Stack spacing={2.5}>
       {/* What is happening: trend stages (with sudden spikes), designs taking off, and what the model learned */}
@@ -261,7 +259,7 @@ export default function DesignSuggestions() {
         <ErrorState message={data?.error ?? "Suggestions are not available yet."} onRetry={() => refetch()} />
       ) : (
         <>
-          <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }} sx={{ mb: 2.5 }}>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ alignItems: { md: "center" }, mb: 2.5 }}>
             <ToggleButtonGroup
               exclusive
               size="small"
@@ -289,7 +287,7 @@ export default function DesignSuggestions() {
               </Stack>
             )}
           </Stack>
-          {season && <SeasonView key={season.role} season={season} trending={data.trendingNow} lifecycle={data.lifecycle} view={view} hitPct={data.model?.topPickHitPct} window={data.window} />}
+          {season && <SeasonView key={season.role} season={season} trending={data.trendingNow} lifecycle={data.lifecycle} view={view} window={data.window} />}
         </>
       )}
     </Box>

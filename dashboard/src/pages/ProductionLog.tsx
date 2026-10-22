@@ -251,7 +251,7 @@ export default function ProductionLog() {
             setSearchText(e.target.value);
             setPage(0);
           }}
-          InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
+          slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> } }}
           sx={{ minWidth: 220 }}
         />
         <FormControl size="small" sx={{ minWidth: 180 }}>
@@ -372,7 +372,7 @@ export default function ProductionLog() {
                 <TableRow>
                   {weeks.map((w) => (
                     <TableCell key={w.weekStart} colSpan={4} align="center" sx={{ top: ROW_H1, bgcolor: HEADER_BG, borderRight: 1, py: 0.5 }}>
-                      <Stack direction="row" spacing={0.75} alignItems="center" justifyContent="center">
+                      <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", justifyContent: "center" }}>
                         <Typography variant="body2" sx={{ fontWeight: 800 }}>{w.week}</Typography>
                         <Typography variant="caption" sx={{ color: "text.secondary" }}>
                           {formatDay(w.weekStart)}–{formatDay(w.weekEnd)}
@@ -418,7 +418,7 @@ export default function ProductionLog() {
                 {pageRows.map((s) => (
                   <TableRow key={s.style} hover>
                     <TableCell sx={{ ...styleCell, position: "sticky", left: 0, bgcolor: "background.paper", zIndex: 1, borderRight: 1 }}>
-                      <Stack direction="row" spacing={0.75} alignItems="center">
+                      <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
                         <Typography variant="body2" sx={{ fontWeight: 700 }}>{s.style}</Typography>
                         {tierOf.get(s.style) && (
                           <Chip

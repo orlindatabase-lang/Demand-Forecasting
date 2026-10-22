@@ -97,6 +97,7 @@ _DESIGN_CATEGORY: dict[str, str] = {}  # style -> UPPERCASED CATEGORY (similarit
 _DESIGN_CATEGORY_DISPLAY: dict[str, str] = {}  # style -> human-readable CATEGORY (display casing kept)
 _DESIGN_SUBCATEGORY: dict[str, str] = {}  # style -> human-readable SUB CATEGORY (display casing kept)
 _DESIGN_COLOR: dict[str, str] = {}  # style -> human-readable Top_Color (display casing kept)
+_DESIGN_BRAND: dict[str, str] = {}  # style -> Brand from the sheet (display only, 2026-10-14)
 _DESIGN_FORECAST_ATTRS: dict[str, dict[str, str]] = {}  # style -> {FORECAST_ATTR_COLS col: value}
 _NEIGHBORS: dict[str, list[tuple[str, float]]] = {}
 _LOADED = False
@@ -192,7 +193,7 @@ def _unify_case(mapping: dict[str, str]) -> dict[str, str]:
 
 
 def _load() -> None:
-    global _DESIGN_ATTRS, _DESIGN_CATEGORY, _DESIGN_CATEGORY_DISPLAY, _DESIGN_SUBCATEGORY, _DESIGN_COLOR, _DESIGN_FORECAST_ATTRS, _NEIGHBORS, _LOADED
+    global _DESIGN_ATTRS, _DESIGN_CATEGORY, _DESIGN_CATEGORY_DISPLAY, _DESIGN_SUBCATEGORY, _DESIGN_COLOR, _DESIGN_BRAND, _DESIGN_FORECAST_ATTRS, _NEIGHBORS, _LOADED
     if not _CSV_PATH.exists():
         print(f"[design_attributes] {_CSV_PATH} not found - skipping", file=sys.stderr)
         _LOADED = True
@@ -212,6 +213,7 @@ def _load() -> None:
     category_display: dict[str, str] = {}
     subcategory: dict[str, str] = {}
     color: dict[str, str] = {}
+    brand: dict[str, str] = {}
     forecast_attrs: dict[str, dict[str, str]] = {}
     for _, row in df.iterrows():
         style = _clean(row.get(_STYLE_COL))
@@ -242,6 +244,11 @@ def _load() -> None:
         color_raw = _clean_display(row.get(_COLOR_COL))
         if color_raw:
             color[style] = color_raw
+        # Brand: display / filter only (2026-10-14, user-requested Brand
+        # filter) - still NOT a similarity token or model attribute.
+        brand_raw = _clean_display(row.get("Brand"))
+        if brand_raw:
+            brand[style] = brand_raw
         fa: dict[str, str] = {}
         for col in FORECAST_ATTR_COLS:
             v = sub_raw if col == _SUBCAT_COL else _clean_display(row.get(col))
@@ -265,6 +272,7 @@ def _load() -> None:
         _DESIGN_CATEGORY_DISPLAY = category_display
         _DESIGN_SUBCATEGORY = subcategory
         _DESIGN_COLOR = color
+        _DESIGN_BRAND = _unify_case(brand)
         _DESIGN_FORECAST_ATTRS = forecast_attrs
         _NEIGHBORS = neighbors
         _LOADED = True
@@ -318,6 +326,20 @@ def category_of(design_no) -> str:
         return CATEGORY_UNKNOWN
     with _LOCK:
         return _DESIGN_CATEGORY_DISPLAY.get(key, CATEGORY_UNKNOWN)
+
+
+def brand_of(design_no) -> str:
+    """The design's Brand from the SKU master sheet (Mokosh, J.Turritopsis,
+    Curly Tales, C.O.E, ...), or "" if the design is not in the sheet. Same
+    None/NaN/pd.NA-safety as sub_category_of()."""
+    _ensure_loaded()
+    if design_no is None:
+        return ""
+    key = str(design_no).strip().upper()
+    if key in ("", "NAN", "NONE", "<NA>", "NAT"):
+        return ""
+    with _LOCK:
+        return _DESIGN_BRAND.get(key, "")
 
 
 def color_of(design_no) -> str:

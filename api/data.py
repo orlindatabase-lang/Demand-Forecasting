@@ -48,6 +48,16 @@ DATA_SOURCE = os.getenv("DATA_SOURCE", "live").strip().lower()
 # previous one) and trains any missing ones in the background; "naive" uses
 # the baseline only.
 FORECAST_MODEL = os.getenv("FORECAST_MODEL", "lgbm").strip().lower()
+# Which LightGBM models run (2026-10-19, user-requested: "make the model only
+# based on the Style, not SKU"):
+#   "style" (default) - only the style (DESIGN_NO) model. Every Style / Sub
+#             Category / TOTAL number already came from it (1,551 of 1,566
+#             styles); the SKU model only filled the other 15 styles (0.07% of
+#             the forecast) and SKUs with no style - those now use the
+#             run-rate x festival, like any style the model doesn't cover.
+#   "both"  - the SKU model as well (the setup before 2026-10-19).
+FORECAST_LEVEL = os.getenv("FORECAST_LEVEL", "style").strip().lower()
+STYLE_ONLY = FORECAST_LEVEL != "both"
 # Final weekly forecast = FORECAST_BLEND * model + (1 - blend) * SKU run-rate,
 # anchoring the global model to each SKU's own level. 1.0 = pure model, 0 = naive.
 # Verified 2026-08-19 via api/backtest_sweep.py (real walk-forward backtest
@@ -63,7 +73,38 @@ FORECAST_MODEL = os.getenv("FORECAST_MODEL", "lgbm").strip().lower()
 # leakage-inflated-but-poorly-generalizing model this result would produce,
 # so this should be RE-SWEPT once v18 has accumulated a few weeks of fresh
 # backtested snapshots -- don't treat 0.25 as final.
-FORECAST_BLEND = float(os.getenv("FORECAST_BLEND", "0.25"))
+# 2026-10-19 (walk-forward backtest of the current style model, 6 cutoffs
+# May-Sep 2026, 58k style-week forecasts, user-approved): 0.5 with the
+# festival multiplier on the run-rate only beat 0.25 with it on both -
+# weekly-total error 27.5% -> 22.7%, Sub Category 36.2% -> 31.8%, style
+# 62.5% -> 61.0%, bias +5.3% -> -1.4%. Was 0.25.
+FORECAST_BLEND = float(os.getenv("FORECAST_BLEND", "0.5"))
+# Apply the festival / sale multiplier to the run-rate part only (default) -
+# the model already learns events from its festival features, and multiplying
+# its output again double-counted them (sale weeks +34% with the model alone).
+# "both" = the old way: (blend) x festival.
+FESTIVAL_ON = os.getenv("FESTIVAL_ON", "runrate").strip().lower()
+# Running week shown as actual so far + this pace (Gross units per day over the
+# last N days of data) for the days left - see _compute_weekly_grid().
+RUNNING_WEEK_PACE_DAYS = int(os.getenv("RUNNING_WEEK_PACE_DAYS", "7"))
+# Naive run-rate = Gross units of the last RUNRATE_DAYS days, per week
+# (2026-10-19, user-approved: 60, was 35). Walk-forward backtest, 6 cutoffs
+# May-Sep 2026, 50/50 blend: weekly-total error 22.7% -> 21.4%, Sub Category
+# 31.8% -> 30.7%, sale weeks 33.5% -> 29.8%, right after the August sale
+# 27.9% -> 19.0%; per style 61.0% -> 61.6%. A sale stays in it longer but
+# weighs less.
+RUNRATE_DAYS = int(os.getenv("RUNRATE_DAYS", "60"))
+RUNRATE_WEEKS = RUNRATE_DAYS / 7.0
+
+
+def _blend(model: float | None, naive: float, mult: float) -> float:
+    """The published weekly forecast from a model value (None = no model),
+    a naive run-rate and the week's festival multiplier."""
+    if model is None:
+        return max(0.0, naive * mult)
+    if FESTIVAL_ON == "both":
+        return max(0.0, (FORECAST_BLEND * model + (1 - FORECAST_BLEND) * naive) * mult)
+    return max(0.0, FORECAST_BLEND * model + (1 - FORECAST_BLEND) * naive * mult)
 # Daily auto-refresh: re-fetch live data once a day at this local time. Set
 # DAILY_REFRESH=off to disable. Default 06:00 (before business hours).
 DAILY_REFRESH = os.getenv("DAILY_REFRESH", "on").strip().lower() != "off"
@@ -284,6 +325,8 @@ def _source_dataframe():
     """
     import pandas as pd
 
+    global _LOADED_FROM
+    _LOADED_FROM = DATA_SOURCE
     if DATA_SOURCE == "live":
         try:
             import live_source
@@ -293,6 +336,7 @@ def _source_dataframe():
             return df
         except Exception as exc:  # noqa: BLE001
             print(f"[data] live fetch failed ({exc!r}); falling back to CSV", file=sys.stderr)
+            _LOADED_FROM = "csv-fallback"
 
     cols = [c for c in _FULL_COLS]  # read what both the plan and forecaster need
     return pd.read_csv(DATA_FILE, usecols=lambda c: c in cols, parse_dates=["order_date"])
@@ -450,9 +494,9 @@ def _backtest_model_accuracy(
         # Naive run-rate AS OF the snapshot date (last 35 days up to it) —
         # reconstructed from today's full history since only the model's own
         # weekly output was ever cached, not the naive figure alongside it.
-        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=34)
+        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=RUNRATE_DAYS - 1)
         hist = sales[(sales["order_date"] >= lo) & (sales["order_date"] <= pd.Timestamp(snap_date))]
-        naive_week = hist.groupby("product_sku_code")["qty"].sum() / 5.0
+        naive_week = hist.groupby("product_sku_code")["qty"].sum() / RUNRATE_WEEKS
 
         mult = _week_festival(week1_start)[0]
         week_iso = week1_start.isoformat()
@@ -464,7 +508,7 @@ def _backtest_model_accuracy(
                 continue
             nw  = float(naive_week.get(sku, 0.0))
             act = float(actual.get(sku, 0.0))
-            model_pred = max(0.0, (FORECAST_BLEND * lgbm_weekly[0] + (1 - FORECAST_BLEND) * nw) * mult)
+            model_pred = _blend(lgbm_weekly[0], nw, mult)
             naive_pred = max(0.0, nw * mult)
 
             # Later (more recent) snapshots overwrite earlier ones for the
@@ -532,9 +576,9 @@ def _backtest_model_accuracy(
             continue
 
         max_horizon = max((len(fc.get("weekly") or []) for fc in forecasts.values()), default=0)
-        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=34)
+        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=RUNRATE_DAYS - 1)
         hist = sales[(sales["order_date"] >= lo) & (sales["order_date"] <= pd.Timestamp(snap_date))]
-        naive_week = hist.groupby("product_sku_code")["qty"].sum() / 5.0
+        naive_week = hist.groupby("product_sku_code")["qty"].sum() / RUNRATE_WEEKS
 
         for w in range(max_horizon):
             week_start = _forecast_week_start(snap_date, w)
@@ -555,7 +599,7 @@ def _backtest_model_accuracy(
                     continue
                 nw = float(naive_week.get(sku, 0.0))
                 act = float(actual.get(sku, 0.0))
-                model_pred = max(0.0, (FORECAST_BLEND * lgbm_weekly[w] + (1 - FORECAST_BLEND) * nw) * mult)
+                model_pred = _blend(lgbm_weekly[w], nw, mult)
                 horizon_err[w] = horizon_err.get(w, 0.0) + abs(act - model_pred)
                 horizon_act[w] = horizon_act.get(w, 0.0) + act
 
@@ -640,9 +684,9 @@ def _backtest_design_model_accuracy(
         ]
         actual = wk_sales.groupby("DESIGN_NO")["qty"].sum()
 
-        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=34)
+        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=RUNRATE_DAYS - 1)
         hist = sales[(sales["order_date"] >= lo) & (sales["order_date"] <= pd.Timestamp(snap_date))]
-        naive_week = hist.groupby("DESIGN_NO")["qty"].sum() / 5.0
+        naive_week = hist.groupby("DESIGN_NO")["qty"].sum() / RUNRATE_WEEKS
 
         mult = _week_festival(week1_start)[0]
         week_iso = week1_start.isoformat()
@@ -654,7 +698,7 @@ def _backtest_design_model_accuracy(
                 continue
             nw = float(naive_week.get(design_no, 0.0))
             act = float(actual.get(design_no, 0.0))
-            model_pred = max(0.0, (FORECAST_BLEND * dweekly[0] + (1 - FORECAST_BLEND) * nw) * mult)
+            model_pred = _blend(dweekly[0], nw, mult)
             week_data[(design_no, week_iso)] = {"model_pred": model_pred, "actual": act}
             design_model_hist.setdefault(design_no, {})[week_iso] = model_pred
 
@@ -797,11 +841,8 @@ def _adjusted_weekly(snap_date: date, lgbm_weekly: list[float] | None,
     series: list[float] = []
     for w in range(_FC_WEEKS):
         ws = _forecast_week_start(snap_date, w)
-        if lgbm_weekly is not None and w < len(lgbm_weekly):
-            base = FORECAST_BLEND * lgbm_weekly[w] + (1 - FORECAST_BLEND) * naive_week
-        else:
-            base = naive_week
-        series.append(max(0.0, base * _week_festival(ws)[0]))
+        model = lgbm_weekly[w] if lgbm_weekly is not None and w < len(lgbm_weekly) else None
+        series.append(_blend(model, naive_week, _week_festival(ws)[0]))
     return series
 
 
@@ -1096,7 +1137,7 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
     # FORECAST_BLEND=0.25, 75% of every published forecast was a NET run-rate
     # shown against a GROSS actual, a structural downward bias having nothing
     # to do with model quality.
-    last35 = window_sum(35, src=gross_sales)
+    last35 = window_sum(RUNRATE_DAYS, src=gross_sales)   # name kept; RUNRATE_DAYS days (60)
     # Realized avg selling price (revenue/qty) over the last 90 days.
     qty90 = window_sum(90)
     revenue90 = window_sum(90, col="total")
@@ -1243,7 +1284,7 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
     for sku in df["product_sku_code"].unique():
         skey = str(sku)
         naive35 = int(last35.get(sku, 0))
-        naive_week = naive35 / 5.0          # avg weekly run-rate (last 5 weeks ≈ 35 days)
+        naive_week = naive35 / RUNRATE_WEEKS   # avg weekly run-rate over the last RUNRATE_DAYS days
         q90 = float(qty90.get(sku, 0))
         price = round(float(revenue90.get(sku, 0)) / q90, 2) if q90 > 0 else 0.0
         fc = forecasts.get(skey) if forecasts else None
@@ -1778,15 +1819,18 @@ def _train_and_publish(df, snap: date) -> None:
     try:
         import lgbm_forecast
         s = snap.isoformat()
-        forecasts = lgbm_forecast.load_cache(s)
-        if forecasts is None:
-            print("[data] training LightGBM in background…", file=sys.stderr)
-            forecasts = lgbm_forecast.compute(df)
-            if forecasts:
-                lgbm_forecast.save_cache(s, forecasts)
-        if not forecasts:
-            print("[data] LightGBM produced no forecasts; keeping current plan", file=sys.stderr)
-            return
+        if STYLE_ONLY:
+            forecasts = {}  # no SKU model (FORECAST_LEVEL=style)
+        else:
+            forecasts = lgbm_forecast.load_cache(s)
+            if forecasts is None:
+                print("[data] training LightGBM in background…", file=sys.stderr)
+                forecasts = lgbm_forecast.compute(df)
+                if forecasts:
+                    lgbm_forecast.save_cache(s, forecasts)
+            if not forecasts:
+                print("[data] LightGBM produced no forecasts; keeping current plan", file=sys.stderr)
+                return
 
         design_forecasts = _FC_WEEKLY_DESIGN
         try:
@@ -1800,6 +1844,9 @@ def _train_and_publish(df, snap: date) -> None:
             print(f"[data] design-level model active ({len(design_forecasts):,} designs)", file=sys.stderr)
         except Exception as exc:  # noqa: BLE001 — design-level is a bonus signal, not required
             print(f"[data] design-level model failed ({exc!r}); keeping current design forecasts", file=sys.stderr)
+        if STYLE_ONLY and not design_forecasts:
+            print("[data] style model produced no forecasts; keeping current plan", file=sys.stderr)
+            return
 
         _publish_model_plan(df, forecasts, design_forecasts, s)
         # Re-warm (2026-09-26, user-requested) - _set_plan() bumped
@@ -1808,85 +1855,10 @@ def _train_and_publish(df, snap: date) -> None:
         _record_weekly_production()
         import cache_sync
         cache_sync.upload_changed()
-        print(f"[data] LightGBM active ({len(forecasts):,} SKUs, snapshot {s})", file=sys.stderr)
+        print(f"[data] LightGBM active ({'style model only' if STYLE_ONLY else f'{len(forecasts):,} SKUs'}, "
+              f"snapshot {s})", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 — never let forecasting kill the API
         print(f"[data] model training failed ({exc!r}); keeping current plan", file=sys.stderr)
-
-
-_BOTTOM_KEYWORDS = frozenset({"PANT", "PLAZZO", "PALAZZO", "SHARARA", "LEHENGA", "DHOTI", "SALWAR", "SLAWAR", "CHURIDAR", "LEGGING"})
-_TOP_KEYWORDS    = frozenset({"BLOUSE", "SHRUGE", "SHRUG", "KURTI", "KURTA", "KAMEEZ", "TOP"})
-
-
-def _design_section(design: str) -> str:
-    """Return section ('Top'/'Bottom'/'Dupatta') for a design string.
-
-    Priority:
-    1. Exact key match in _DESIGN_SECTION (master view)
-    2. 'DUPATTA' anywhere in the name
-    3. Last '-' token matched against known garment-type keywords
-    """
-    d = str(design).strip()
-    sec = _DESIGN_SECTION.get(d, "")
-    if sec:
-        return sec
-    u = d.upper()
-    if "DUPATTA" in u:
-        return "Dupatta"
-    # Extract the last segment after the final hyphen for garment-type matching
-    suffix = u.rsplit("-", 1)[-1] if "-" in u else u
-    if suffix in _BOTTOM_KEYWORDS:
-        return "Bottom"
-    if suffix in _TOP_KEYWORDS:
-        return "Top"
-    return ""
-
-
-
-
-def get_inventory_planning(limit: int = 500) -> dict:
-    """Inventory planning: current stock per design+size and days to finish based on actual sales DRR."""
-    try:
-        if not PLAN_ROWS:
-            return {"available": False, "items": [], "total": 0}
-
-        plan_by_key: dict[tuple[str, str], dict] = {}
-        for r in PLAN_ROWS:
-            design = r.designNo or r.skuCode
-            sku = str(r.skuCode)
-            parts = sku.replace(design, "", 1).lstrip("-")
-            size = parts.split("-")[0] if parts else ""
-            key = (design, size)
-            if key not in plan_by_key:
-                plan_by_key[key] = {"inventoryQty": 0, "actualLast10d": 0}
-            p = plan_by_key[key]
-            p["inventoryQty"]  += r.inventoryQty
-            p["actualLast10d"] += r.historicalLast10d
-
-        records = []
-        for (design, size), p in plan_by_key.items():
-            stock = p["inventoryQty"]
-            actual_10d = p["actualLast10d"]
-            daily_rate = round(actual_10d / 10.0, 1)
-            days_to_finish = round(stock / daily_rate) if daily_rate > 0 else 0
-
-            records.append({
-                "design":        design,
-                "size":          size,
-                "currentStock":  stock,
-                "dailyRunRate":  daily_rate,
-                "daysToFinish":  days_to_finish,
-            })
-
-        records.sort(key=lambda r: r["daysToFinish"] if r["daysToFinish"] > 0 else 99999)
-
-        return {
-            "available": True,
-            "total": len(records),
-            "items": records[:limit],
-        }
-    except Exception as exc:
-        print(f"[data] get_inventory_planning failed ({exc!r})", file=sys.stderr)
-        return {"available": False, "items": [], "total": 0}
 
 
 def _warm_caches() -> None:
@@ -1935,7 +1907,7 @@ def rebuild() -> dict:
     Called once at import, by the daily auto-refresh, and by
     ``POST /admin/refresh``. Falls back to mock data on failure.
     """
-    global _SOURCE_DF, ACTIVE_FORECAST_MODEL, _LGBM_THREAD, FORECAST_SNAPSHOT
+    global _SOURCE_DF, ACTIVE_FORECAST_MODEL, _LGBM_THREAD, FORECAST_SNAPSHOT, _LOADED_FROM
     global _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN
     try:
         df = _source_dataframe()
@@ -1948,14 +1920,20 @@ def rebuild() -> dict:
         needs_training = False
         if FORECAST_MODEL == "lgbm":
             snap = _snapshot_of(df)
-            forecasts, sku_snap, sku_ok = _load_saved_forecasts("sku", snap)
-            design_forecasts, _design_snap, design_ok = _load_saved_forecasts("design", snap)
+            design_forecasts, design_snap, design_ok = _load_saved_forecasts("design", snap)
+            if STYLE_ONLY:
+                # Style model only: no SKU forecasts; "forecasts" just marks
+                # that a model plan is being served.
+                forecasts = {} if design_forecasts else None
+                sku_snap, sku_ok = design_snap, True
+            else:
+                forecasts, sku_snap, sku_ok = _load_saved_forecasts("sku", snap)
             needs_training = not (sku_ok and design_ok)
-            if forecasts:
+            if forecasts is not None and (forecasts or STYLE_ONLY):
                 _publish_model_plan(df, forecasts, design_forecasts, sku_snap)
                 print(f"[data] model forecasts from snapshot {sku_snap} active "
-                      f"({len(forecasts):,} SKUs)", file=sys.stderr)
-        if not forecasts:
+                      f"({'style model only' if STYLE_ONLY else f'{len(forecasts):,} SKUs'})", file=sys.stderr)
+        if forecasts is None or (not forecasts and not STYLE_ONLY):
             # Clear any previous run's model state so a stale design
             # forecast can't leak into the naive plan.
             _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN = None, {}
@@ -1963,7 +1941,8 @@ def rebuild() -> dict:
             ACTIVE_FORECAST_MODEL = "naive"
             FORECAST_SNAPSHOT = ""
         _warm_caches()
-        if forecasts and not needs_training:
+        _record_stock_snapshot()
+        if forecasts is not None and (forecasts or STYLE_ONLY) and not needs_training:
             _record_weekly_production()
         if needs_training and not (_LGBM_THREAD and _LGBM_THREAD.is_alive()):
             _LGBM_THREAD = threading.Thread(target=_train_and_publish, args=(df, snap), daemon=True)
@@ -1979,6 +1958,7 @@ def rebuild() -> dict:
             [TopWarehouse(**d) for d in _aggregate("warehouse")],
         ))
         source = "mock"
+        _LOADED_FROM = "mock"
 
     return {
         "source": source,
@@ -1988,10 +1968,156 @@ def rebuild() -> dict:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Data health (2026-10-19, user-requested: "make sure the data / business
+# problems do not come back and give a wrong forecast or production
+# suggestion"). They cannot be prevented - a sale, estimated sale dates or a
+# failed ERP feed will happen again - so every refresh checks for them and the
+# dashboard shows a warning before a wrong number is acted on. Read-only: no
+# forecast or production number is changed here.
+# --------------------------------------------------------------------------- #
+_LOADED_FROM = ""                   # live / csv / csv-fallback / mock
+_HEALTH_CACHE: tuple | None = None  # (_DATA_VERSION, today, result)
+HEALTH_STALE_DAYS = int(os.getenv("HEALTH_STALE_DAYS", "2"))
+HEALTH_SPIKE_RATIO = float(os.getenv("HEALTH_SPIKE_RATIO", "2.0"))     # a day vs a normal day
+HEALTH_ACCURACY_MIN = float(os.getenv("HEALTH_ACCURACY_MIN", "70"))    # %, last completed week
+
+
+def _daily_gross_total() -> dict[str, int]:
+    """{day ISO: Gross units, all SKUs} from the loaded plan."""
+    out: dict[str, int] = {}
+    for days in _DAY_ACTUAL_GROSS.values():
+        for d, q in days.items():
+            out[d] = out.get(d, 0) + q
+    return out
+
+
+def data_health() -> dict:
+    """{"checkedOn", "dataThrough", "issues": [{level, code, title, detail}]}.
+    level: "error" (a number on the dashboard is wrong now), "warning" (numbers
+    are likely to be off), "info" (data quality to fix)."""
+    global _HEALTH_CACHE
+    today = date.today()
+    if _HEALTH_CACHE and _HEALTH_CACHE[0] == _DATA_VERSION and _HEALTH_CACHE[1] == today:
+        return _HEALTH_CACHE[2]
+    issues: list[dict] = []
+
+    def add(level, code, title, detail):
+        issues.append({"level": level, "code": code, "title": title, "detail": detail})
+
+    # 1. Was the source data loaded completely?
+    if _LOADED_FROM in ("csv-fallback", "mock"):
+        what = "the offline CSV" if _LOADED_FROM == "csv-fallback" else "sample data"
+        add("error", "source_fallback", "Live data could not be loaded",
+            f"Serving {what} - every number may be out of date. Check the BigQuery / ERP "
+            f"connection and refresh.")
+    try:
+        import live_source
+        ll = dict(live_source.LAST_LOAD)
+    except Exception:  # noqa: BLE001
+        ll = {}
+    if _LOADED_FROM == "live":
+        missing = [n for n, k in (("stock", "stock_ok"), ("WIP", "wip_ok")) if ll.get(k) is False]
+        if missing:
+            m = " and ".join(missing)
+            add("error", "erp_stock_missing", f"ERP {m} not loaded - Suggested Production is overstated",
+                f"The ERP {m} view failed, so the available quantity counts it as 0 and every "
+                f"Suggested Production is too high. Do not release production from it; refresh "
+                f"once the ERP is reachable.")
+        if ll.get("master_ok") is False:
+            add("warning", "erp_master_missing", "ERP design master not loaded",
+                "Launch dates and design details are missing for this load; forecasts for new "
+                "styles are less reliable.")
+        exp, got = ll.get("sales_rows_expected"), ll.get("sales_rows")
+        if exp and got is not None and got < exp * 0.995:
+            add("error", "sales_incomplete", "Sales download incomplete",
+                f"{got:,} of {exp:,} sales rows were downloaded ({(1 - got / exp) * 100:.1f}% "
+                f"missing): actual sales and the run-rate are too low. Refresh.")
+    # 2. Is the data fresh?
+    lag = (today - SNAPSHOT_DATE).days
+    if lag > HEALTH_STALE_DAYS:
+        add("warning", "data_stale", f"Sales data is {lag} days old",
+            f"The latest order is from {SNAPSHOT_DATE.isoformat()}: the running week and the "
+            f"run-rate miss the last {lag - 1} days.")
+
+    daily = _daily_gross_total()
+    vals = sorted(daily.get((SNAPSHOT_DATE - timedelta(days=i)).isoformat(), 0) for i in range(91))
+    normal = vals[len(vals) // 2] if daily else 0
+    if normal > 0:
+        # 3. A sale spike inside the run-rate window (RUNRATE_DAYS).
+        window = [SNAPSHOT_DATE - timedelta(days=i) for i in range(RUNRATE_DAYS)]
+        spikes = [d for d in window if daily.get(d.isoformat(), 0) > HEALTH_SPIKE_RATIO * normal]
+        if spikes:
+            rr = sum(daily.get(d.isoformat(), 0) for d in window) / RUNRATE_WEEKS
+            clears = max(spikes) + timedelta(days=RUNRATE_DAYS)
+            add("warning", "runrate_spike", "A sale spike is inside the run-rate",
+                f"{len(spikes)} day(s) between {min(spikes):%d %b} and {max(spikes):%d %b} sold "
+                f"over {HEALTH_SPIKE_RATIO:g}x a normal day ({normal:,} units). The run-rate "
+                f"({rr:,.0f}/week, {rr / (normal * 7):.1f}x normal) carries them until about "
+                f"{clears:%d %b}: upcoming weeks' forecast and Suggested Production may be too high "
+                f"until then. Check the running week's real pace before releasing production.")
+        # 4a. A spike with no event in the sale calendar.
+        recent = [SNAPSHOT_DATE - timedelta(days=i) for i in range(21)]
+        unlisted = [d for d in recent if daily.get(d.isoformat(), 0) > 1.8 * normal
+                    and not festival_calendar.events_overlapping(d, d)]
+        if unlisted:
+            add("warning", "calendar_missing_event", "Sales spike not in the sale calendar",
+                f"{', '.join(f'{d:%d %b}' for d in sorted(unlisted))} sold far above normal but the "
+                f"festival / sale calendar has no event on those days. Add the real sale dates to "
+                f"Indian_Festivals_Ecommerce_Sales_2025_2028.csv.")
+        # 4b. A calendar sale that is not showing in sales (dates wrong or ended).
+        last7 = [SNAPSHOT_DATE - timedelta(days=i) for i in range(7)]
+        cal = sum(festival.festival_factor(d)[0] for d in last7) / 7
+        real = sum(daily.get(d.isoformat(), 0) for d in last7) / 7
+        if cal >= 1.25 and real < 1.25 * normal:
+            add("warning", "calendar_event_not_seen", "Calendar sale not showing in sales",
+                f"The calendar expects x{cal:.2f} sales over the last 7 days, but they ran at "
+                f"{real / normal:.1f}x normal. The sale may have ended or have other dates - correct "
+                f"the calendar, or the running and upcoming weeks stay over-forecast.")
+    # 5. Accuracy of the last completed week (Production Log: forecast at week start).
+    try:
+        import weekly_log
+        done = [r for r in weekly_log.read("", "")
+                if r.get("status") == "completed" and r.get("actual_qty") is not None]
+        if done:
+            wk = max(r["week_start"] for r in done)
+            f = sum(r["forecast_qty"] or 0 for r in done if r["week_start"] == wk)
+            a = sum(r["actual_qty"] or 0 for r in done if r["week_start"] == wk)
+            if a > 0:
+                acc = max(0.0, (1 - abs(f - a) / a) * 100)
+                if acc < HEALTH_ACCURACY_MIN:
+                    add("warning", "accuracy_low", f"Last completed week's accuracy {acc:.0f}%",
+                        f"Week from {wk}: forecast {f:,} vs actual {a:,} ({(f / a - 1) * 100:+.0f}%). "
+                        f"Review before trusting the next weeks' numbers.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[data] health: production log unavailable ({exc!r})", file=sys.stderr)
+    # 6. Selling styles with no master data.
+    cutoff = (SNAPSHOT_DATE - timedelta(days=55)).isoformat()
+    selling: dict[str, int] = {}
+    for r in PLAN_ROWS:
+        if r.designNo and r.subCategory in ("", "Unclassified"):
+            q = sum(v for d, v in _DAY_ACTUAL_GROSS.get(r.skuCode, {}).items() if d >= cutoff)
+            if q:
+                selling[r.designNo] = selling.get(r.designNo, 0) + q
+    if selling:
+        top = sorted(selling.items(), key=lambda kv: -kv[1])[:5]
+        add("info", "master_missing", f"{len(selling)} selling styles have no Sub Category",
+            f"{sum(selling.values()):,} units in the last 8 weeks (largest: "
+            f"{', '.join(f'{k} {v:,}' for k, v in top)}). Add them to "
+            f"SKU_Master_Data_Final_Cleaned.csv so they group and filter correctly.")
+
+    order = {"error": 0, "warning": 1, "info": 2}
+    issues.sort(key=lambda i: order[i["level"]])
+    result = {"checkedOn": today.isoformat(), "dataThrough": SNAPSHOT_DATE.isoformat(), "issues": issues}
+    _HEALTH_CACHE = (_DATA_VERSION, today, result)
+    return result
+
+
 def model_status() -> dict:
     """Forecast-model fields shared by rebuild()'s result and GET /health."""
     return {
         "forecastModel": ACTIVE_FORECAST_MODEL,
+        "forecastLevel": "style" if STYLE_ONLY else "sku+style",
         # Snapshot the served model was trained on - older than "snapshot"
         # while that snapshot's own model is still training.
         "forecastSnapshot": FORECAST_SNAPSHOT,
@@ -2119,11 +2245,22 @@ def _build_week_points(
     historical_mondays, forecast_mondays = _week_axis(weeks)
 
     # --- future forecast (weekly) ------------------------------------------- #
+    # series[w] is the forecast of the week _forecast_week_start(SNAPSHOT_DATE, w).
+    # Matched by DATE, not by position (2026-10-19 fix): when the data lags into
+    # the previous week (e.g. a Monday with data through Sunday) _week_axis()
+    # drops that first model week from forecast_mondays, and matching by
+    # position shifted every future week one week early (Oct W4 got the
+    # 19-25 Oct sale week's forecast). The dropped week is the running week -
+    # it now gets the model's forecast too (below), not the run-rate alone.
+    fc_by_week: dict[str, float] = {}
+    if series is not None:
+        for i, v in enumerate(series):
+            fc_by_week[_forecast_week_start(SNAPSHOT_DATE, i).isoformat()] = v
     forecast: list[ForecastPoint] = []
-    for w, ws in enumerate(forecast_mondays):
+    for ws in forecast_mondays:
         mult, event = _week_festival(ws)
-        qty = max(0, round(series[w])) if (series is not None and w < len(series)) \
-            else max(0, round(naive_week * mult))
+        iso = ws.isoformat()
+        qty = max(0, round(fc_by_week[iso])) if iso in fc_by_week else max(0, round(naive_week * mult))
         forecast.append(ForecastPoint(date=ws.isoformat(), qty=qty, event=event))
 
     # --- historical: real weekly units vs what was actually predicted -------- #
@@ -2146,6 +2283,8 @@ def _build_week_points(
         actual = int(wk_actual.get(ws.isoformat(), 0))
         if ws.isoformat() in model_hist:
             exp = max(0, round(model_hist[ws.isoformat()]))
+        elif ws.isoformat() in fc_by_week:
+            exp = max(0, round(fc_by_week[ws.isoformat()]))   # the running week: the model's forecast
         else:
             mult, _ = _week_festival(ws)
             exp = max(0, round(naive_week * mult))
@@ -2673,7 +2812,13 @@ def _channel_source_series(sub: "pd.DataFrame", chunks) -> list[ChannelSourceWee
     filtered to the desired DESIGN_NO(s)."""
     if sub.empty:
         return []
-    sub = sub.copy()
+    # Sum to channel x source x day first (2026-10-19 speed-up): a few thousand
+    # rows instead of millions for the per-row marketplace / week mapping
+    # below - the same totals, the TOTAL drill-down went from ~15s to <1s.
+    sub = (
+        sub.groupby([sub["channel_name"], sub["source"], sub["order_date"].dt.normalize()],
+                    dropna=False, observed=True)["qty"].sum().reset_index()
+    )
     sub["_marketplace"] = [
         _marketplace_of(ch, src) for ch, src in zip(sub["channel_name"], sub["source"])
     ]
@@ -2793,22 +2938,176 @@ def _style_tier_map() -> dict[str, str]:
     except Exception as exc:  # noqa: BLE001
         print(f"[data] catalog tiers unavailable ({exc!r})", file=sys.stderr)
         return {}
+def _tier_at_sale(styles, dates):
+    """Each sale's tier AT THE TIME OF SALE (2026-10-13, user-requested
+    "Tier at time of sale" view): the style's latest Cloud SQL tier change on
+    or before the sale date (CatalogStyleForecastHistory). Before a style's
+    first recorded change - the log only starts 2026-06-01 - its CURRENT tier
+    is used, as there is no history to say otherwise."""
+    import numpy as np
+    import pandas as pd
+    key = styles.astype(str).str.strip().str.upper()
+    base = key.map(_style_tier_map()).fillna("Unclassified").to_numpy()
+    try:
+        import catalog_style
+        hist = catalog_style.get_tier_history()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[data] tier history unavailable ({exc!r})", file=sys.stderr)
+        hist = []
+    if not hist:
+        return pd.Series(base, index=styles.index)
+    h = pd.DataFrame(hist)
+    h["key"] = h["name"].astype(str).str.strip().str.upper()
+    # One time resolution on both sides: pandas refuses to match e.g. [us] with [s].
+    h["at"] = pd.to_datetime(h["effectiveFrom"]).astype("datetime64[ns]")
+    h = h.drop_duplicates(["key", "at"], keep="last").sort_values("at")[["key", "at", "tier"]]
+    q = pd.DataFrame({"key": key.to_numpy(), "at": pd.to_datetime(dates).astype("datetime64[ns]").to_numpy(),
+                      "i": np.arange(len(key))}).sort_values("at")
+    m = pd.merge_asof(q, h, on="at", by="key", direction="backward")
+    tier = m.set_index("i")["tier"].reindex(np.arange(len(key))).to_numpy()
+    return pd.Series(np.where(pd.notna(tier), tier, base), index=styles.index)
+
+
+def get_tier_movement() -> dict:
+    """How long styles stay in each catalog tier and where they move
+    (2026-10-13, user-requested), from the Cloud SQL tier-change log
+    (CatalogStyleForecastHistory, from 2026-06-01).
+
+    - journey per style: its tier stays [{tier, from, to, days}], same-day
+      stays dropped (a tier set and changed again the same day = correction)
+    - summary per tier: styles now, moves in / out, median and average days
+      before moving out, median days so far of styles still there, top
+      destinations
+    - moves: from -> to counts
+    A style whose current catalog tier is not in its history (e.g. new
+    launches given a tier without a log entry) gets an "untracked" stay."""
+    import statistics
+    try:
+        import catalog_style
+        hist = catalog_style.get_tier_history()
+        current = {str(k).strip(): v for k, v in catalog_style.get_current_tier_map().items()}
+    except Exception as exc:  # noqa: BLE001
+        print(f"[data] tier movement unavailable ({exc!r})", file=sys.stderr)
+        return {"available": False, "tiers": [], "styles": [], "moves": [], "trackingFrom": ""}
+    today = date.today()
+    by_style: dict[str, list[dict]] = {}
+    for h in hist:
+        by_style.setdefault(str(h["name"]).strip(), []).append(h)
+
+    styles_out = []
+    closed: dict[str, list[int]] = {}
+    open_days: dict[str, list[int]] = {}
+    moves: dict[tuple[str, str], int] = {}
+    for name in sorted(set(by_style) | {k for k, v in current.items() if v}):
+        rows = sorted(by_style.get(name, []), key=lambda r: r["effectiveFrom"])
+        stays: list[dict] = []
+        for r in rows:
+            if stays and stays[-1]["tier"] == r["tier"]:
+                continue
+            if stays and stays[-1]["from"] == r["effectiveFrom"]:
+                stays.pop()                                  # changed again the same day: a correction
+                if stays and stays[-1]["tier"] == r["tier"]:
+                    continue
+            stays.append({"tier": r["tier"], "from": r["effectiveFrom"]})
+        for i, st in enumerate(stays):
+            end = stays[i + 1]["from"] if i + 1 < len(stays) else None
+            st["to"] = end
+            st["days"] = ((end or today) - st["from"]).days
+        cur = current.get(name) or ""
+        if cur and (not stays or stays[-1]["tier"] != cur):
+            if stays and stays[-1]["to"] is None:            # history ends in another tier
+                stays[-1]["untrackedEnd"] = True
+            stays.append({"tier": cur, "from": None, "to": None, "days": None, "untracked": True})
+        for a, b in zip(stays, stays[1:]):
+            if a.get("untrackedEnd") or b.get("untracked"):
+                continue
+            moves[(a["tier"], b["tier"])] = moves.get((a["tier"], b["tier"]), 0) + 1
+            closed.setdefault(a["tier"], []).append(a["days"])
+        last = stays[-1] if stays else None
+        if last and not last.get("untracked") and last["to"] is None and last["tier"] == cur:
+            open_days.setdefault(cur, []).append(last["days"])
+        styles_out.append({
+            "style": name, "tier": cur or "Unclassified",
+            "subCategory": design_attributes.sub_category_of(name) or "",
+            "daysInTier": last["days"] if last and not last.get("untracked") and last["to"] is None else None,
+            "journey": [{"tier": st["tier"], "from": st["from"].isoformat() if st["from"] else None,
+                         "to": st["to"].isoformat() if st["to"] else None, "days": st["days"],
+                         "untracked": bool(st.get("untracked"))} for st in stays],
+        })
+
+    tiers = sorted({*current.values(), *closed, *open_days} - {""},
+                   key=lambda t: (int(t[1:]) if t[1:].isdigit() else 999, t))
+    moved_in: dict[str, int] = {}
+    moved_out: dict[str, int] = {}
+    for (a, b), n in moves.items():
+        moved_out[a] = moved_out.get(a, 0) + n
+        moved_in[b] = moved_in.get(b, 0) + n
+    summary = []
+    for t in tiers:
+        c, o = closed.get(t, []), open_days.get(t, [])
+        dest = sorted(((b, n) for (a, b), n in moves.items() if a == t), key=lambda x: -x[1])[:3]
+        summary.append({
+            "tier": t, "stylesNow": sum(1 for v in current.values() if v == t),
+            "stylesTracked": len(o), "movedIn": moved_in.get(t, 0), "movedOut": moved_out.get(t, 0),
+            "medianDaysBeforeMoving": round(statistics.median(c)) if c else None,
+            "avgDaysBeforeMoving": round(sum(c) / len(c)) if c else None,
+            "medianDaysSoFar": round(statistics.median(o)) if o else None,
+            "movesTo": [{"tier": b, "styles": n} for b, n in dest],
+        })
+    return {
+        "available": True,
+        "trackingFrom": min(h["effectiveFrom"] for h in hist).isoformat() if hist else "",
+        "asOf": today.isoformat(),
+        "tiers": summary,
+        "moves": [{"from": a, "to": b, "styles": n} for (a, b), n in sorted(moves.items(), key=lambda kv: -kv[1])],
+        "styles": styles_out,
+    }
+
+
 _CATEGORY_ANALYSIS_CACHE: dict[tuple, dict] = {}
 _CATEGORY_CHANNELS_CACHE: dict[tuple, dict] = {}  # (data version, level, group) -> channel drill-down
 _CATEGORY_CHANNEL_FRAME = None  # (data version, frame) - see _category_channel_frame()
 
 
-def get_category_analysis(level: str = "subCategory") -> dict:
+def _category_filter_mask(styles, category: str = "", sub_category: str = ""):
+    """Boolean mask over a Series of style codes: styles in ``category`` and
+    ``sub_category`` (blank = any) - the same names as the Category / Sub
+    Category tables (design_attributes, "Unclassified" when unknown)."""
+    if not category and not sub_category:
+        return None
+    keep = {d for d in styles.unique()
+            if (not category or (design_attributes.category_of(d) or "Unclassified") == category)
+            and (not sub_category or (design_attributes.sub_category_of(d) or "Unclassified") == sub_category)}
+    return styles.isin(keep)
+
+
+def _category_filter_options(styles) -> dict[str, list[str]]:
+    """{category: [its sub categories]} over the given style codes - the
+    Tiers Spike Rate table's Category / Sub Category filter menus."""
+    out: dict[str, set[str]] = {}
+    for d in styles.unique():
+        cat = design_attributes.category_of(d) or "Unclassified"
+        out.setdefault(cat, set()).add(design_attributes.sub_category_of(d) or "Unclassified")
+    return {c: sorted(v) for c, v in sorted(out.items())}
+
+
+def get_category_analysis(level: str = "subCategory", category: str = "", sub_category: str = "",
+                          tier_mode: str = "current") -> dict:
     """One row per (month, Category or Sub Category): distinct styles with a
     Gross sale that month, order count (order lines), units, and the units'
     % change vs the previous month for the same group. The current
     month is partial (data through SNAPSHOT_DATE), so it is compared with the
-    SAME days of the previous month (1..day) instead of the whole month."""
+    SAME days of the previous month (1..day) instead of the whole month.
+    ``category`` / ``sub_category`` keep only those styles (Tiers Spike Rate
+    filters, 2026-10-13, user-requested); blank = all. ``tier_mode`` (tier
+    level): "current" = every month under the style's current tier; "sale" =
+    each sale under the tier it had at the time (_tier_at_sale)."""
     import pandas as pd
 
     if level not in _CATEGORY_LEVELS:
         raise ValueError(f"level must be one of {_CATEGORY_LEVELS}, got {level!r}")
-    cache_key = (_DATA_VERSION, level)
+    tier_mode = "sale" if level == "tier" and tier_mode == "sale" else "current"
+    cache_key = (_DATA_VERSION, level, category, sub_category, tier_mode)
     if cache_key in _CATEGORY_ANALYSIS_CACHE:
         return _CATEGORY_ANALYSIS_CACHE[cache_key]
 
@@ -2819,6 +3118,13 @@ def get_category_analysis(level: str = "subCategory") -> dict:
     df = df[(df["order_date"] >= pd.Timestamp(_CATEGORY_ANALYSIS_START))
             & (df["order_date"] < pd.Timestamp(SNAPSHOT_DATE) + pd.Timedelta(days=1))]
     designs = df["DESIGN_NO"].astype(str)
+    if level == "tier":
+        out["filterOptions"] = _category_filter_options(designs)
+    keep = _category_filter_mask(designs, category, sub_category)
+    if keep is not None:
+        df, designs = df[keep.to_numpy()], designs[keep.to_numpy()]
+        if df.empty:
+            return out
     if level == "style":
         # One row per style (Tiers Spike Rate tab, 2026-10-05, user-requested);
         # its Sub Category is sent alongside for display.
@@ -2832,6 +3138,7 @@ def get_category_analysis(level: str = "subCategory") -> dict:
         tier_of = _style_tier_map()
         mapping = {d: tier_of.get(d.strip().upper()) or "Unclassified" for d in designs.unique()}
         out["tierOf"] = mapping
+        out["tierMode"] = tier_mode
     else:
         group_of = design_attributes.category_of if level == "category" else design_attributes.sub_category_of
         mapping = {d: (group_of(d) or "Unclassified") for d in designs.unique()}
@@ -2840,7 +3147,7 @@ def get_category_analysis(level: str = "subCategory") -> dict:
     # the style level has ~13k month x style rows).
     frame = pd.DataFrame({
         "month": df["_month"].astype(str),
-        "group": designs.map(mapping),
+        "group": _tier_at_sale(designs, df["order_date"]) if tier_mode == "sale" else designs.map(mapping),
         "qty": pd.to_numeric(df["qty"], errors="coerce").fillna(0),
         "day": df["order_date"].dt.day,
     })
@@ -2848,7 +3155,7 @@ def get_category_analysis(level: str = "subCategory") -> dict:
         frame["style"] = designs
     rows, partial_month = _month_group_rows(frame, count_styles=level != "style")
     out.update(partialMonth=partial_month, rows=rows)
-    if len(_CATEGORY_ANALYSIS_CACHE) > 8:
+    if len(_CATEGORY_ANALYSIS_CACHE) > 64:
         _CATEGORY_ANALYSIS_CACHE.clear()
     _CATEGORY_ANALYSIS_CACHE[cache_key] = out
     return out
@@ -2882,13 +3189,77 @@ def _month_group_rows(frame, count_styles: bool) -> tuple[list[dict], str]:
     agg["prevUnits"] = agg["prevUnits"].fillna(0).astype(int)
     prev = agg["prevUnits"].where(agg["prevUnits"] > 0)
     agg["changePct"] = ((agg["units"] - prev) / prev * 100).round(1)
+    same_cols = []
+    if count_styles and "style" in frame.columns:
+        agg = agg.merge(_same_style_figures(frame, partial, prev_partial, is_partial), on=["month", "group"], how="left")
+        same_cols = ["stylesBoth", "sameUnits", "samePrevUnits", "newStyles", "newUnits", "stoppedStyles"]
+        agg[same_cols] = agg[same_cols].fillna(0)
+        sp = agg["samePrevUnits"].where(agg["samePrevUnits"] > 0)
+        agg["sameChangePct"] = ((agg["sameUnits"] - sp) / sp * 100).round(1)
+        agg["sameChangePct"] = agg["sameChangePct"].astype(object).where(agg["sameChangePct"].notna(), None)
+        same_cols.append("sameChangePct")
     agg = agg.sort_values(["month", "units"], ascending=False)
     agg["changePct"] = agg["changePct"].astype(object).where(agg["changePct"].notna(), None)
-    rows = agg[["month", "group", "styles", "orders", "units", "prevUnits", "changePct", "partial"]].to_dict("records")
+    rows = agg[["month", "group", "styles", "orders", "units", "prevUnits", "changePct", "partial", *same_cols]].to_dict("records")
     for r in rows:  # plain Python types for JSON
         r["styles"], r["orders"], r["units"], r["prevUnits"] = int(r["styles"]), int(r["orders"]), int(r["units"]), int(r["prevUnits"])
         r["partial"] = bool(r["partial"])
+        for k in ("stylesBoth", "sameUnits", "samePrevUnits", "newStyles", "newUnits", "stoppedStyles"):
+            if k in r:
+                r[k] = int(round(r[k]))
     return rows, (partial if is_partial else "")
+
+
+def _same_style_figures(frame, partial: str, prev_partial: str, is_partial: bool):
+    """Per (month, group): the SAME-STYLE spike's parts (2026-10-13,
+    user-requested: styles are added and dropped every month, so total units
+    alone do not compare like with like).
+
+    stylesBoth / sameUnits / samePrevUnits - styles that sold this month AND the
+        previous month, and their units now / before (the same-style spike).
+        For the incomplete current month both sides are the same days (1..day)
+        of the two months, so 12 days are never compared with 30.
+    newStyles / newUnits - sold this month, not at all in the previous month
+    stoppedStyles        - sold in the previous month, not this month
+    New / stopped always compare with the WHOLE previous month (2026-10-13,
+    user-requested), so previous styles - stopped + new = this month's styles,
+    matching the Styles column next to it."""
+    import pandas as pd
+
+    su = frame.groupby(["month", "group", "style"], sort=False)["qty"].sum().reset_index()
+    su["prev_month"] = (pd.PeriodIndex(su["month"], freq="M") - 1).astype(str)
+    before = su[["month", "group", "style", "qty"]].rename(columns={"month": "prev_month", "qty": "prev"})
+    su = su.merge(before, on=["prev_month", "group", "style"], how="left")
+    su["prev_full"] = su["prev"].fillna(0.0)          # the whole previous month - new / stopped
+    same_days = None
+    if is_partial:
+        same_days = (frame[(frame["month"] == prev_partial) & (frame["day"] <= SNAPSHOT_DATE.day)]
+                     .groupby(["group", "style"])["qty"].sum().rename("sd").reset_index())
+        su = su.merge(same_days, on=["group", "style"], how="left")
+        cur = su["month"] == partial
+        su.loc[cur, "prev"] = su.loc[cur, "sd"]
+        su = su.drop(columns="sd")
+    su["prev"] = su["prev"].fillna(0.0)
+    both = (su["qty"] > 0) & (su["prev"] > 0)
+    new = (su["qty"] > 0) & (su["prev_full"] <= 0)
+    su["both"], su["new"] = both, new
+    su["sameNow"] = su["qty"].where(both, 0.0)
+    su["samePrev"] = su["prev"].where(both, 0.0)
+    su["newQty"] = su["qty"].where(new, 0.0)
+    out = su.groupby(["month", "group"]).agg(
+        stylesBoth=("both", "sum"), sameUnits=("sameNow", "sum"), samePrevUnits=("samePrev", "sum"),
+        newStyles=("new", "sum"), newUnits=("newQty", "sum"),
+    ).reset_index()
+
+    # Stopped: sold in the previous period, not this month.
+    months = set(su["month"])
+    prev_sets = su[["month", "group", "style"]].copy()
+    prev_sets["month"] = (pd.PeriodIndex(prev_sets["month"], freq="M") + 1).astype(str)
+    prev_sets = prev_sets[prev_sets["month"].isin(months)]
+    now_sets = su[["month", "group", "style"]].assign(sold=True)
+    stopped = prev_sets.merge(now_sets, on=["month", "group", "style"], how="left")
+    stopped = stopped[stopped["sold"].isna()].groupby(["month", "group"]).size().rename("stoppedStyles").reset_index()
+    return out.merge(stopped, on=["month", "group"], how="left")
 
 
 def _category_channel_frame():
@@ -2919,7 +3290,8 @@ def _category_channel_frame():
     return frame
 
 
-def get_category_analysis_channels(level: str, group: str) -> dict:
+def get_category_analysis_channels(level: str, group: str, category: str = "", sub_category: str = "",
+                                   tier_mode: str = "current") -> dict:
     """Channel drill-down of one Category / Sub Category / Style row of the
     Category Analysis tables (2026-10-09, user-requested): the same monthly
     styles / orders / units / spike, one row per marketplace (Amazon,
@@ -2929,7 +3301,8 @@ def get_category_analysis_channels(level: str, group: str) -> dict:
 
     if level not in _CATEGORY_LEVELS:
         raise ValueError(f"level must be one of {_CATEGORY_LEVELS}, got {level!r}")
-    cache_key = (_DATA_VERSION, level, group)
+    tier_mode = "sale" if level == "tier" and tier_mode == "sale" else "current"
+    cache_key = (_DATA_VERSION, level, group, category, sub_category, tier_mode)
     if cache_key in _CATEGORY_CHANNELS_CACHE:
         return _CATEGORY_CHANNELS_CACHE[cache_key]
 
@@ -2939,6 +3312,10 @@ def get_category_analysis_channels(level: str, group: str) -> dict:
         return out
     if level == "style":
         mask = base["style"] == group
+    elif level == "tier" and tier_mode == "sale":
+        sale_date = pd.to_datetime(base["month"] + "-" + base["day"].astype(int).astype(str).str.zfill(2))
+        mask = (_tier_at_sale(base["style"], sale_date) == group).to_numpy()
+        mask = pd.Series(mask, index=base.index)
     elif level == "tier":
         tier_of = _style_tier_map()
         members = {d for d in base["style"].unique() if (tier_of.get(d.strip().upper()) or "Unclassified") == group}
@@ -2947,6 +3324,9 @@ def get_category_analysis_channels(level: str, group: str) -> dict:
         group_of = design_attributes.category_of if level == "category" else design_attributes.sub_category_of
         members = {d for d in base["style"].unique() if (group_of(d) or "Unclassified") == group}
         mask = base["style"].isin(members)
+    keep = _category_filter_mask(base["style"], category, sub_category)
+    if keep is not None:
+        mask = mask & keep
     frame = base[mask]
     if frame.empty:
         return out
@@ -2955,6 +3335,107 @@ def get_category_analysis_channels(level: str, group: str) -> dict:
     if len(_CATEGORY_CHANNELS_CACHE) > 256:
         _CATEGORY_CHANNELS_CACHE.clear()
     _CATEGORY_CHANNELS_CACHE[cache_key] = out
+    return out
+
+
+_CATEGORY_FILTERED_CACHE: dict[tuple, dict] = {}  # (data version, filters) -> filtered monthly totals
+_STYLE_BRAND_CACHE: tuple | None = None  # (data version, {style: brand})
+
+
+def _normalize_brand(name) -> str:
+    """One spelling per brand for the sales orders' free-text brand_name
+    ("MOKOSH" / "mokosh", "coe" / "Colors Of Earth", ...), matching the
+    master sheet's names."""
+    raw = str(name if name is not None else "").strip()
+    key = "".join(ch for ch in raw.lower() if ch.isalnum())
+    if not key or key in ("nan", "none", "na"):
+        return ""
+    if key.startswith("mokosh"):
+        return "Mokosh"
+    if key.startswith("jturritopsis"):
+        return "J.Turritopsis"
+    if key.startswith("curlytales"):
+        return "Curly Tales"
+    if key in ("coe", "colorsofearth", "coloursofearth") or key.startswith("colorsofearth"):
+        return "C.O.E"
+    return raw.title()
+
+
+def _style_brand_map() -> dict[str, str]:
+    """{style: brand} (2026-10-14, user-requested Brand filter): the master
+    sheet's Brand; for a style missing from the sheet, the brand its sales
+    orders carry most often (spelling unified). "Unclassified" if neither."""
+    global _STYLE_BRAND_CACHE
+    if _STYLE_BRAND_CACHE is not None and _STYLE_BRAND_CACHE[0] == _DATA_VERSION:
+        return _STYLE_BRAND_CACHE[1]
+    df = _channel_source_base_df()
+    out: dict[str, str] = {}
+    if df is not None and not df.empty:
+        styles = df["DESIGN_NO"].astype(str)
+        fallback: dict[str, str] = {}
+        if "brand_name" in df.columns:
+            names = df["brand_name"].map(_normalize_brand)
+            counts = (names[names != ""].groupby(styles[names != ""]).agg(lambda s: s.value_counts().idxmax())
+                      if (names != "").any() else {})
+            fallback = dict(counts.items()) if hasattr(counts, "items") else {}
+        for st in styles.unique():
+            out[st] = design_attributes.brand_of(st) or fallback.get(st) or "Unclassified"
+    _STYLE_BRAND_CACHE = (_DATA_VERSION, out)
+    return out
+
+
+def _category_style_options() -> list[dict]:
+    """Every style in the Category Analysis window with its tier, category and
+    sub category - the choices behind the Tiers Spike Rate chart's filters."""
+    base = _category_channel_frame()
+    if base is None or base.empty:
+        return []
+    # The same tier / category / sub category of a style as the Tiers,
+    # Category and Sub Category tables, so the chart's totals match them.
+    tier_of = _style_tier_map()
+    brand_of = _style_brand_map()
+    out = []
+    for st in sorted(base["style"].unique()):
+        out.append({
+            "style": st,
+            "brand": brand_of.get(st, "Unclassified"),
+            "tier": tier_of.get(st.strip().upper()) or "Unclassified",
+            "category": design_attributes.category_of(st) or "Unclassified",
+            "subCategory": design_attributes.sub_category_of(st) or "Unclassified",
+        })
+    return out
+
+
+def get_category_analysis_filtered(tier: str = "", category: str = "", sub_category: str = "", style: str = "",
+                                   brand: str = "") -> dict:
+    """Monthly styles / orders / units / spike for every style matching ALL the
+    given filters together (blank = any) - the Tiers Spike Rate chart's
+    filters (2026-10-13, user-requested: Tier, Category, Sub Category and a
+    searchable Style). Summed on the server from the sale rows, so a month's
+    spike counts styles that sold the month before even when they did not sell
+    this month (the same rule as the tables, see _month_group_rows). Also
+    returns every style's tier / category / sub category for the filter lists."""
+    cache_key = (_DATA_VERSION, tier, category, sub_category, style, brand)
+    if cache_key in _CATEGORY_FILTERED_CACHE:
+        return _CATEGORY_FILTERED_CACHE[cache_key]
+    options = _category_style_options()
+    out = {"dataThrough": SNAPSHOT_DATE.isoformat(), "partialMonth": "", "rows": [], "styleCount": 0, "options": options}
+    base = _category_channel_frame()
+    if base is None or base.empty:
+        return out
+    members = {o["style"] for o in options
+               if (not brand or o["brand"] == brand)
+               and (not tier or o["tier"] == tier) and (not category or o["category"] == category)
+               and (not sub_category or o["subCategory"] == sub_category) and (not style or o["style"] == style)}
+    out["styleCount"] = len(members)
+    frame = base[base["style"].isin(members)]
+    if not frame.empty:
+        frame = frame.assign(group="selection")
+        rows, partial = _month_group_rows(frame, count_styles=True)
+        out.update(rows=rows, partialMonth=partial)
+    if len(_CATEGORY_FILTERED_CACHE) > 256:
+        _CATEGORY_FILTERED_CACHE.clear()
+    _CATEGORY_FILTERED_CACHE[cache_key] = out
     return out
 
 
@@ -2977,6 +3458,26 @@ def get_style_lifecycle(sub_category: str = "") -> dict:
 # Forward horizon of the Weekly Sales Report (dataService.weeklyGrid's
 # default, ~2 months) - the suggestion the weekly production log records.
 _LOG_WEEKS = 9
+
+
+def _record_stock_snapshot() -> None:
+    """Save today's ERP stock + WIP per SKU to the daily stock history
+    (stock_log.py, 2026-10-20). Live loads only, and only when both ERP views
+    loaded - a failed view's 0s would be recorded as stock-outs. Never fails
+    the refresh."""
+    try:
+        if _LOADED_FROM != "live":
+            return
+        import live_source
+        ll = live_source.LAST_LOAD
+        if not (ll.get("stock_ok") and ll.get("wip_ok")):
+            print("[stock_log] ERP stock / WIP not loaded - no snapshot today", file=sys.stderr)
+            return
+        import stock_log
+        n = stock_log.save([(r.skuCode, r.designNo, r.inventoryQty, r.wipQty) for r in PLAN_ROWS], date.today())
+        print(f"[stock_log] stock snapshot saved ({n:,} SKUs, {date.today().isoformat()})", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[stock_log] snapshot failed ({exc!r})", file=sys.stderr)
 
 
 def _record_weekly_production() -> None:
@@ -3240,9 +3741,9 @@ def _compute_weekly_grid(
 
     # Per-group forecast for every calendar-week cell (each Mon-Sun week's
     # total spread evenly over its 7 days, re-summed per cell), with every
-    # STARTED (running or completed) cell replaced by its locked value
-    # (2026-09-29 / 2026-10-06, user-requested: completed and running weeks
-    # must not change on a data refresh - see forecast_freeze.py). Built for EVERY matching group, not just the page,
+    # COMPLETED cell replaced by its locked value (2026-09-29, user-requested:
+    # completed weeks must not change on a data refresh; 2026-10-12: the
+    # running week is no longer frozen - see forecast_freeze.py). Built for EVERY matching group, not just the page,
     # so the TOTAL row is the sum of the same frozen cells and every group's
     # running week gets recorded before it completes.
     chunk_parts: list[tuple[str, list[tuple[str, int]]]] = []
@@ -3261,19 +3762,104 @@ def _compute_weekly_grid(
         }
         for item in built
     }
+    start_cells: dict[str, dict[str, float]] = {}
+    snap_cells: dict[str, dict[str, float]] = {}
+    frozen_on = frozen_until = ""
+    snap_on = False
     try:
         import forecast_freeze
         fc_cells = forecast_freeze.apply(
             f"grid:{group_by}", live_cells, {c_start.isoformat(): c_end for c_start, c_end in chunks}, today,
         )
+        start_cells = forecast_freeze.start_values(f"grid:{group_by}")
+        snap_cells, frozen_on, frozen_until = forecast_freeze.frozen_values(f"grid:{group_by}")
+        snap_on = forecast_freeze.SNAPSHOT_ENABLED
     except Exception as exc:  # noqa: BLE001 — never break the report over the freeze store
         print(f"[data] forecast freeze unavailable ({exc!r}); serving live values", file=sys.stderr)
         fc_cells = live_cells
+
+    # Running week = actual so far + current pace for the days left (2026-10-19,
+    # user-requested: the running week's model forecast was far above how it was
+    # actually selling, e.g. Oct W3 127,963 vs ~88k at the real pace). Shown
+    # only: the freeze store above already saved the MODEL forecast, so the
+    # value a week is locked at when it ends - and its accuracy - stays the
+    # model's. Pace = each row's own Gross units per day over the last
+    # RUNNING_WEEK_PACE_DAYS days of data. Applied once at least one day of the
+    # week has data.
+    if cur_chunk is not None and SNAPSHOT_DATE >= cur_chunk[0]:
+        cur_iso = cur_chunk[0].isoformat()
+        done_days = [(cur_chunk[0] + timedelta(days=i)).isoformat()
+                     for i in range((min(SNAPSHOT_DATE, cur_chunk[1]) - cur_chunk[0]).days + 1)]
+        pace_days = [(SNAPSHOT_DATE - timedelta(days=i)).isoformat() for i in range(RUNNING_WEEK_PACE_DAYS)]
+        days_left = max(0, (cur_chunk[1] - SNAPSHOT_DATE).days)
+        fc_cells = {k: dict(v) for k, v in fc_cells.items()}
+        live_cells = {k: dict(v) for k, v in live_cells.items()}
+        for key, skus in groups.items():
+            so_far = recent = 0
+            for s in skus:
+                dm = _DAY_ACTUAL_GROSS.get(s)
+                if dm:
+                    so_far += sum(dm.get(d, 0) for d in done_days)
+                    recent += sum(dm.get(d, 0) for d in pace_days)
+            est = so_far + round(recent / RUNNING_WEEK_PACE_DAYS * days_left)
+            fc_cells.setdefault(key, {})[cur_iso] = est
+            live_cells.setdefault(key, {})[cur_iso] = est
+
+    # Production Log: each style's forecast as captured when the week began
+    # ({style: {week_start: qty}}), for the frozen view's completed weeks.
+    plog: dict[str, dict[str, float]] = {}
+    try:
+        import weekly_log
+        for r in weekly_log.read("", ""):
+            if r.get("forecast_qty") is not None:
+                plog.setdefault(str(r["style"]), {})[str(r["week_start"])] = float(r["forecast_qty"])
+    except Exception as exc:  # noqa: BLE001 — only fills the frozen view's gaps
+        print(f"[data] production log unavailable for the frozen view ({exc!r})", file=sys.stderr)
+
+    def _frozen_live(keys, c_start, c_end) -> tuple[int | None, int | None]:
+        """(frozen, latest) forecast of a week summed over ``keys``
+        (2026-10-14 / 2026-10-15, user-requested frozen vs unfrozen view):
+        - frozen: the week's value in the 2-month freeze covering it
+          (forecast_freeze.frozen_values - one snapshot kept for 2 months);
+          a completed week outside any freeze: its forecast from when it began.
+          None where nothing was frozen.
+        - latest: today's forecast for a running or upcoming week; None for a
+          completed week - finished weeks are not re-forecast (today's run-rate
+          projected back onto a past week is not a forecast)."""
+        iso = c_start.isoformat()
+        live = None if c_end < today else int(sum(round(live_cells.get(k, {}).get(iso, 0)) for k in keys))
+        # The 2-month freeze covering this week; a completed week outside any
+        # freeze: its forecast from when the week began, if recorded.
+        # 2026-10-19, user-requested: with the 2-month freeze off, the frozen
+        # view shows completed (past) weeks only - running and upcoming weeks
+        # have no frozen value.
+        if not snap_on and c_end >= today:
+            return None, live
+        vals = [snap_cells[k][iso] for k in keys if iso in snap_cells.get(k, {})]
+        if not vals and c_end < today:
+            # A completed week (2026-10-19, user-requested: fill the Frozen
+            # (past weeks) view): per row, its forecast when the week began -
+            # the freeze store's start value, else the Production Log's
+            # start-of-week forecast for the row's styles - else the value it
+            # was locked at when the week ended (all that exists for weeks
+            # before the Production Log, Sep W4 2026).
+            vals = []
+            for k in keys:
+                if iso in start_cells.get(k, {}):
+                    vals.append(start_cells[k][iso])
+                    continue
+                logged = [plog[s][iso] for s in group_styles.get(k, ()) if iso in plog.get(s, {})]
+                if logged:
+                    vals.append(sum(logged))
+                elif iso in fc_cells.get(k, {}):
+                    vals.append(fc_cells[k][iso])
+        return (int(sum(round(v) for v in vals)) if vals else None), live
     # Headline totals across EVERY matching group (search-filtered, but not
     # paginated) - each SKU belongs to exactly one Sub Category and exactly
     # one Style, so these come out the same regardless of which grouping is
     # active (a useful cross-check).
     total_forecast = sum(sum(p.qty for p in item[3]) for item in built)
+
     # GROSS, not net - total_actual is built from historical/HistoricalPoint,
     # whose wk_actual now comes from _aggregate_group_series(gross=True)
     # above (2026-09-15, user-requested: show Gross, not Net, as "Actual
@@ -3339,9 +3925,11 @@ def _compute_weekly_grid(
                 actual_total += total_day_actual.get(d.isoformat(), 0)
                 d += timedelta(days=1)
         forecast_qty = int(sum(round(fc_cells[item[0]].get(key_iso, 0)) for item in built))
+        frozen_qty, live_qty = _frozen_live([item[0] for item in built], c_start, c_end)
         totals_cells[key_iso] = WeeklyGridCell(
             actual=actual_total if is_historical else None,
             forecast=forecast_qty, partial=(c_end > SNAPSHOT_DATE),
+            liveForecast=live_qty, frozenForecast=frozen_qty,
         )
         label = chunk_month_label.get(key_iso, "")
         totals_month_forecast[label] = totals_month_forecast.get(label, 0) + forecast_qty
@@ -3352,6 +3940,8 @@ def _compute_weekly_grid(
         cells=totals_cells,
         monthActualTotal=totals_month_actual,
         monthForecastTotal=totals_month_forecast,
+        frozenOn=frozen_on,
+        frozenUntil=frozen_until,
     )
 
     page = built[offset: offset + limit]
@@ -3388,9 +3978,11 @@ def _compute_weekly_grid(
                     d += timedelta(days=1)
             forecast_qty = int(round(row_fc.get(key_iso, 0)))
             partial = c_end > SNAPSHOT_DATE
+            frozen_qty, live_qty = _frozen_live([key], c_start, c_end)
             cells[key_iso] = WeeklyGridCell(
                 actual=actual_total if is_historical else None,
                 forecast=forecast_qty, partial=partial,
+                liveForecast=live_qty, frozenForecast=frozen_qty,
             )
             label = chunk_month_label.get(key_iso, "")
             month_forecast[label] = month_forecast.get(label, 0) + forecast_qty

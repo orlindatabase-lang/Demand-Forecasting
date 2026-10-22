@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Box, FormControl, MenuItem, Paper, Select, Stack, Typography } from "@mui/material";
 import { ChartsContainer } from "@mui/x-charts/ChartsContainer";
 import { BarPlot } from "@mui/x-charts/BarChart";
@@ -27,8 +27,13 @@ const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Se
 export interface ChartCell {
   units: number;
   prevUnits: number;
-  changePct: number | null;
+  changePct: number | null; // total units vs the previous month
+  sameChangePct?: number | null; // same styles in both months - the spike shown when present
 }
+
+/** The spike shown: same styles in both months when known, else total units. */
+const spikeOf = (c: ChartCell | undefined): number | null =>
+  c ? (c.sameChangePct !== undefined ? c.sameChangePct : c.changePct) : null;
 
 export interface ChartGroup {
   group: string;
@@ -81,7 +86,7 @@ function Stat({ label, value, sub, subColor }: { label: string; value: string; s
 
 function LegendItem({ color, label, line }: { color: string; label: string; line?: boolean }) {
   return (
-    <Stack direction="row" spacing={0.6} alignItems="center">
+    <Stack direction="row" spacing={0.6} sx={{ alignItems: "center" }}>
       <Box sx={line ? { width: 16, height: 3, borderRadius: 2, bgcolor: color } : { width: 10, height: 10, borderRadius: "2px", bgcolor: color }} />
       <Typography variant="caption" sx={{ color: MUTED, whiteSpace: "nowrap" }}>{label}</Typography>
     </Stack>
@@ -94,20 +99,23 @@ interface Props {
   totals: Record<string, ChartCell>;
   partialMonth: string;
   groupName: string;
+  /** Filters shown instead of the group picker; the chart then shows ``totals``
+   * (already filtered by the caller) - the Tiers Spike Rate chart. */
+  filters?: ReactNode;
 }
 
 /** Compact combo chart below the Category Analysis table, for one Sub
  * Category / Category or the total: headline figures, orders per month as
  * units sold per month as bars (left axis) and the month-on-month spike % as a line (right
  * axis, 0% guide line). */
-export default function CategoryAnalysisCharts({ months, groups, totals, partialMonth, groupName }: Props) {
+export default function CategoryAnalysisCharts({ months, groups, totals, partialMonth, groupName, filters }: Props) {
   const [key, setKey] = useState(TOTAL_KEY);
   const byName = useMemo(() => new Map(groups.map((g) => [g.group, g.months])), [groups]);
   const cells = useMemo(() => (key === TOTAL_KEY ? totals : byName.get(key) ?? {}), [key, totals, byName]);
 
   const labels = months.map((m) => (m === partialMonth ? `${axisLabel(m)}*` : axisLabel(m)));
   const units = months.map((m) => cells[m]?.units ?? 0);
-  const spike = months.map((m) => cells[m]?.changePct ?? null);
+  const spike = months.map((m) => spikeOf(cells[m]));
 
   // Headline figures over complete months only.
   const stats = useMemo(() => {
@@ -126,31 +134,33 @@ export default function CategoryAnalysisCharts({ months, groups, totals, partial
   return (
     <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: "#ffffff" }}>
       {/* Header: title + legend on the left, selector on the right */}
-      <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} alignItems={{ md: "flex-start" }} justifyContent="space-between">
+      <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} sx={{ alignItems: { md: "flex-start" }, justifyContent: "space-between" }}>
         <Box>
           <Typography variant="subtitle1" sx={{ fontWeight: 800, lineHeight: 1.3 }}>Monthly units sold &amp; spike</Typography>
           <Stack direction="row" spacing={2} sx={{ mt: 0.5, flexWrap: "wrap", rowGap: 0.5 }}>
             <LegendItem color={BAR_COLOR} label="Units sold (left)" />
             <LegendItem color={BAR_PEAK_COLOR} label="Best month" />
-            <LegendItem color={SPIKE_COLOR} label="Spike vs prev. month (right)" line />
+            <LegendItem color={SPIKE_COLOR} label="Spike vs prev. month, same styles (right)" line />
             {partialMonth && <LegendItem color={BAR_PARTIAL_COLOR} label={monthYear(partialMonth)} />}
           </Stack>
         </Box>
-        <FormControl size="small" sx={{ minWidth: 220 }}>
-          <Select value={key} onChange={(e) => setKey(e.target.value)} displayEmpty inputProps={{ "aria-label": groupName }}>
-            <MenuItem value={TOTAL_KEY}>All {groupName === "Category" ? "categories" : "sub categories"} (total)</MenuItem>
-            {groups.map((g) => (
-              <MenuItem key={g.group} value={g.group}>{g.group}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        {filters ?? (
+          <FormControl size="small" sx={{ minWidth: 220 }}>
+            <Select value={key} onChange={(e) => setKey(e.target.value)} displayEmpty inputProps={{ "aria-label": groupName }}>
+              <MenuItem value={TOTAL_KEY}>All {groupName === "Category" ? "categories" : "sub categories"} (total)</MenuItem>
+              {groups.map((g) => (
+                <MenuItem key={g.group} value={g.group}>{g.group}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        )}
       </Stack>
 
       {/* Headline figures */}
       {stats && (
         <Stack direction="row" sx={{ mt: 1.5, flexWrap: "wrap", rowGap: 1 }}>
           {stats.recent.map((m) => {
-            const change = cells[m]?.changePct ?? null;
+            const change = spikeOf(cells[m]);
             return (
               <Stat
                 key={m}
@@ -165,8 +175,8 @@ export default function CategoryAnalysisCharts({ months, groups, totals, partial
             <Stat
               label={`${axisLabel(partialMonth)} so far`}
               value={formatNumber(partialCell.units)}
-              sub={partialCell.changePct == null ? "units" : `${partialCell.changePct >= 0 ? "▲" : "▼"} ${signed(partialCell.changePct)} vs same days`}
-              subColor={partialCell.changePct == null ? undefined : partialCell.changePct >= 0 ? UP_TEXT : DOWN_TEXT}
+              sub={spikeOf(partialCell) == null ? "units" : `${spikeOf(partialCell)! >= 0 ? "▲" : "▼"} ${signed(spikeOf(partialCell)!)} vs same days`}
+              subColor={spikeOf(partialCell) == null ? undefined : spikeOf(partialCell)! >= 0 ? UP_TEXT : DOWN_TEXT}
             />
           )}
         </Stack>
@@ -213,7 +223,7 @@ export default function CategoryAnalysisCharts({ months, groups, totals, partial
             type: "line",
             xAxisId: "monthLine",
             yAxisId: "spike",
-            label: "Spike vs previous month",
+            label: "Spike vs previous month (same styles)",
             color: SPIKE_COLOR,
             data: spike,
             curve: "linear",

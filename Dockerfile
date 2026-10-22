@@ -10,7 +10,7 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# libgomp1: OpenMP runtime needed by lightgbm/xgboost at import time.
+# libgomp1: OpenMP runtime needed by lightgbm at import time.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*

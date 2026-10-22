@@ -4,6 +4,12 @@ export interface WeeklyGridCell {
   actual: number | null; // null = future/forecast-only week
   forecast: number;
   partial: boolean;
+  // Frozen vs unfrozen (2026-10-14): frozenForecast = the forecast when the week
+  // started (null if not recorded / upcoming); liveForecast = today's forecast
+  // for a running or upcoming week (null for completed weeks).
+  liveForecast?: number | null;
+  frozenForecast?: number | null;
+  frozenMissing?: boolean; // page only: Frozen view, no frozen value recorded for this week
 }
 
 export interface WeeklyGridEvent {
@@ -78,6 +84,8 @@ export interface WeeklyGridTotals {
   cells: Record<string, WeeklyGridCell>; // weekStart (ISO) -> cell, summed across every matching group
   monthActualTotal: Record<string, number>;
   monthForecastTotal: Record<string, number>;
+  frozenOn?: string; // date the active 2-month forecast freeze was taken
+  frozenUntil?: string; // end of its window
 }
 
 export interface WeeklyGridResponse {
@@ -183,6 +191,15 @@ export interface CategoryAnalysisRow {
   prevUnits: number; // previous month's units (same days for the partial month)
   changePct: number | null; // units vs prevUnits, null when prevUnits = 0
   partial: boolean; // current month, data not complete yet
+  // Same-style spike (2026-10-13): only the styles that sold in BOTH months
+  // (the current month: in the same days of the previous month).
+  stylesBoth?: number;
+  sameUnits?: number;
+  samePrevUnits?: number;
+  sameChangePct?: number | null;
+  newStyles?: number; // sold this month, not the month before
+  newUnits?: number;
+  stoppedStyles?: number; // sold the month before, not this month
 }
 
 export interface CategoryAnalysisResponse {
@@ -192,9 +209,64 @@ export interface CategoryAnalysisResponse {
   tierOf?: Record<string, string>; // tier level only: style -> tier
   partialMonth: string;
   rows: CategoryAnalysisRow[];
+  filterOptions?: Record<string, string[]>; // tier level: {category: its sub categories}, for the filters
 }
 
 /** One Category Analysis row split by marketplace - rows' `group` is the marketplace. */
+/** GET /api/catalog/tier-movement - tier stays from the Cloud SQL tier-change log. */
+export interface TierStay {
+  tier: string;
+  from: string | null; // null = untracked (current tier with no history entry)
+  to: string | null; // null = still in this tier
+  days: number | null;
+  untracked: boolean;
+}
+export interface TierMovementStyle {
+  style: string;
+  tier: string; // current catalog tier
+  subCategory: string;
+  daysInTier: number | null; // days in the current tier (null = no history for it)
+  journey: TierStay[];
+}
+export interface TierMovementSummary {
+  tier: string;
+  stylesNow: number;
+  stylesTracked: number; // of those, with a history entry for this tier
+  movedIn: number;
+  movedOut: number;
+  medianDaysBeforeMoving: number | null;
+  avgDaysBeforeMoving: number | null;
+  medianDaysSoFar: number | null;
+  movesTo: { tier: string; styles: number }[];
+}
+export interface TierMovementResponse {
+  available: boolean;
+  trackingFrom: string;
+  asOf?: string;
+  tiers: TierMovementSummary[];
+  moves: { from: string; to: string; styles: number }[];
+  styles: TierMovementStyle[];
+}
+
+/** One style with its tier / category / sub category (Tiers Spike Rate chart filters). */
+export interface CategoryStyleOption {
+  style: string;
+  brand: string;
+  tier: string;
+  category: string;
+  subCategory: string;
+}
+
+/** GET /api/reports/category-analysis/filtered - monthly totals of the styles
+ * matching all the filters (group = "selection"), plus every style's options. */
+export interface CategoryAnalysisFilteredResponse {
+  dataThrough: string;
+  partialMonth: string;
+  rows: CategoryAnalysisRow[];
+  styleCount: number;
+  options: CategoryStyleOption[];
+}
+
 export interface CategoryAnalysisChannelsResponse {
   level: "category" | "subCategory" | "style" | "tier";
   group: string;
@@ -318,6 +390,7 @@ export interface DesignLifecycle {
   subCategory?: DesignLifecycleItem[];
   colour?: DesignLifecycleItem[];
   fabric?: DesignLifecycleItem[];
+  neck?: DesignLifecycleItem[];
 }
 
 /** The one rule set every section of the page uses (api design_suggest.rules()). */
@@ -410,4 +483,17 @@ export interface DesignSuggestionsResponse {
   lifecycle?: DesignLifecycle;
   window?: DesignWindow;
   seasons: DesignSeason[];
+}
+
+/** GET /api/data-health - checks on the loaded data (2026-10-19). */
+export interface DataHealthIssue {
+  level: "error" | "warning" | "info";
+  code: string;
+  title: string;
+  detail: string;
+}
+export interface DataHealthResponse {
+  checkedOn: string;
+  dataThrough: string;
+  issues: DataHealthIssue[];
 }

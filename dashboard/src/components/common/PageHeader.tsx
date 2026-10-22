@@ -11,10 +11,8 @@ export default function PageHeader({ title, subtitle, actions }: PageHeaderProps
   return (
     <Stack
       direction={{ xs: "column", sm: "row" }}
-      justifyContent="space-between"
-      alignItems={{ sm: "center" }}
       spacing={1.5}
-      sx={{ mb: 2.5 }}
+      sx={{ justifyContent: "space-between", alignItems: { sm: "center" }, mb: 2.5 }}
     >
       <Box>
         <Typography variant="h5" sx={{ fontWeight: 800 }}>

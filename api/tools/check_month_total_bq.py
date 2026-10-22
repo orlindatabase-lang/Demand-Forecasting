@@ -11,8 +11,8 @@ _FINAL_COLS comment for the full story) — keep the two status sets below in
 sync with api/data.py if that file changes.
 
 Usage (script):
-    python check_month_total_bq.py           # defaults to LAST calendar month
-    python check_month_total_bq.py 2026 8     # a specific year/month
+    python api/tools/check_month_total_bq.py           # defaults to LAST calendar month
+    python api/tools/check_month_total_bq.py 2026 8     # a specific year/month
 
 Usage (notebook):
     from check_month_total_bq import month_total, last_month

@@ -27,6 +27,16 @@ import urllib.request
 
 import pandas as pd
 
+# Settings come from the environment (Cloud Run) or api/.env (local); a real
+# environment variable always wins over the file.
+try:
+    from pathlib import Path
+
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:
+    pass
+
 # --------------------------------------------------------------------------- #
 # Configuration (env-overridable)
 # --------------------------------------------------------------------------- #
@@ -39,7 +49,9 @@ ERP_URL = os.getenv(
     "ERP_URL",
     "http://195.250.31.101/DigiBizzErpApi/api/UnknownCallerApi/GetPowerBiReports",
 )
-ERP_TOKEN = os.getenv("ERP_TOKEN", "aaaqqqwww111")
+# Secret: set ERP_TOKEN in api/.env (local) or the Cloud Run environment -
+# never in code (2026-10-19 security fix: it used to be a hard-coded default).
+ERP_TOKEN = os.getenv("ERP_TOKEN", "")
 ERP_COMPANY_YEAR_ID = os.getenv("ERP_COMPANY_YEAR_ID", "83")
 ERP_TIMEOUT = int(os.getenv("ERP_TIMEOUT", "120"))
 
@@ -47,7 +59,6 @@ VIEW_MASTER = "View_Dboard_Master_Design_Wise_Fabric_Detail_For_BI"
 VIEW_PLANNING = "View_Program_Planning_For_Rdp"
 VIEW_INVENTORY = "View_Dboard_Trans_Final_Inventory_Data_For_Rdp"
 # Lot-journey: one row per (lot, process) with entry/exit dates + vendor.
-VIEW_PRODUCTION = "View_Dboard_Trans_Production_Analysis_For_BI"
 
 # WIP = in-house WIP + job-work WIP + allocation (2026-09-28, user-specified;
 # replaces open production order + in-house + job-work). ALLOCATION_QTY is
@@ -121,6 +132,10 @@ def fetch_erp_view(
         retries:          Max attempts (default: ERP_RETRIES).
         company_year_id:  Override CompanyYearId header (default: ERP_COMPANY_YEAR_ID).
     """
+    if not ERP_TOKEN:
+        print(f"[live_source] {view_name}: ERP_TOKEN is not set (api/.env or the environment) - "
+              f"ERP data unavailable")
+        return pd.DataFrame()
     failed_at = _UNAVAILABLE_VIEWS.get(view_name)
     if failed_at is not None and time.time() - failed_at < _UNAVAILABLE_TTL_S:
         return pd.DataFrame()
@@ -196,18 +211,6 @@ def strip_prefix(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
 
 
 
-def fetch_production_analysis() -> pd.DataFrame:
-    """Fetch the lot-journey view (one row per lot×process, with FIRST/LAST dates).
-
-    Raw ERP columns: LOT_NO, MAIN_DESIGN_NAME, PROCESS_NAME, PARTY_NAME,
-                     FIRST_DATE, LAST_DATE, BAL_QTY, PRO_ORD_STATUS, ...
-    Returned columns (PA_ prefix): LOT_NO (kept), PA_MAIN_DESIGN_NAME,
-        PA_PROCESS_NAME, PA_PARTY_NAME, PA_FIRST_DATE, PA_LAST_DATE, ...
-    """
-    df = fetch_erp_view(VIEW_PRODUCTION)
-    return prefix_cols(df, "PA_") if not df.empty else df
-
-
 def fetch_master() -> pd.DataFrame:
     """Fetch the design master view (design attributes: group, color, section…).
 
@@ -248,6 +251,13 @@ def fetch_inventory() -> pd.DataFrame:
 
 
 
+# What the last assemble() actually got from each source (2026-10-19, data
+# health checks - see data.data_health()): a source that silently fell back
+# (e.g. WIP / stock = 0 when an ERP view failed) must be visible, because it
+# changes the production suggestion.
+LAST_LOAD: dict = {}
+
+
 def fetch_sales_bigquery() -> pd.DataFrame:
     """Fetch sales orders from BigQuery (Application Default Credentials)."""
     from google.cloud import bigquery  # imported lazily so the API starts without the lib
@@ -277,6 +287,7 @@ def fetch_sales_bigquery() -> pd.DataFrame:
         expected_n = list(client.query(
             f"SELECT COUNT(*) AS n FROM `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}` WHERE {where}"
         ).result())[0]["n"]
+        LAST_LOAD["sales_rows_expected"] = int(expected_n)
         if len(df) != expected_n:
             print(f"[live_source] sales fetch returned {len(df):,} rows but {expected_n:,} exist "
                   f"— retrying via REST row iterator", flush=True)
@@ -342,7 +353,9 @@ def assemble() -> pd.DataFrame:
     Returns a DataFrame with the same columns as final_merged_data.csv.
     """
     # 1) Sales (BigQuery) ----------------------------------------------------- #
+    LAST_LOAD.clear()
     sales = fetch_sales_bigquery()
+    LAST_LOAD["sales_rows"] = int(len(sales))
     sales["order_date"] = pd.to_datetime(sales["order_date"], errors="coerce")
 
     # Exclude combo-SKU order lines (2026-09-16, user-requested) - a bundle of
@@ -419,6 +432,7 @@ def assemble() -> pd.DataFrame:
     # physical SKU splits across several per-channel listing codes). See
     # lgbm_forecast.py's COL_SKU comment for the full numbers.
     master = fetch_master()
+    LAST_LOAD["master_ok"] = "MASTER_DESIGN_NO" in master.columns and not master.empty
     master_cols = ["MASTER_DESIGN_NO", "MASTER_DESIGN_GROUP", "MASTER_CATALOG_NAME",
                    "MASTER_COLOR", "MASTER_LAUNCH_DATE", "MASTER_SECTION"]
     merged = sales.assign(design_key=_design_key(sales["product_sku_code"]))
@@ -461,6 +475,7 @@ def assemble() -> pd.DataFrame:
     # 3) WIP (planning view), aggregated by design+size ----------------------- #
     # fetch_planning() returns PLAN_-prefixed columns (e.g. PLAN_DESIGN_NAME).
     plan = fetch_planning()
+    LAST_LOAD["wip_ok"] = True
     _WIP_COLS_PLAN = [f"PLAN_{c}" for c in _WIP_COLS]
     if {"PLAN_DESIGN_NAME", "PLAN_SIZE"}.issubset(plan.columns):
         plan[_WIP_COLS_PLAN] = (
@@ -478,11 +493,13 @@ def assemble() -> pd.DataFrame:
         )
     else:
         print("[live_source] planning view unavailable; WIP defaults to 0")
+        LAST_LOAD["wip_ok"] = False
         wip = pd.DataFrame(columns=["_design", "_size", "TOTAL_WIP_QTY"])
 
     # 4) Pending pieces (inventory view), aggregated by design+size ----------- #
     # fetch_inventory() returns INV_-prefixed columns (e.g. INV_DESIGN_NO).
     inv = fetch_inventory()
+    LAST_LOAD["stock_ok"] = True
     if {"INV_DESIGN_NO", "INV_SIZE", "INV_PENDING_QTY_PIECES"}.issubset(inv.columns):
         inv["INV_PENDING_QTY_PIECES"] = pd.to_numeric(
             inv["INV_PENDING_QTY_PIECES"], errors="coerce"
@@ -498,6 +515,7 @@ def assemble() -> pd.DataFrame:
         )
     else:
         print("[live_source] inventory view unavailable; PENDING defaults to 0")
+        LAST_LOAD["stock_ok"] = False
         pend = pd.DataFrame(columns=["_design", "_size", "PENDING_QTY_PIECES"])
 
     # 5) Join WIP + pending onto the sales panel ------------------------------ #

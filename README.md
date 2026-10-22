@@ -33,10 +33,11 @@ horizon length or the number of cross-validation folds.
 17. [Stage 12: Inventory and production planning](#17-stage-12-inventory-and-production-planning)
 18. [Stage 13: Evaluation and backtesting](#18-stage-13-evaluation-and-backtesting)
 19. [Stage 14: Outputs and delivery](#19-stage-14-outputs-and-delivery)
-20. [Runtime orchestration and refresh cycle](#20-runtime-orchestration-and-refresh-cycle)
-21. [Data model](#21-data-model)
-22. [Summary of techniques and algorithms](#22-summary-of-techniques-and-algorithms)
-23. [Appendix: code map, API, configuration, running, deployment](#23-appendix)
+20. [Design Suggestions](#20-design-suggestions)
+21. [Runtime orchestration and refresh cycle](#21-runtime-orchestration-and-refresh-cycle)
+22. [Data model](#22-data-model)
+23. [Summary of techniques and algorithms](#23-summary-of-techniques-and-algorithms)
+24. [Appendix: code map, API, configuration, running, deployment](#24-appendix)
 
 ---
 
@@ -71,8 +72,17 @@ flowchart TD
 | **Style** | design number (`DESIGN_NO`) | More stable totals for planning at the style level |
 | **Sub Category** | sum of its Styles | Category-level view in the report |
 
-Sales channels (Amazon, Flipkart, Myntra, Meesho, Nykaa and the brand websites) are
-shown as **actual sales only**. There is no per-channel forecast.
+Sales channels (Amazon, Flipkart, Myntra, Meesho, Nykaa, Ajio and the brand websites)
+are shown as **actual sales only**. There is no per-channel forecast.
+
+Two further parts build on the same sales data:
+
+- **Sales analysis tabs** (Sub Category, Category, Tiers Spike Rate): monthly styles,
+  orders, units and month-on-month spike, with a platform-wise drill-down
+  ([section 19.4](#194-sales-analysis-tabs)).
+- **Design Suggestions**: which product types, colours, fabrics and details are trending
+  or fading, and a design plan per product for the running and the next season
+  ([section 20](#20-design-suggestions)).
 
 ---
 
@@ -85,8 +95,8 @@ shown as **actual sales only**. There is no per-channel forecast.
 | Catalog metadata | Google Cloud SQL, PostgreSQL (catalog tiers, style images) |
 | Backend | Python 3.13, FastAPI, Uvicorn, Pydantic |
 | Data processing | pandas, NumPy |
-| Machine learning | LightGBM, scikit-learn (metrics) |
-| Persistence | JSON forecast snapshots and a SQLite weekly log in `api/.cache/` |
+| Machine learning | LightGBM (demand forecasts), CatBoost (Design Suggestions), scikit-learn (metrics) |
+| Persistence | JSON forecast snapshots, SQLite weekly log and SQLite frozen-forecast store in `api/.cache/` (copied to Cloud Storage on Cloud Run) |
 | Frontend | React 19, TypeScript, Vite, Material UI, TanStack Query / Table / Virtual |
 | Deployment | Docker, Google Cloud Run (API and dashboard), nginx (serves the dashboard's static files) |
 
@@ -123,6 +133,8 @@ flowchart LR
         LIFE["Lifecycle rules<br/>lifecycle.py"]
         CAT["Catalog tiers<br/>catalog_style.py"]
         LOG["Weekly production log<br/>weekly_log.py"]
+        FRZ["Frozen completed weeks<br/>forecast_freeze.py"]
+        DSG["Design suggestions<br/>design_suggest.py (CatBoost)"]
         APIL["REST layer<br/>main.py"]
     end
 
@@ -130,15 +142,16 @@ flowchart LR
         direction TB
         JS[("Forecast snapshots<br/>SKU / Design JSON")]
         SQ[("weekly_production_log<br/>SQLite")]
+        FZQ[("frozen_forecast<br/>SQLite")]
         SC[("Similarity graph cache")]
     end
 
     subgraph FRONT["Frontend: React dashboard"]
         direction TB
-        P1["Weekly Sales Report"]
-        P2["Channel drill-down"]
-        P3["Production log dialog"]
-        P4["Inventory Planning"]
+        P1["Weekly Sales Report<br/>+ channel drill-down"]
+        P2["Sub Category · Category ·<br/>Tiers Spike Rate"]
+        P3["Production Log"]
+        P4["Design Suggestions"]
     end
 
     BQ --> ING
@@ -161,6 +174,12 @@ flowchart LR
     ML <--> JS
     LOG <--> SQ
     SIM <--> SC
+    ORC <--> FRZ
+    FRZ <--> FZQ
+    ORC --> DSG
+    FRZ --> DSG
+    FATT --> DSG
+    DSG --> APIL
     ORC --> APIL
     APIL -- "JSON over HTTP" --> P1
     APIL --> P2
@@ -179,6 +198,7 @@ the module it uses.
 flowchart TD
     main["main.py<br/>REST routes"] --> data["data.py<br/>orchestrator"]
     main --> catalog["catalog_style.py"]
+    main --> ds["design_suggest.py<br/>Design Suggestions"]
     run["run.py<br/>server launcher"] --> main
 
     data --> live["live_source.py"]
@@ -189,6 +209,12 @@ flowchart TD
     data --> attrs["design_attributes.py"]
     data --> wlog["weekly_log.py"]
     data --> sim["similar_design.py"]
+    data --> freeze["forecast_freeze.py"]
+
+    ds --> data
+    ds --> attrs
+    ds --> festival
+    ds --> freeze
 
     lgbm --> festival
     lgbm --> sim
@@ -241,6 +267,7 @@ flowchart TD
         D2["Stage 11<br/>Lifecycle stage & scores"]
         D3["Stage 12<br/>Available qty · production ·<br/>safety stock"]
         D4["Stage 13<br/>Walk-forward backtest"]
+        D5["Design Suggestions<br/>trend stages · CatBoost ·<br/>product cards"]
     end
 
     subgraph S5["OUTPUT"]
@@ -272,6 +299,11 @@ flowchart TD
     D1 --> D4
     D3 --> E1
     D4 --> E1
+    A3 --> D5
+    I8 --> D5
+    I6 --> D5
+    D1 --> D5
+    D5 --> E1
     E1 --> E2
     D3 --> E3
 ```
@@ -511,7 +543,6 @@ flowchart LR
     LD["Launch date"] --> LC["Product age · launch-period sales rate"]
     P --> H["Hierarchy<br/>point-in-time design-level median"]
     SD["Similar-design graph"] --> H2["Borrowed similar-design level"]
-    PR["Promotion discount"] --> PF["Promotion value + flag"]
     FE["Festival model"] --> FF["Festival multiplier · flag · event ·<br/>days to peak · category × event"]
 
     L --> X["Feature matrix"]
@@ -523,7 +554,6 @@ flowchart LR
     LC --> X
     H --> X
     H2 --> X
-    PF --> X
     FF --> X
 ```
 
@@ -537,8 +567,14 @@ flowchart LR
 | Catalog tier | The merchandising team's view of the style, as it stood in that week |
 | Lifecycle | Where the product is between launch and maturity |
 | Hierarchy | A noisy SKU can lean on its design's more stable signal and on similar designs |
-| Promotion | Effect of price discounts |
 | Festival | Event uplift or dip |
+
+**No promotion inputs (since model v50 / d37, 19 Oct 2026).** The week's promotion
+discount is only known after the week (it is the sum of that week's order discounts),
+and it was always 0 when forecasting, so the models forecast every future week as if
+there were no promotion. Measured on the training data with promotion set to 0, as in
+production, removing it cut the SKU model's error from 68.6% to 53.8% WAPE (bias −59% →
+−20%) and the style model's from 47.2% to 43.1% (bias −32% → −14%).
 
 **Outlier treatment.** Outside festival weeks, each ID's weekly demand is capped at its
 own **99th percentile**. The percentile is computed from the training period only, so it
@@ -602,6 +638,16 @@ Every candidate uses a learning rate of 0.04, up to 3,000 trees, and stops early
 It is weighted by volume, so fast-selling items count for more than rare ones.
 
 ### 12.3 The two models
+
+**Style model only (default since 19 Oct 2026, `FORECAST_LEVEL=style`).** Every
+Style, Sub Category and TOTAL number already came from the style model; the SKU model
+only filled 15 styles without a style forecast (0.07% of the forecast). Compared on the
+same test weeks (13 Jul – 5 Oct 2026), the style model beat the sum of the SKU model at
+every level: style rows 43.1% vs 46.5% WAPE (bias −13.7% vs −19.7%), Sub Category 31.0% vs
+32.6%, weekly total 28.3% vs 29.3%. Even per SKU, the style forecast split by each SKU's
+recent share of its style's sales (52.1%) beat the SKU model (53.8%). Styles the style
+model does not cover use the run-rate × festival. `FORECAST_LEVEL=both` brings the SKU
+model back.
 
 The same engine trains two independent models:
 
@@ -684,10 +730,9 @@ designs have already been through.
 
 ```mermaid
 flowchart TD
-    MO["Model forecast, 13 weeks"] --> BL["Shrink towards baseline<br/>f = α · model + (1 − α) · naive<br/>α = FORECAST_BLEND"]
-    NV["Naive run-rate<br/>= gross units in last 35 days ÷ 5"] --> BL
-    BL --> FM["× weekly festival multiplier"]
-    FM --> FL["floor at 0"]
+    MO["Model forecast, 13 weeks"] --> BL["Shrink towards baseline<br/>f = α · model + (1 − α) · naive · festival<br/>α = FORECAST_BLEND = 0.5"]
+    NV["Naive run-rate<br/>= gross units in the last 60 days ÷ (60/7)<br/>RUNRATE_DAYS, was 35 until 19 Oct 2026"] --> BL
+    BL --> FL["floor at 0"]
     FL --> SKU["SKU weekly series"]
     SKU --> H7["7-day = week 1"]
     SKU --> H10["10-day = week 1 + 3/7 of week 2"]
@@ -697,7 +742,12 @@ flowchart TD
 - **Shrinkage towards the naive baseline.** Blending with each item's own recent run-rate
   keeps the model close to that item's actual current level. `α` controls how much
   weight the model gets.
-- **Festival multiplier.** Each week is multiplied by the festival signal from Stage 4.
+- **Festival multiplier.** Only the run-rate part is multiplied by the week's festival
+  signal from Stage 4; the model already learns events from its festival features.
+  Since 19 Oct 2026, with α = 0.5 (was 0.25 with the multiplier on both parts). A
+  walk-forward backtest of the style model (6 cutoffs, May–Sep 2026) cut the weekly-total
+  error from 27.5% to 22.7%, Sub Category from 36.2% to 31.8%, style from 62.5% to 61.0%,
+  and the bias from +5.3% to −1.4%.
 - **Fallback.** Weeks with no model value, or a cold start with no model at all, use
   the naive run-rate × the festival multiplier.
 
@@ -743,8 +793,41 @@ Expanding a Style row, or the TOTAL row, shows its **actual gross sales per mark
 for each calendar week. No forecast is made at channel level.
 
 Marketplaces are derived from the channel name. Amazon (including Wishlink), Flipkart,
-Meesho, Myntra and Nykaa come from the OMS source; the brand websites come from the
+Meesho, Myntra, Nykaa and Ajio come from the OMS source; the brand websites come from the
 WEBSITE source.
+
+### 15.5 Frozen completed weeks
+
+**Module:** `api/forecast_freeze.py`.
+
+Every forecast cell the Weekly Sales Report shows is saved per (scope, row, week). The
+rule decides when a cell stops changing:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Open: week is upcoming
+    Open --> Open: data refresh - save the latest forecast
+    Open --> Open: week is running - still follows the latest forecast
+    Open --> Locked: week has ended - keep the last value it had
+    Locked --> Locked: later refreshes or retrains never change it
+```
+
+- **Upcoming and running weeks** follow the latest forecast on every refresh.
+- **Completed weeks** are locked at the last value they had while they ran, so past
+  weeks never change when the model is retrained.
+- A week first seen after it had already ended is locked at the value computed then.
+- **Frozen view.** The Weekly Sales Report's **Forecast: Latest / Frozen** switch shows:
+  - **Running and upcoming weeks:** the 2-month snapshot (`frozen_snapshot`). The forecast
+    of the running week and the next ~2 months is saved once and kept unchanged until the
+    window ends (62 days); then the next 2 months are frozen. The current one was taken on
+    15 Oct 2026; the next is on 16 Dec 2026.
+  - **Completed weeks:** each week's forecast as it stood when it began (the freeze store's
+    start value, else the Production Log), else the value locked when it ended.
+
+  Hovering a forecast shows both. `FORECAST_2M_FREEZE=off` shows completed weeks only.
+
+The Weekly Production Log is separate: it records each week's forecast and suggested
+production as they were when the week started ([section 19.3](#193-weekly-production-log-lifecycle)).
 
 ---
 
@@ -826,7 +909,6 @@ flowchart LR
 | Lifecycle-adjusted suggestion | `max(0, 35-day forecast × stage factor − available)` |
 | Style suggestion (report) | `max(0, forward forecast over the report horizon − available)` |
 | Safety stock | `z · σ_weekly · √(lead time in weeks)`; z is the service-level score |
-| Days to finish (Inventory page) | `stock ÷ recent daily sales rate`, per design + size |
 
 ---
 
@@ -873,7 +955,9 @@ flowchart TD
 | **Weekly Sales Report** | One row per Style or Sub Category: forecast and actual per calendar week, month and grand totals, available quantity, suggested production, upcoming festival and sale outlook |
 | **Channel drill-down** | Actual sales per marketplace per week, for one Style or the filtered total |
 | **Style lifecycle panel** | Styles that sold last year vs styles launched this year, per Sub Category |
-| **Inventory Planning** | Stock, daily run rate and days to finish per design + size |
+| **Sub Category / Category analysis** | Per month: styles sold, orders, units (with units per style) and month-on-month spike, with a platform-wise drill-down per row and a monthly chart |
+| **Tiers Spike Rate** | The same monthly figures per catalog tier (T0, T1, T2, T3, T11, T12, Unclassified), a platform-wise drill-down per tier, and a chart filtered by Tier, Category, Sub Category and Style |
+| **Design Suggestions** | Design Analysis (trend status, trending designs, what drives sales) and Suggestion (one design plan per product type) for the running and the next season |
 | **Weekly production log** | For each Style and report week: the forecast recorded at the start of the week, the suggestion while the week runs, and the actual sales once it ends |
 
 ### 19.2 Delivery path
@@ -885,9 +969,11 @@ flowchart LR
     API --> RQ["React Query cache<br/>(browser)"]
     RQ --> W["Weekly Sales Report page"]
     RQ --> C["Channel drill-down rows"]
-    RQ --> PL["Production log dialog"]
-    RQ --> INV["Inventory Planning page"]
+    RQ --> CA["Sub Category · Category ·<br/>Tiers Spike Rate pages"]
+    RQ --> DS["Design Suggestions page"]
+    RQ --> PL["Production Log page"]
     W --> EXP["Export to file"]
+    CA --> EXP
 ```
 
 ### 19.3 Weekly production log lifecycle
@@ -901,9 +987,158 @@ stateDiagram-v2
     Removed --> [*]
 ```
 
+### 19.4 Sales analysis tabs
+
+**Module:** `api/data.py` (`get_category_analysis`, `get_category_analysis_channels`,
+`get_category_analysis_filtered`).
+
+Three tabs share one monthly table built from Gross sale rows since April 2025:
+
+| Tab | One row per | Drill-down |
+|---|---|---|
+| **Sub Category** | Sub Category | Platform-wise sales of that Sub Category |
+| **Category** | Category | Platform-wise sales of that Category |
+| **Tiers Spike Rate** | Catalog tier (the style's current tier from Cloud SQL) | Platform-wise sales of that tier |
+
+For each month and row:
+
+| Figure | Definition |
+|---|---|
+| Styles (+new / −stopped) | distinct styles with a Gross sale that month; in brackets, styles new this month and styles that sold last month but not this month |
+| Orders | order lines |
+| Units (per style) | units sold; in brackets, units ÷ styles |
+| Spike | **same-style spike**: units of the styles that sold in **both** months, this month vs last month, so styles being added or dropped do not distort it. The hover also shows the total-units change, new styles and their units, and stopped styles. The current, incomplete month is compared with the **same days** of the previous month |
+
+- **Tier as: Current tier / Tier Log.** By default every month uses the
+  style's current tier, so a style that moves tier takes its past sales with it. The
+  "Tier Log" switch counts each sale under the tier the style had on that day (the tier log),
+  from the Cloud SQL tier-change log (`CatalogStyleForecastHistory`, which starts on
+  1 June 2026); earlier sales keep the current tier.
+- **Tier movement** (second sub-tab, `/api/catalog/tier-movement`): per tier, styles now,
+  moves in and out, median / average days before moving out, median days so far, and the
+  main destinations; each style's tier journey as a timeline; a from → to move grid.
+  Same-day tier changes are treated as corrections. Styles whose current tier has no
+  entry in the log are shown as "not tracked".
+- **Tiers Spike Rate chart filters.** Brand, Tier, Category, Sub Category and a
+  searchable Style narrow the chart together. Brand is the master sheet's Brand; for a
+  style missing from the sheet, the brand its sales orders carry most often (spelling
+  unified). The totals are summed on the server from the sale
+  rows of exactly the matching styles, with the same same-style spike as the table.
+
 ---
 
-## 20. Runtime orchestration and refresh cycle
+## 20. Design Suggestions
+
+**Module:** `api/design_suggest.py` (endpoint `/api/design/suggestions`), dashboard page
+`dashboard/src/pages/DesignSuggestions.tsx`.
+
+The page answers two questions for the **running** and the **next** season:
+which product types, colours, fabrics and necks are trending or fading
+(**Design Analysis** tab), and what to design for each product type
+(**Suggestion** tab).
+
+Seasons: S1 Nov–Jan (winter + wedding), S2 Feb–Apr (wedding, pre-summer, Eid),
+S3 May–Jul (summer), S4 Aug–Oct (festival + wedding).
+
+### 20.1 Pipeline
+
+```mermaid
+flowchart TD
+    S["Gross sale rows<br/>style · date · qty · marketplace"] --> W["Bucket into report weeks<br/>W1 1–7 · W2 8–15 · W3 16–23 · W4 24–end"]
+    FC["Running week's forecast<br/>(Weekly Sales Report)"] --> P["Complete the running week:<br/>real sales so far + forecast for the<br/>days left × this week's pace"]
+    W --> P
+    P --> CH["Weight every marketplace at its usual share<br/>(late marketplace orders do not look like a drop)"]
+    CH --> TS["Trend status per value<br/>6 blocks of 4 report weeks"]
+    CH --> SP["Sudden spike<br/>one report week vs the 4 before"]
+    CH --> TR["4-week trend per style"]
+    A[/"Garment attributes<br/>category · sub category · colour · fabric · neck …"/] --> TS
+    A --> M
+    TS --> M["CatBoost model<br/>style × completed season"]
+    TR --> R["Scores per value<br/>(overall and inside each sub category)"]
+    TS --> R
+    M --> R
+    R --> PC["Product cards<br/>trending / in trend only"]
+    TS --> DA["Design Analysis tab"]
+    SP --> DA
+    TR --> DA
+    M --> DA
+    PC --> SG["Suggestion tab"]
+```
+
+### 20.2 Report weeks and the running week
+
+- **Weeks** are the Weekly Sales Report's calendar weeks (W1 1–7, W2 8–15, W3 16–23,
+  W4 24–end). "Now" is the last 4 report weeks, compared with the 4 before.
+- **The running week** is not finished, so its remaining days are filled with that
+  week's forecast as the Weekly Sales Report currently shows it, scaled by the week's
+  **pace**: real units so far ÷ the forecast for those same days, per sub category,
+  pulled towards 1 while the week has few real days and kept within fixed limits.
+- **Late marketplace orders.** Marketplaces report some orders days late. Within each
+  week every marketplace is scaled to its usual share of sales, so an incomplete
+  marketplace cannot make its products look like they are fading.
+- Pieces shown on the page are always **real sales**; the running week's estimate is
+  only used for trends and growth.
+
+### 20.3 Trend status and spikes
+
+Each Sub Category, Colour, Fabric and Neck gets its **share of sales** in six blocks of
+4 report weeks (about 6 months). Share, not units, so a festival month that lifts
+everything is not mistaken for a trend.
+
+```mermaid
+flowchart TD
+    V["Value on sale now?<br/>(enough units and designs selling)"] -- no --> O["⊘ Out of trend"]
+    V -- yes --> C1{"Share up ≥ threshold<br/>vs the block before?"}
+    C1 -- yes --> T["▲ Trending"]
+    C1 -- no --> C2{"Share ≤ half its best block<br/>and not growing?"}
+    C2 -- yes --> O
+    C2 -- no --> C3{"Share down ≥ threshold?"}
+    C3 -- yes --> F["▼ Starting to fade"]
+    C3 -- no --> I["● In trend"]
+```
+
+- **Sudden spike (⚡):** a value's share in one report week is at least a set multiple
+  of its share in the 4 weeks before, and up by a minimum number of share points. The
+  running week is used once it has enough real days, otherwise the last finished week.
+- **Trending designs:** individual styles whose real sales plus the running week's
+  estimate grew most against the 4 weeks before.
+
+### 20.4 Scores and the model
+
+- **Scores** rank each value overall and inside each sub category, from percentile
+  ranks of: sales per design now, share of sales now, the 4-week trend, the trend
+  stage, the value's lift in the same season last year, last season's sales per design
+  (Empirical-Bayes shrunk), and year-on-year momentum. The running season leans on
+  what sells now; the next season gives last year's same season more weight.
+- **CatBoost (Tweedie loss)** is trained on one row per style × completed season, with
+  the garment attributes, price band, age and each attribute's **trend stage at the
+  start of that season** (from sales before the season only). It explains each
+  attribute's effect (SHAP, "What drives sales") and ranks colour + fabric mixes.
+- **Validation:** 5-fold cross-validation grouped by style (a style is never in train
+  and test together) picks the loss power, depth, regularisation and number of trees.
+  The search runs in the background after a quick first fit; the chosen settings are
+  kept for a week. A **top-pick check** reports how often the model's top 20% of styles
+  in a past season really were in that season's top 20%.
+
+### 20.5 Product cards (Suggestion tab)
+
+One card per product type (sub category) that is **Trending or In trend**, best first,
+each built only from that product's own ranking so its parts always agree:
+
+| Part | Content |
+|---|---|
+| Header | Category, product type, trend label, strength (Strong / Good / Try small) |
+| Facts | Share of sales, designs selling, sales per design vs average, last year's same season |
+| Use these | Best colours, fabrics and details inside this product (trending / in trend only) |
+| Best mixes | Model-ranked colour + fabric pairs, made only from the colours and fabrics above; made before or new idea |
+| Make more / Cut back | Values selling well with few designs; values fading, out of trend or with too many weak designs |
+
+Strength labels are shown instead of unit numbers because the model ranks reliably
+but its unit estimates are rough. An "In short" summary is built only from the cards.
+
+---
+
+## 21. Runtime orchestration and refresh cycle
 
 The whole pipeline runs **on startup**, **every day at 06:00** and **on demand** (the
 dashboard's Refresh button). It is designed so users always see a model-based forecast
@@ -960,6 +1195,10 @@ flowchart TD
     OK -- "SKU failed" --> P6["Keep currently published plan"]
 ```
 
+**Design Suggestions** is built in a background thread on the first request after each
+data refresh (the page shows "Preparing suggestions" until then); its cross-validation
+search runs afterwards and the page switches to the tuned model when it finishes.
+
 **Design principles**
 
 - **Stale but safe.** The last saved forecast is served, shifted onto the current
@@ -974,7 +1213,7 @@ flowchart TD
 
 ---
 
-## 21. Data model
+## 22. Data model
 
 ```mermaid
 erDiagram
@@ -1043,6 +1282,14 @@ erDiagram
         string level
         float_array weekly
     }
+    FROZEN_FORECAST {
+        string scope PK
+        string key PK
+        date period_start PK
+        float qty
+        string status
+        date updated_on
+    }
     WEEKLY_PRODUCTION_LOG {
         string style PK
         date week_start PK
@@ -1062,11 +1309,12 @@ erDiagram
     SALES_ORDER }o--|| PLAN_ROW : "aggregated into"
     FORECAST_SNAPSHOT }o--|| PLAN_ROW : "blended into"
     PLAN_ROW }o--|| WEEKLY_PRODUCTION_LOG : "rolled up per style"
+    PLAN_ROW }o--|| FROZEN_FORECAST : "report cells, locked once a week ends"
 ```
 
 ---
 
-## 22. Summary of techniques and algorithms
+## 23. Summary of techniques and algorithms
 
 | Stage | Technique / algorithm | Module |
 |---|---|---|
@@ -1089,13 +1337,19 @@ erDiagram
 | Lifecycle | Rule-based stage classification, percentile tiers, weighted scoring | `lifecycle.py` |
 | Planning | Inventory position, stage-scaled requirement, statistical safety stock | `data.py`, `lifecycle.py` |
 | Evaluation | Walk-forward backtest, WAPE / accuracy, R², MAE, RMSE | `data.py`, `lgbm_forecast.py` |
-| Persistence | Versioned JSON forecast snapshots; SQLite weekly log | `lgbm_forecast.py`, `weekly_log.py` |
+| Report freeze | Completed report weeks locked at their last value; running and upcoming weeks live | `forecast_freeze.py` |
+| Sales analysis | Monthly group aggregation with same-days comparison for the current month; channel and filtered roll-ups | `data.py` |
+| Trend status | Share-of-sales time blocks, stage rules (trending / in trend / fading / out), share-based spike detection | `design_suggest.py` |
+| Running-week completion | Forecast for remaining days × credibility-weighted pace; per-channel share normalisation | `design_suggest.py` |
+| Design ranking | Percentile-rank scoring, Empirical-Bayes shrinkage, season lift | `design_suggest.py` |
+| Design model | **CatBoost** (Tweedie) with point-in-time trend-stage features; style-grouped K-fold CV; SHAP effects; top-20% hit rate | `design_suggest.py` |
+| Persistence | Versioned JSON forecast snapshots; SQLite weekly log and frozen-forecast store; tuned design-model settings (JSON) | `lgbm_forecast.py`, `weekly_log.py`, `forecast_freeze.py`, `design_suggest.py` |
 
 ---
 
-## 23. Appendix
+## 24. Appendix
 
-### 23.1 Code map
+### 24.1 Code map
 
 | Path | Role |
 |---|---|
@@ -1109,47 +1363,87 @@ erDiagram
 | `api/lifecycle.py` | Lifecycle classification |
 | `api/catalog_style.py` | Catalog tiers, tier history, images |
 | `api/weekly_log.py` | Weekly production log (SQLite) |
+| `api/forecast_freeze.py` | Locks completed report weeks' forecasts (SQLite) |
+| `api/design_suggest.py` | Design Suggestions: report weeks, trend status, spikes, scores, CatBoost model, product cards |
+| `api/cache_sync.py` | Copies `api/.cache` to and from Cloud Storage on Cloud Run |
+| `api/job.py` | Daily batch job (load, train, save the serving snapshot) |
 | `api/models.py` | API response schemas |
-| `api/test_lgbm_forecast.py` | Unit tests for forecasting helpers |
-| `api/backtest_sweep.py`, `retro_backtest.py`, `check_month_total_bq.py` | Offline diagnostics |
+| `api/tests/` | Unit tests (see 24.7) |
+| `api/tools/` | Offline diagnostics: `backtest_sweep.py`, `retro_backtest.py`, `check_month_total_bq.py` |
 | `dashboard/src/pages/WeeklySalesGrid.tsx` | Weekly Sales Report |
-| `dashboard/src/pages/InventoryPlanning.tsx` | Inventory Planning |
-| `dashboard/src/components/tables/ProductionLogDialog.tsx` | Weekly production log dialog |
+| `dashboard/src/pages/CategoryAnalysis.tsx` | Sub Category, Category and Tiers Spike Rate tabs |
+| `dashboard/src/components/charts/CategoryAnalysisCharts.tsx`, `TierSpikeChart.tsx` | Monthly units & spike chart; the Tiers chart with its filters |
+| `dashboard/src/pages/DesignSuggestions.tsx` | Design Suggestions (Design Analysis and Suggestion tabs) |
+| `dashboard/src/components/design/` | Trend status, product cards, trend badges, About texts |
+| `dashboard/src/pages/ProductionLog.tsx` | Weekly production log |
 | `dashboard/src/services/` | API client |
 | `Dockerfile`, `dashboard/Dockerfile` | Container images |
 
-### 23.2 API endpoints
+### 24.2 API endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | Service, data-source and model status |
-| POST | `/admin/refresh` | Re-run the full pipeline |
+| GET | `/api/data-health` | Data checks on the loaded data (see below) |
+| POST | `/admin/refresh` | Re-run the full pipeline (one at a time: 409 while running; 429 within `REFRESH_COOLDOWN_SECS` of the last one) |
 | GET | `/api/reports/weekly-grid` | Weekly Sales Report data |
 | GET | `/api/reports/channel-source/{style}/weekly` | Channel drill-down for one Style |
 | GET | `/api/reports/channel-source-total/weekly` | Channel drill-down for the filtered total |
 | GET | `/api/reports/weekly-production-log` | Weekly production log |
 | GET | `/api/catalog/style-tiers` | Styles by catalog tier, with images |
 | GET | `/api/catalog/style-lifecycle` | Styles present last year vs launched this year |
-| GET | `/api/inventory/planning` | Inventory days-to-finish |
+| GET | `/api/reports/category-analysis?level=` | Monthly styles / orders / units / spike per Category, Sub Category, Style or Tier |
+| GET | `/api/reports/category-analysis/channels?level=&group=` | One row of that table split by marketplace |
+| GET | `/api/reports/category-analysis/filtered?tier=&category=&subCategory=&style=` | Monthly totals for the matching styles (Tiers Spike Rate chart) and every style's filter values |
+| GET | `/api/catalog/tier-movement` | Tier stays, moves between tiers and each style's tier journey |
+| GET | `/api/design/suggestions` | Design Suggestions (both tabs, running and next season); returns `building` until ready |
 | GET | `/api/debug/overall-accuracy`, `/api/debug/tier-accuracy` | Evaluation results currently loaded |
 
 Interactive documentation: `http://localhost:8000/docs`.
 
-### 23.3 Configuration
+### Data checks (`/api/data-health`)
+
+Data and business problems cannot be prevented, so every refresh checks for them. The
+results are available at `GET /api/data-health` (not shown on the dashboard, by request,
+19 Oct 2026). Nothing is changed by the checks.
+
+| Level | Check | Why it matters |
+|---|---|---|
+| Error | ERP stock or WIP view failed to load | Available = 0, so every Suggested Production is overstated |
+| Error | Sales download incomplete (rows vs BigQuery count) | Actuals and run-rate too low |
+| Error | Live data failed, offline CSV or sample data served | Every number out of date |
+| Warning | Sales data older than `HEALTH_STALE_DAYS` | Running week and run-rate miss recent days |
+| Warning | A sale spike (> `HEALTH_SPIKE_RATIO` × a normal day) inside the run-rate window (`RUNRATE_DAYS`), with the date it clears | Upcoming forecasts and production may be too high until then |
+| Warning | A spike on days with no event in the sale calendar | The calendar needs the real sale dates |
+| Warning | The calendar expects a sale in the last 7 days but sales are normal | Sale ended or dates wrong; running and upcoming weeks over-forecast |
+| Warning | Last completed week's accuracy below `HEALTH_ACCURACY_MIN` % (Production Log) | Review before trusting the next weeks |
+| Info | Selling styles with no Sub Category | Missing from the SKU master CSV |
+
+Regression tests for the forecast fixes and these checks: `api/tests/test_forecast_safeguards.py`.
+
+### 24.3 Configuration
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `DATA_SOURCE` | `live` | `live` (BigQuery + ERP) or `csv` |
 | `FORECAST_MODEL` | `lgbm` | `lgbm` (ML models) or `naive` (baseline only) |
-| `FORECAST_BLEND` | `0.25` | Weight α of the model vs the naive run-rate |
+| `FORECAST_BLEND` | `0.5` | Weight α of the model vs the naive run-rate (was 0.25 until 19 Oct 2026) |
+| `RUNNING_WEEK_PACE_DAYS` | `7` | The running week is shown as actual so far + this many days' average daily sales × the days left (the model value is still what is locked and scored) |
+| `HEALTH_STALE_DAYS`, `HEALTH_SPIKE_RATIO`, `HEALTH_ACCURACY_MIN` | `2`, `2.0`, `70` | Data-check thresholds: data age in days, a sale day vs a normal day, last completed week's accuracy % |
+| `FORECAST_2M_FREEZE` | `on` | `on`: the Frozen view also shows the next 2 months as frozen in the active 2-month snapshot; `off`: completed weeks only |
+| `FESTIVAL_ON` | `runrate` | `runrate`: forecast = α · model + (1 − α) · naive · festival (the model already learns events); `both`: (α · model + (1 − α) · naive) · festival, the setup before 19 Oct 2026 |
+| `RUNRATE_DAYS` | `60` | Days in the naive run-rate (was 35 until 19 Oct 2026; backtest: weekly-total error 22.7% → 21.4%, sale weeks 33.5% → 29.8%, per style 61.0% → 61.6%) |
+| `FORECAST_LEVEL` | `style` | `style`: only the style (design) model is trained and served; `both`: also the SKU model (the setup before 19 Oct 2026) |
 | `RUN_BACKTEST` | `0` | Enable walk-forward evaluation |
 | `DAILY_REFRESH`, `REFRESH_HOUR`, `REFRESH_MINUTE` | `on`, `6`, `0` | Daily pipeline schedule |
 | `PROD_LEAD_DAYS`, `SERVICE_Z` | `84`, `1.65` | Safety-stock inputs |
 | `CLOUDSQL_DB_USER`, `CLOUDSQL_DB_PASSWORD` | set in `api/.env` | Catalog tier database credentials |
+| `ERP_TOKEN` | **required**, set in `api/.env` or the Cloud Run environment | ERP report API token (secret; without it the ERP views - design master, WIP, stock - are skipped) |
+| `REFRESH_COOLDOWN_SECS` | `600` | Minimum time between two `/admin/refresh` calls (the dashboard's Refresh button) |
 | `ALLOW_LAN` | `1` | Also listen on the LAN interface |
 | `VITE_API_URL` | derived from the page's host | Dashboard → API URL |
 
-### 23.4 Running locally
+### 24.4 Running locally
 
 ```bash
 # Backend (from the repo root)
@@ -1168,7 +1462,7 @@ BigQuery access needs `gcloud auth application-default login`. Use `DATA_SOURCE=
 run from the local snapshot instead. On a first run with no saved forecasts, the naive
 baseline is served until background training finishes.
 
-### 23.5 Deployment
+### 24.5 Deployment
 
 ```mermaid
 flowchart LR
@@ -1182,10 +1476,16 @@ flowchart LR
     CR1 --> SQL[("Cloud SQL")]
 ```
 
-The forecast cache is local to each container. A new deployment serves the naive
-baseline at first, then retrains in the background.
+Secrets are not in the image: set `ERP_TOKEN`, `CLOUDSQL_DB_USER` and
+`CLOUDSQL_DB_PASSWORD` as Cloud Run environment variables (or Secret Manager references).
 
-### 23.6 Estimated GCP running cost
+On Cloud Run, `api/.cache` (forecast snapshots, the weekly log and the frozen-forecast
+store) is copied to a Cloud Storage bucket when `CACHE_BUCKET` is set (`cache_sync.py`),
+so a restart or redeploy keeps them. The API image must be rebuilt after a change to
+`api/requirements.txt` (for example CatBoost for Design Suggestions); without CatBoost,
+Design Suggestions falls back to rankings only.
+
+### 24.6 Estimated GCP running cost
 
 These are **estimates**, not a quote. They use Cloud Run's published rates for
 **instance-based billing** in a Tier 1 region: $0.000018 per vCPU-second and $0.000002
@@ -1247,11 +1547,15 @@ two models. Measure it locally before choosing; 8 GiB may be too little.
    rate.
 5. **Set a budget alert** in Cloud Billing so unexpected usage is caught early.
 
-### 23.7 Tests and diagnostics
+### 24.7 Tests and diagnostics
 
 | Script | Purpose |
 |---|---|
-| `api/test_lgbm_forecast.py` | Unit tests: WAPE, outlier capping, CV folds, recency weights, point-in-time features (`python -m pytest api/test_lgbm_forecast.py -v`) |
-| `api/backtest_sweep.py` | Compare blend weights and festival on/off using saved snapshots |
-| `api/retro_backtest.py` | Retrain the design model at past cut-off dates and score against real history |
-| `api/check_month_total_bq.py` | Independent monthly Gross/Net total check against BigQuery |
+| `api/tests/test_lgbm_forecast.py` | Unit tests: WAPE, outlier capping, CV folds, recency weights, point-in-time features |
+| `api/tests/test_design_suggest.py` | Unit tests: seasons, report weeks, trend stages, spikes, late-channel correction, running-week pace, scores, product cards, style-grouped folds |
+| `api/tests/test_forecast_freeze.py` | Unit tests: running weeks follow the live forecast, completed weeks lock, old locks reopen |
+| `api/tests/test_weekly_log.py` | Unit tests for the weekly production log |
+| | Run all: `python -m pytest api -q` |
+| `api/tools/backtest_sweep.py` | Compare blend weights and festival on/off using saved snapshots |
+| `api/tools/retro_backtest.py` | Retrain the design model at past cut-off dates and score against real history |
+| `api/tools/check_month_total_bq.py` | Independent monthly Gross/Net total check against BigQuery |

@@ -80,8 +80,8 @@ MIN_STYLES = 2                # an attribute value needs this many selling style
 # Weekly Sales Report's own calendar weeks - W1 1-7, W2 8-15, W3 16-23, W4
 # 24-end of month (data._month_chunks) - and the RUNNING week is completed the
 # way that report does it: actual sales so far + its weekly forecast for the
-# days still to come (the frozen forecast_freeze value, else the live naive x
-# festival rate). A month always has exactly 4 report weeks, so a year has 48.
+# days still to come (the report's latest forecast for the week, saved in
+# forecast_freeze, else the live naive x festival rate). A month always has exactly 4 report weeks, so a year has 48.
 CHUNK_START_DAYS = (1, 8, 16, 24)
 CHUNKS_PER_YEAR = 48
 MOMENTUM_CHUNKS = 8           # ~2 months, vs the same 8 report weeks a year earlier
@@ -494,10 +494,10 @@ PACE_LIMITS = (0.5, 2.0)       # the pace factor never goes beyond these
 
 def _running_projection(data, sales, snap: date, styles=None) -> tuple[dict, dict]:
     """The running report week's sales still to come ({style: {channel:
-    units}}) - the Weekly Sales Report's logic: the week's frozen forecast
-    (forecast_freeze "grid:style", locked when the week started) prorated to
-    the days after ``snap``, else the live naive weekly rate x festival
-    factor per day. Then corrected by this week's real PACE (2026-10-10,
+    units}}) - the Weekly Sales Report's logic: the week's forecast as the
+    report last showed it (forecast_freeze.stored "grid:style"; the running
+    week is not frozen) prorated to the days after ``snap``, else the live
+    naive weekly rate x festival factor per day. Then corrected by this week's real PACE (2026-10-10,
     user-requested): per Sub Category, real units so far / the forecast for
     those same days, pulled toward 1 while there are few real days
     (PACE_PRIOR_DAYS) and kept within PACE_LIMITS - so a product clearly
@@ -515,7 +515,7 @@ def _running_projection(data, sales, snap: date, styles=None) -> tuple[dict, dic
         return {}, info
     try:
         import forecast_freeze
-        frozen = {str(k).strip().upper(): v for k, v in forecast_freeze.locked("grid:style").items()}
+        frozen = {str(k).strip().upper(): v for k, v in forecast_freeze.stored("grid:style").items()}
     except Exception:  # noqa: BLE001 - fall back to the live rate
         frozen = {}
     naive: dict[str, float] = {}
