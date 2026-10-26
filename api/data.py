@@ -3762,6 +3762,31 @@ def _compute_weekly_grid(
         }
         for item in built
     }
+
+    # Running week = actual so far + current pace for the days left (2026-10-19,
+    # user-requested: the running week's model forecast was far above how it was
+    # actually selling, e.g. Oct W3 127,963 vs ~88k at the real pace). Pace =
+    # each row's own Gross units per day over the last RUNNING_WEEK_PACE_DAYS
+    # days of data. Applied once at least one day of the week has data.
+    # Set BEFORE the freeze store saves the running week (2026-10-24,
+    # user-requested: a week is locked at the value shown on its last day,
+    # e.g. Oct W3 85,407, not the model's 119,254), so a completed week keeps
+    # exactly what the dashboard showed while it ran.
+    if cur_chunk is not None and SNAPSHOT_DATE >= cur_chunk[0]:
+        cur_iso = cur_chunk[0].isoformat()
+        done_days = [(cur_chunk[0] + timedelta(days=i)).isoformat()
+                     for i in range((min(SNAPSHOT_DATE, cur_chunk[1]) - cur_chunk[0]).days + 1)]
+        pace_days = [(SNAPSHOT_DATE - timedelta(days=i)).isoformat() for i in range(RUNNING_WEEK_PACE_DAYS)]
+        days_left = max(0, (cur_chunk[1] - SNAPSHOT_DATE).days)
+        for key, skus in groups.items():
+            so_far = recent = 0
+            for s in skus:
+                dm = _DAY_ACTUAL_GROSS.get(s)
+                if dm:
+                    so_far += sum(dm.get(d, 0) for d in done_days)
+                    recent += sum(dm.get(d, 0) for d in pace_days)
+            live_cells.setdefault(key, {})[cur_iso] = so_far + round(recent / RUNNING_WEEK_PACE_DAYS * days_left)
+
     start_cells: dict[str, dict[str, float]] = {}
     snap_cells: dict[str, dict[str, float]] = {}
     frozen_on = frozen_until = ""
@@ -3777,33 +3802,6 @@ def _compute_weekly_grid(
     except Exception as exc:  # noqa: BLE001 — never break the report over the freeze store
         print(f"[data] forecast freeze unavailable ({exc!r}); serving live values", file=sys.stderr)
         fc_cells = live_cells
-
-    # Running week = actual so far + current pace for the days left (2026-10-19,
-    # user-requested: the running week's model forecast was far above how it was
-    # actually selling, e.g. Oct W3 127,963 vs ~88k at the real pace). Shown
-    # only: the freeze store above already saved the MODEL forecast, so the
-    # value a week is locked at when it ends - and its accuracy - stays the
-    # model's. Pace = each row's own Gross units per day over the last
-    # RUNNING_WEEK_PACE_DAYS days of data. Applied once at least one day of the
-    # week has data.
-    if cur_chunk is not None and SNAPSHOT_DATE >= cur_chunk[0]:
-        cur_iso = cur_chunk[0].isoformat()
-        done_days = [(cur_chunk[0] + timedelta(days=i)).isoformat()
-                     for i in range((min(SNAPSHOT_DATE, cur_chunk[1]) - cur_chunk[0]).days + 1)]
-        pace_days = [(SNAPSHOT_DATE - timedelta(days=i)).isoformat() for i in range(RUNNING_WEEK_PACE_DAYS)]
-        days_left = max(0, (cur_chunk[1] - SNAPSHOT_DATE).days)
-        fc_cells = {k: dict(v) for k, v in fc_cells.items()}
-        live_cells = {k: dict(v) for k, v in live_cells.items()}
-        for key, skus in groups.items():
-            so_far = recent = 0
-            for s in skus:
-                dm = _DAY_ACTUAL_GROSS.get(s)
-                if dm:
-                    so_far += sum(dm.get(d, 0) for d in done_days)
-                    recent += sum(dm.get(d, 0) for d in pace_days)
-            est = so_far + round(recent / RUNNING_WEEK_PACE_DAYS * days_left)
-            fc_cells.setdefault(key, {})[cur_iso] = est
-            live_cells.setdefault(key, {})[cur_iso] = est
 
     # Production Log: each style's forecast as captured when the week began
     # ({style: {week_start: qty}}), for the frozen view's completed weeks.
