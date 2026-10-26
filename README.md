@@ -1428,7 +1428,7 @@ Regression tests for the forecast fixes and these checks: `api/tests/test_foreca
 | `DATA_SOURCE` | `live` | `live` (BigQuery + ERP) or `csv` |
 | `FORECAST_MODEL` | `lgbm` | `lgbm` (ML models) or `naive` (baseline only) |
 | `FORECAST_BLEND` | `0.5` | Weight α of the model vs the naive run-rate (was 0.25 until 19 Oct 2026) |
-| `RUNNING_WEEK_PACE_DAYS` | `7` | The running week is shown as actual so far + this many days' average daily sales × the days left (the model value is still what is locked and scored) |
+| `RUNNING_WEEK_PACE_DAYS` | `7` | The running week is shown as actual so far + this many days' average daily sales × the days left. Since 24 Oct 2026 this is also the value saved for the running week, so a completed week is locked at what it showed on its last day |
 | `HEALTH_STALE_DAYS`, `HEALTH_SPIKE_RATIO`, `HEALTH_ACCURACY_MIN` | `2`, `2.0`, `70` | Data-check thresholds: data age in days, a sale day vs a normal day, last completed week's accuracy % |
 | `FORECAST_2M_FREEZE` | `on` | `on`: the Frozen view also shows the next 2 months as frozen in the active 2-month snapshot; `off`: completed weeks only |
 | `FESTIVAL_ON` | `runrate` | `runrate`: forecast = α · model + (1 − α) · naive · festival (the model already learns events); `both`: (α · model + (1 − α) · naive) · festival, the setup before 19 Oct 2026 |

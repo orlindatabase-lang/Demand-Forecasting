@@ -4,8 +4,6 @@ import {
   Button,
   Chip,
   FormControl,
-  Tab,
-  Tabs,
   ToggleButton,
   ToggleButtonGroup,
   InputAdornment,
@@ -30,7 +28,6 @@ import DownloadIcon from "@mui/icons-material/Download";
 import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import PageHeader from "@/components/common/PageHeader";
-import TierMovement from "@/components/charts/TierMovement";
 import CategoryAnalysisCharts from "@/components/charts/CategoryAnalysisCharts";
 import TierSpikeChart from "@/components/charts/TierSpikeChart";
 import { rowsToCsv, downloadCsv } from "@/components/common/ExportButton";
@@ -38,7 +35,6 @@ import { LoadingSkeleton, ErrorState } from "@/components/common/StateViews";
 import { useCatalogStyleTiers, useCategoryAnalysis, useCategoryAnalysisChannels } from "@/hooks/useDashboardData";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { formatNumber } from "@/utils/format";
-import { useSearchParams } from "react-router-dom";
 import { NO_FILTER, type CategoryFilter } from "@/services/dataService";
 import type { CategoryAnalysisRow } from "@/types";
 
@@ -308,9 +304,6 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
     () => (level === "tier" ? { category: catFilter, subCategory: subFilter, tierMode } : NO_FILTER),
     [level, catFilter, subFilter, tierMode],
   );
-  // Tiers Spike Rate sub-tabs: Monthly spike | Tier movement (?view=movement).
-  const [params, setParams] = useSearchParams();
-  const tierView: "spike" | "movement" = level === "tier" && params.get("view") === "movement" ? "movement" : "spike";
   const { data, isLoading, isError, refetch } = useCategoryAnalysis(level, tableFilter);
   const isStyle = level === "style";
   // Tiers Spike Rate (2026-10-09, user-requested): one row per tier, each
@@ -496,20 +489,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
       <PageHeader
         title={isStyle || isTier ? "Tiers Spike Rate" : `${groupName} Analysis`}
       />
-      {isTier && (
-        <Tabs
-          value={tierView}
-          onChange={(_e, v: "spike" | "movement") => setParams((p) => { p.set("view", v); return p; }, { replace: true })}
-          sx={{ mb: 2, minHeight: 40, borderBottom: 1, borderColor: "divider", "& .MuiTab-root": { textTransform: "none", fontWeight: 700, minHeight: 40 } }}
-        >
-          <Tab value="spike" label="Monthly spike" />
-          <Tab value="movement" label="Tier movement" />
-        </Tabs>
-      )}
-
-      {tierView === "movement" ? (
-        <TierMovement />
-      ) : isLoading ? (
+      {isLoading ? (
         <LoadingSkeleton />
       ) : isError ? (
         <ErrorState message="Couldn't load the category analysis." onRetry={() => refetch()} />

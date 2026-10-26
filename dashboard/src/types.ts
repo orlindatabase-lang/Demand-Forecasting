@@ -213,41 +213,6 @@ export interface CategoryAnalysisResponse {
 }
 
 /** One Category Analysis row split by marketplace - rows' `group` is the marketplace. */
-/** GET /api/catalog/tier-movement - tier stays from the Cloud SQL tier-change log. */
-export interface TierStay {
-  tier: string;
-  from: string | null; // null = untracked (current tier with no history entry)
-  to: string | null; // null = still in this tier
-  days: number | null;
-  untracked: boolean;
-}
-export interface TierMovementStyle {
-  style: string;
-  tier: string; // current catalog tier
-  subCategory: string;
-  daysInTier: number | null; // days in the current tier (null = no history for it)
-  journey: TierStay[];
-}
-export interface TierMovementSummary {
-  tier: string;
-  stylesNow: number;
-  stylesTracked: number; // of those, with a history entry for this tier
-  movedIn: number;
-  movedOut: number;
-  medianDaysBeforeMoving: number | null;
-  avgDaysBeforeMoving: number | null;
-  medianDaysSoFar: number | null;
-  movesTo: { tier: string; styles: number }[];
-}
-export interface TierMovementResponse {
-  available: boolean;
-  trackingFrom: string;
-  asOf?: string;
-  tiers: TierMovementSummary[];
-  moves: { from: string; to: string; styles: number }[];
-  styles: TierMovementStyle[];
-}
-
 /** One style with its tier / category / sub category (Tiers Spike Rate chart filters). */
 export interface CategoryStyleOption {
   style: string;

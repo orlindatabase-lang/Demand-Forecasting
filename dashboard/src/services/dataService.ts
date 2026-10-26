@@ -7,7 +7,6 @@ import type {
   WeeklyProductionLogRow,
   CategoryAnalysisChannelsResponse,
   CategoryAnalysisFilteredResponse,
-  TierMovementResponse,
   CategoryAnalysisResponse,
   DesignSuggestionsResponse,
   DataHealthResponse,
@@ -77,11 +76,6 @@ export const dataService = {
   async categoryAnalysisFiltered(f: { brand: string; tier: string; category: string; subCategory: string; style: string }) {
     const params = new URLSearchParams({ brand: f.brand, tier: f.tier, category: f.category, subCategory: f.subCategory, style: f.style });
     return apiGet<CategoryAnalysisFilteredResponse>(`/api/reports/category-analysis/filtered?${params.toString()}`);
-  },
-
-  /** How long styles stay in each catalog tier and where they move (Tier movement tab). */
-  async tierMovement() {
-    return apiGet<TierMovementResponse>("/api/catalog/tier-movement");
   },
 
   /** One Category Analysis row split by marketplace (channel drill-down). */
