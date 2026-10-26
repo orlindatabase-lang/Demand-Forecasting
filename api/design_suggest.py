@@ -331,6 +331,7 @@ def _build(data) -> dict:
     attrs = _load_attributes()
     styles = attrs.set_index("style")
     price = _style_prices(data)
+    style_forecast35 = _style_forecast35(data)
 
     run_code, run_year = season_of(snap)
     up_code, up_year = next_season(run_code, run_year)
@@ -350,7 +351,8 @@ def _build(data) -> dict:
 
     seasons = []
     for role, code, year in (("running", run_code, run_year), ("upcoming", up_code, up_year)):
-        seasons.append(_season_block(role, code, year, sales, styles, price, snap, model, trend, lifecycle, spikes, mom))
+        seasons.append(_season_block(role, code, year, sales, styles, price, snap, model, trend, lifecycle, spikes, mom,
+                                     style_forecast35))
     return {
         "available": True,
         "dataThrough": snap.isoformat(),
@@ -376,6 +378,31 @@ def _style_prices(data) -> dict[str, float]:
     return {k: float(sum(v) / len(v)) for k, v in acc.items()}
 
 
+def _style_forecast35(data) -> dict[str, int]:
+    """The current five-week forecast for each existing design.
+
+    ``designForecast35`` is the design-level forecast and is repeated on each
+    SKU row belonging to the design. It is therefore selected once (rather
+    than summed). A SKU-level sum is used only when a design-level forecast is
+    unavailable. This lets Design Suggestions rank real, sellable style codes
+    without treating a repeated design forecast as several forecasts.
+    """
+    design, sku_sum = {}, {}
+    for row in data.PLAN_ROWS:
+        style = str(getattr(row, "designNo", "") or "").strip().upper()
+        if not style:
+            continue
+        try:
+            design_value = max(0, int(getattr(row, "designForecast35", 0) or 0))
+            sku_value = max(0, int(getattr(row, "forecast35", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+        design[style] = max(design.get(style, 0), design_value)
+        sku_sum[style] = sku_sum.get(style, 0) + sku_value
+    return {style: design.get(style) or sku_sum.get(style, 0)
+            for style in set(design) | set(sku_sum)}
+
+
 # --------------------------------------------------------------------------- #
 # Per-season block
 # --------------------------------------------------------------------------- #
@@ -392,7 +419,7 @@ def _reference_occurrence(code: str, year: int, sales, snap: date) -> tuple[int 
 
 
 def _season_block(role, code, year, sales, styles, price, snap, model, trend=None, lifecycle=None, spikes=None,
-                  mom=None) -> dict:  # spikes: kept for callers; shown in Trend status
+                  mom=None, style_forecast35=None) -> dict:  # spikes: kept for callers; shown in Trend status
     import pandas as pd
 
     start, end = season_bounds(code, year)
@@ -445,6 +472,7 @@ def _season_block(role, code, year, sales, styles, price, snap, model, trend=Non
     active_now = [v[0] for v in trend.values() if _active(v)] if trend else []
     avg_now = sum(active_now) / max(1, len(active_now))         # last-4-weeks units of an average selling design
     block["products"] = _products(block, sc_rank, model, code, joined_all, stages, avg_now)
+    block["recommendedStyles"] = _recommended_styles(block["products"], joined_all, style_forecast35 or {})
     block["overview"] = _overview(block["products"])
     return block
 
@@ -1375,6 +1403,26 @@ CARD_COLOURS = 4
 CARD_FABRICS = 2
 CARD_MIXES = 3
 CARD_DETAILS = ("embroidery", "neck", "sleeve", "topType")
+# Existing-style recommendations use the same features shown on a product
+# card. Category and subcategory identify the product direction; colour and
+# fabric carry the greatest design weight, while construction details refine
+# the match. The final order also includes the production model's current
+# 35-day design forecast, so a visually strong match with no expected demand
+# cannot appear ahead of styles expected to sell.
+STYLE_MATCH_WEIGHTS = {
+    "category": 6,
+    "subCategory": 22,
+    "colour": 24,
+    "fabric": 20,
+    "embroidery": 10,
+    "neck": 7,
+    "sleeve": 6,
+    "topType": 5,
+}
+MIN_STYLE_FEATURE_MATCHES = 4
+STYLE_DESIGN_WEIGHT = 0.75
+STYLE_FORECAST_WEIGHT = 0.25
+RECOMMENDED_STYLES_LIMIT = 50
 # Strength labels instead of unit numbers: the model ranks well (backtest)
 # but its unit numbers are rough, so only relative levels are shown.
 STRONG_SCORE, GOOD_SCORE = 70, 50          # product score (0-100)
@@ -1479,6 +1527,86 @@ def _products(block: dict, sc_rank: dict, model, code: str, joined_all, stages: 
             "cutBack": cut_back[:4],
         })
     return cards
+
+
+def _recommended_styles(cards: list[dict], styles, forecast35: dict[str, int]) -> list[dict]:
+    """Rank existing style codes that match a recommended product card.
+
+    This is intentionally an *existing-style* list. A design suggestion tells
+    a merchandiser which attributes to prefer; the list then finds catalog
+    styles carrying the most of those attributes and blends that match with
+    the already-available five-week design forecast. It does not pretend to
+    assign a forecast to an entirely new, uncreated style code.
+    """
+    if styles is None or styles.empty or not cards or not forecast35:
+        return []
+
+    candidates = []
+    for product in cards:
+        sub_category = product.get("subCategory", "")
+        if not sub_category:
+            continue
+        suggested = {
+            "category": {product.get("category", "")},
+            "subCategory": {sub_category},
+            "colour": {x.get("value", "") for x in product.get("use", {}).get("colour", [])},
+            "fabric": {x.get("value", "") for x in product.get("use", {}).get("fabric", [])},
+            **{attr: {value} for attr, value in product.get("use", {}).get("details", {}).items()},
+        }
+        # Empty recommendations must not be counted as a feature match.
+        suggested = {attr: {str(v) for v in values if v} for attr, values in suggested.items()
+                     if any(values)}
+        if "subCategory" not in suggested:
+            continue
+        product_styles = styles[styles["subCategory"] == sub_category]
+        for style, attrs in product_styles.iterrows():
+            style_code = str(style).strip().upper()
+            units = int(forecast35.get(style_code, 0) or 0)
+            if units <= 0:
+                continue
+            matched = [attr for attr, values in suggested.items() if str(attrs.get(attr, "")) in values]
+            if len(matched) < MIN_STYLE_FEATURE_MATCHES:
+                continue
+            possible_weight = sum(STYLE_MATCH_WEIGHTS.get(attr, 0) for attr in suggested)
+            matched_weight = sum(STYLE_MATCH_WEIGHTS.get(attr, 0) for attr in matched)
+            feature_fit = 100 * matched_weight / possible_weight if possible_weight else 0.0
+            # The product-card score says whether the subcategory itself is a
+            # good design direction; feature_fit says how closely this style
+            # expresses that direction.
+            design_fit = 0.70 * feature_fit + 0.30 * float(product.get("score", 0))
+            candidates.append({
+                "style": style_code,
+                "subCategory": sub_category,
+                "category": str(attrs.get("category", "") or product.get("category", "")),
+                "forecast35": units,
+                "featureMatchCount": len(matched),
+                "suggestedFeatureCount": len(suggested),
+                "matchedFeatures": {attr: str(attrs.get(attr, "")) for attr in matched},
+                "missingFeatures": [attr for attr in suggested if attr not in matched],
+                # What the style has instead of each suggested value it misses.
+                "styleFeatures": {attr: str(attrs.get(attr, "") or "") for attr in suggested if attr not in matched},
+                "featureFitScore": round(feature_fit, 1),
+                "designFitScore": round(design_fit, 1),
+                "productScore": int(product.get("score", 0)),
+                "productLevel": product.get("level", "trySmall"),
+            })
+
+    if not candidates:
+        return []
+    forecast_ranks = _pct_rank([row["forecast35"] for row in candidates])
+    for row, forecast_rank in zip(candidates, forecast_ranks):
+        row["forecastScore"] = round(100 * forecast_rank, 1)
+        row["recommendationScore"] = round(
+            STYLE_DESIGN_WEIGHT * row["designFitScore"] + STYLE_FORECAST_WEIGHT * row["forecastScore"], 1
+        )
+    # Most suggested features first (2026-10-26, user-requested: "show these
+    # designs on top which have the maximum design features"), then the
+    # weighted fit (a colour / fabric match counts for more than a sleeve),
+    # then the expected sale.
+    candidates.sort(key=lambda row: (-row["featureMatchCount"], -row["featureFitScore"], -row["forecast35"], row["style"]))
+    for rank, row in enumerate(candidates[:RECOMMENDED_STYLES_LIMIT], start=1):
+        row["rank"] = rank
+    return candidates[:RECOMMENDED_STYLES_LIMIT]
 
 
 def _overview(cards: list[dict]) -> dict:

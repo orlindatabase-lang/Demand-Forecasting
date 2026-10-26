@@ -243,6 +243,60 @@ def test_product_cards_parts_agree():
     assert ds._overview(cards)["focus"] == ["Kurta"]
 
 
+def test_recommended_styles_rank_feature_fit_with_forecast():
+    styles = pd.DataFrame([
+        {"style": "FULL", "category": "Ethnic", "subCategory": "Kurta", "colour": "Red", "fabric": "Silk",
+         "embroidery": "Zari", "neck": "Round Neck", "sleeve": "Full Sleeve", "topType": "Dyed"},
+        {"style": "PARTIAL", "category": "Ethnic", "subCategory": "Kurta", "colour": "Red", "fabric": "Silk",
+         "embroidery": "", "neck": "", "sleeve": "", "topType": ""},
+        {"style": "WRONG", "category": "Ethnic", "subCategory": "Kurta", "colour": "Blue", "fabric": "Cotton",
+         "embroidery": "", "neck": "", "sleeve": "", "topType": ""},
+    ]).set_index("style")
+    cards = [{
+        "subCategory": "Kurta", "category": "Ethnic", "score": 80, "level": "strong",
+        "use": {
+            "colour": [{"value": "Red"}], "fabric": [{"value": "Silk"}],
+            "details": {"embroidery": "Zari", "neck": "Round Neck", "sleeve": "Full Sleeve", "topType": "Dyed"},
+        },
+    }]
+    result = ds._recommended_styles(cards, styles, {"FULL": 100, "PARTIAL": 500, "WRONG": 1000})
+    assert [row["style"] for row in result] == ["FULL", "PARTIAL"]
+    assert result[0]["featureMatchCount"] == 8
+    assert result[0]["matchedFeatures"]["colour"] == "Red"
+    assert result[1]["forecast35"] == 500 and result[1]["forecastScore"] == 100.0
+    assert all(row["style"] != "WRONG" for row in result)  # does not match enough suggested features
+
+
+def test_recommended_styles_put_most_matched_features_first():
+    base = {"category": "Ethnic", "subCategory": "Kurta", "colour": "Red", "fabric": "Silk",
+            "embroidery": "Zari", "neck": "Round Neck", "sleeve": "Full Sleeve", "topType": "Dyed"}
+    styles = pd.DataFrame([
+        {"style": "ALL8_SMALL", **base},
+        {"style": "ALL8_BIG", **base},
+        {"style": "SEVEN_HUGE", **base, "sleeve": "Half Sleeve"},
+    ]).set_index("style")
+    cards = [{
+        "subCategory": "Kurta", "category": "Ethnic", "score": 80, "level": "strong",
+        "use": {"colour": [{"value": "Red"}], "fabric": [{"value": "Silk"}],
+                "details": {"embroidery": "Zari", "neck": "Round Neck", "sleeve": "Full Sleeve", "topType": "Dyed"}},
+    }]
+    result = ds._recommended_styles(cards, styles, {"ALL8_SMALL": 50, "ALL8_BIG": 400, "SEVEN_HUGE": 9000})
+    # every suggested feature first, the bigger expected sale breaking the tie
+    assert [row["style"] for row in result] == ["ALL8_BIG", "ALL8_SMALL", "SEVEN_HUGE"]
+    assert result[2]["missingFeatures"] == ["sleeve"] and result[2]["styleFeatures"] == {"sleeve": "Half Sleeve"}
+
+
+def test_style_forecast_uses_design_total_once_and_falls_back_to_skus():
+    import types
+    data = types.SimpleNamespace(PLAN_ROWS=[
+        types.SimpleNamespace(designNo="A", designForecast35=120, forecast35=50),
+        types.SimpleNamespace(designNo="A", designForecast35=120, forecast35=70),
+        types.SimpleNamespace(designNo="B", designForecast35=0, forecast35=20),
+        types.SimpleNamespace(designNo="B", designForecast35=0, forecast35=30),
+    ])
+    assert ds._style_forecast35(data) == {"A": 120, "B": 50}
+
+
 def test_top_pick_hit_rate():
     y = list(range(50))
     assert ds._top_pick_hit(y, y, ["S4 2025"] * 50) == 100.0               # perfect ranking

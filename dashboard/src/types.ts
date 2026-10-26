@@ -413,6 +413,25 @@ export interface DesignSeason {
   products?: DesignProductCard[];
   overview?: { focus: string[]; colours: string[]; fabrics: string[] };
   drivers: DesignDriver[];
+  recommendedStyles?: DesignRecommendedStyle[];
+}
+
+/** An existing style carrying a product card's suggested features - most
+ * matched features first, then the bigger expected sale. */
+export interface DesignRecommendedStyle {
+  rank: number;
+  style: string;
+  subCategory: string;
+  category: string;
+  forecast35: number; // expected Gross units in the next 35 days (design forecast)
+  featureMatchCount: number;
+  suggestedFeatureCount: number;
+  matchedFeatures: Record<string, string>; // attribute -> the style's (suggested) value
+  missingFeatures: string[]; // suggested attributes the style does not match
+  styleFeatures?: Record<string, string>; // what the style has instead, per missing attribute
+  featureFitScore: number;
+  productScore: number;
+  productLevel: DesignLevel;
 }
 
 export interface DesignSuggestionsResponse {

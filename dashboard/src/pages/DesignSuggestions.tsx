@@ -26,6 +26,7 @@ import PageHeader from "@/components/common/PageHeader";
 import AboutButton from "@/components/design/AboutButton";
 import TrendStatus from "@/components/design/TrendStatus";
 import ProductCards from "@/components/design/ProductCards";
+import RecommendedStyles from "@/components/design/RecommendedStyles";
 import { RULES } from "@/components/design/TrendBadge";
 import type { AboutKey } from "@/components/design/aboutContent";
 import { LoadingSkeleton, ErrorState } from "@/components/common/StateViews";
@@ -201,7 +202,14 @@ function SeasonView({
   if (season.note) {
     return <Paper variant="outlined" sx={{ p: 3, color: MUTED }}>{season.note}</Paper>;
   }
-  if (view === "suggestion") return <ProductCards season={season} />;
+  if (view === "suggestion") {
+    return (
+      <Stack spacing={2.5}>
+        <RecommendedStyles styles={season.recommendedStyles ?? []} />
+        <ProductCards season={season} />
+      </Stack>
+    );
+  }
   return (
     <Stack spacing={2.5}>
       {/* What is happening: trend stages (with sudden spikes), designs taking off, and what the model learned */}
