@@ -17,6 +17,7 @@ export type AboutKey =
   | "lifecycle"
   | "trending"
   | "products"
+  | "styles"
   | "drivers";
 
 export const ABOUT: Record<AboutKey, AboutContent> = {
@@ -105,6 +106,28 @@ export const ABOUT: Record<AboutKey, AboutContent> = {
           "Look at what the top designs have in common — the same colour, fabric or neck is a strong hint.",
           "A huge growth on a design that sells only a few pieces is an early sign, not a sure thing. Try a small quantity first.",
           "During a sale, many designs grow at the same time. Trend status shows what is really getting popular beyond the sale.",
+        ],
+      },
+    ],
+  },
+  styles: {
+    title: "Styles to push",
+    sections: [
+      {
+        heading: "What it shows",
+        points: [
+          "Our existing designs that already have the features the product cards below suggest - so you can push them now instead of waiting for new designs.",
+          "A design is checked against the card of its own product (for example Anarkali KPD Set): its category, the product itself, colour, fabric, embroidery, neck, sleeve and top type.",
+          "Designs with the most suggested features are on top. When two designs match the same number, the one expected to sell more comes first.",
+          "Only designs that match at least 4 features and are expected to sell in the next 5 weeks are listed.",
+        ],
+      },
+      {
+        heading: "Reading a row",
+        points: [
+          "Features — 8/8 means the design has every feature its card suggests. Green = matches. Grey and crossed out = does not match; it shows what the design has instead.",
+          "Expected sale — the forecast for this design for the next 35 days (5 weeks), the same forecast as the Weekly Sales Report.",
+          "Product — how strong its product card is (Strong, Good or Try small).",
         ],
       },
     ],
