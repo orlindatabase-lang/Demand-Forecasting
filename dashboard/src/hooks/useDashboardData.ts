@@ -82,16 +82,6 @@ export function useCategoryAnalysis(level: "category" | "subCategory" | "style" 
   });
 }
 
-/** Tier movement tab: tier stays, moves and each style's tier journey. */
-export function useTierMovement(enabled: boolean) {
-  return useQuery({
-    queryKey: ["tierMovement"],
-    queryFn: () => dataService.tierMovement(),
-    enabled,
-    refetchInterval: 10 * REFRESH_MS,
-  });
-}
-
 /** Tiers Spike Rate chart: monthly totals for the chosen Tier / Category /
  * Sub Category / Style (keeps showing the previous result while a new one loads). */
 export function useCategoryAnalysisFiltered(f: { brand: string; tier: string; category: string; subCategory: string; style: string }) {
