@@ -1,4 +1,4 @@
-import { Fragment, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useQueries } from "@tanstack/react-query";
 import {
@@ -6,6 +6,8 @@ import {
   Button,
   Chip,
   Dialog,
+  DialogContent,
+  DialogTitle,
   FormControl,
   IconButton,
   InputAdornment,
@@ -49,6 +51,7 @@ import {
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { dataService } from "@/services/dataService";
 import { formatNumber } from "@/utils/format";
+import { COLORS } from "@/theme/colors";
 import type {
   WeeklyGridResponse,
   WeeklyGridCell,
@@ -63,6 +66,8 @@ import type {
 
 const ACTUAL_COLOR = "#312c5c";
 const FORECAST_COLOR = "#f97316";
+// Forecast figure under each actual: a notch darker than the accent orange so it reads on white and on the tints
+const FORECAST_TEXT = "#ea580c";
 // Real server-side pagination (2026-09-14, user-requested Prev/Next footer)
 // - the table body is also row-virtualized (see rowVirtualizer), so a
 // bigger PAGE_SIZE only costs a bit more network payload, not render time.
@@ -106,6 +111,26 @@ const TABLE_MAX_HEIGHT = HEADER_HEIGHT + VISIBLE_ROWS * ROW_HEIGHT_ESTIMATE + TO
 // translucent background lets the scrolling rows underneath show/bleed
 // through the pinned header text as the user scrolls.
 const SHADE_COLOR = "#eef0f5";
+// Suggested Production column: a very faint amber tint (the orange stays on the numbers only)
+const SUGGESTED_BG = COLORS.warningBgFaint;
+// Month TOTAL columns: light brand tint for the cells (portal palette, see
+// theme/colors.ts). HEAD_BG is the portal's pale blue for the table header and
+// the pinned bottom TOTAL row.
+const TOTAL_BG = COLORS.bgMuted;
+const HEAD_BG = COLORS.stickyColHeader;
+// Right edge of the pinned STYLE / LAUNCH DATE columns: same 2px line + INSET
+// shadow as the portal's tables, so the shadow fades inside the fixed column
+// instead of landing on the coloured week cells beside it. Spread AFTER
+// `borderColor: "divider"` so this border colour wins.
+const STICKY_EDGE_SX = {
+  borderRight: `2px solid ${COLORS.borderDark}`,
+  boxShadow: "inset -4px 0 6px -4px rgba(0, 0, 0, 0.18)",
+} as const;
+// Left edge of the pinned SUGGESTED PRODUCTION column (mirror of STICKY_EDGE_SX): weeks scroll underneath it
+const STICKY_EDGE_RIGHT_SX = {
+  borderLeft: `2px solid ${COLORS.borderDark}`,
+  boxShadow: "inset 4px 0 6px -4px rgba(0, 0, 0, 0.18)",
+} as const;
 // Measured height of the header's first row (the STYLE/LAUNCH DATE/month-
 // name row) - MUI's `stickyHeader` gives every header cell `top: 0` by
 // default, which is only correct for a SINGLE header row. With two stacked
@@ -118,30 +143,73 @@ const HEADER_ROW1_HEIGHT = 37;
 
 function SummaryCard({
   label,
+  note,
   value,
-  color,
+  accent,
+  footer,
   currentWeekLabel,
   currentWeekValue,
 }: {
   label: string;
+  note?: string;
   value: number;
-  color: string;
+  accent: string;
+  footer?: string;
   currentWeekLabel?: string;
   currentWeekValue?: number;
 }) {
   return (
-    <Paper variant="outlined" sx={{ flex: 1, minWidth: 220, p: 2 }}>
-      <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 600, letterSpacing: 0.3 }}>
-        {label.toUpperCase()}
+    <Paper
+      variant="outlined"
+      sx={{ flex: 1, minWidth: 200, px: 2, py: 1, borderColor: COLORS.border, borderLeft: `3px solid ${accent}` }}
+    >
+      {/* Type sizes / weights / colours follow the portal's KPI cards (SKU
+          Analysis): label 10px uppercase, value 17px, unit 11px, pills 10.5px. */}
+      <Typography
+        sx={{
+          fontSize: "10px",
+          fontWeight: 700,
+          letterSpacing: 0.7,
+          lineHeight: 1.5,
+          mb: 0.25,
+          textTransform: "uppercase",
+          color: COLORS.textMuted,
+        }}
+      >
+        {label}
       </Typography>
-      <Typography variant="h4" sx={{ fontWeight: 800, color, lineHeight: 1.3 }}>
-        {formatNumber(value)}
-      </Typography>
-      {currentWeekLabel !== undefined && currentWeekValue !== undefined && (
-        <Typography variant="caption" sx={{ color: "text.secondary" }}>
-          {currentWeekLabel}: <strong style={{ color }}>{formatNumber(currentWeekValue)}</strong>
+      {/* Number, its unit and the small detail pill on ONE row. */}
+      <Stack direction="row" spacing={1.25} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
+        <Typography sx={{ fontSize: "17px", fontWeight: 800, lineHeight: 1.3, color: COLORS.primary }}>
+          {formatNumber(value)}
         </Typography>
-      )}
+        {note && (
+          <Typography sx={{ fontSize: "11px", fontWeight: 600, color: COLORS.textMuted }}>{note}</Typography>
+        )}
+        {(() => {
+          const pill =
+            currentWeekLabel !== undefined && currentWeekValue !== undefined
+              ? `This week (${currentWeekLabel}): ${formatNumber(currentWeekValue)}`
+              : footer;
+          return pill ? (
+            <Box
+              component="span"
+              sx={{
+                fontSize: "10.5px",
+                fontWeight: 700,
+                color: COLORS.textSecondary,
+                bgcolor: COLORS.bgMuted,
+                borderRadius: "6px",
+                px: 0.75,
+                py: 0.125,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {pill}
+            </Box>
+          ) : null;
+        })()}
+      </Stack>
     </Paper>
   );
 }
@@ -155,7 +223,7 @@ function SummaryCard({
 // it (2026-09-18, user-requested: TOTAL first, breakdown stacked
 // underneath, not above) - stacking sticky rows correctly means whichever
 // one is meant to sit visually HIGHER needs the LARGER bottom offset.
-const stickyBottomSx = (bottom: number) => ({ position: "sticky" as const, bottom, zIndex: 2 });
+const stickyBottomSx = (bottom: number) => ({ position: "sticky" as const, bottom, zIndex: 2, borderTop: `2px solid ${COLORS.borderDark}` });
 // Background for a Style's expanded per-marketplace sub-rows (2026-09-16,
 // user-requested inline channel breakdown) - a faint shade distinguishes
 // them from normal Style rows without competing with the existing
@@ -183,7 +251,7 @@ function Cell({
         align="right"
         sx={
           stickyBottom !== undefined
-            ? { ...stickyBottomSx(stickyBottom), bgcolor: "background.paper" }
+            ? { ...stickyBottomSx(stickyBottom), bgcolor: HEAD_BG }
             : tint
               ? { bgcolor: tint }
               : undefined
@@ -202,7 +270,7 @@ function Cell({
       sx={{
         opacity: cell.partial ? 0.6 : 1,
         ...(stickyBottom !== undefined
-          ? { ...stickyBottomSx(stickyBottom), bgcolor: "background.paper" }
+          ? { ...stickyBottomSx(stickyBottom), bgcolor: HEAD_BG }
           : tint
             ? { bgcolor: tint }
             : {}),
@@ -212,7 +280,7 @@ function Cell({
         {cell.actual === null ? <span style={{ color: "#94a3b8" }}>—</span> : formatNumber(cell.actual)}
       </Typography>
       <Tooltip title={forecastTip(cell)} placement="top">
-        <Typography variant="caption" sx={{ color: FORECAST_COLOR, lineHeight: 1.3, display: "block", cursor: "help" }}>
+        <Typography variant="caption" sx={{ color: FORECAST_TEXT, lineHeight: 1.3, display: "block", cursor: "help" }}>
           {cell.frozenMissing ? "—" : formatNumber(cell.forecast)}
         </Typography>
       </Tooltip>
@@ -362,11 +430,17 @@ function TotalCell({
 }) {
   const accuracy = showAccuracy ? monthAccuracy(actual, forecast) : null;
   return (
-    <TableCell align="right" sx={{ bgcolor: SHADE_COLOR, ...(stickyBottom !== undefined ? stickyBottomSx(stickyBottom) : {}) }}>
+    <TableCell
+      align="right"
+      sx={{
+        bgcolor: stickyBottom !== undefined ? HEAD_BG : TOTAL_BG,
+        ...(stickyBottom !== undefined ? stickyBottomSx(stickyBottom) : {}),
+      }}
+    >
       <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1.3, color: ACTUAL_COLOR }}>
         {formatNumber(actual)}
       </Typography>
-      <Typography variant="caption" sx={{ color: FORECAST_COLOR, lineHeight: 1.3, display: "block", fontWeight: 600 }}>
+      <Typography variant="caption" sx={{ color: FORECAST_TEXT, lineHeight: 1.3, display: "block", fontWeight: 600 }}>
         {formatNumber(forecast)}
       </Typography>
       {accuracy !== null && (
@@ -403,22 +477,23 @@ function formatDateWithYear(iso: string): string {
   });
 }
 
-const FESTIVAL_ACCENT = "#f97316";
-const SALE_ACCENT = "#a855f7";
+// Festival = amber, Sale = blue, Both = rose (rose, not purple: a faint purple was too close to the faint blue of Sale).
+const FESTIVAL_ACCENT = "#d97706";
+const SALE_ACCENT = "#2563eb";
 // A week with BOTH a Festival and a Sale overlapping (2026-09-24, user-
 // requested) gets its own third accent, distinct from either alone - e.g.
 // this week's Ganesh Chaturthi overlapping the Meesho/Myntra/Flipkart sale
 // window - rather than silently showing as just one or the other.
-const BOTH_EVENTS_ACCENT = "#b45309";
+const BOTH_EVENTS_ACCENT = "#be185d";
 // Light background tints of the accents above, for highlighting a whole
 // week's column - past or upcoming - when it falls inside a real festival
 // or sale-event window (2026-09-24, user-requested; see
 // api/festival_calendar.py, the same categorized source that already
 // powers the "Upcoming Festival"/"Upcoming Sale" cards above this table).
 function eventTint(category: string): string | undefined {
-  if (category === "festival") return "#fff1e6";
-  if (category === "sale") return "#f6ecfe";
-  if (category === "both") return "#fef3c7";
+  if (category === "festival") return "#fff7e6";
+  if (category === "sale") return "#eef4ff";
+  if (category === "both") return "#fdf0f6";
   return undefined;
 }
 
@@ -438,11 +513,13 @@ function EventPanel({
   event: UpcomingEventOutlook | null;
 }) {
   const accent = kind === "festival" ? FESTIVAL_ACCENT : SALE_ACCENT;
+  // Darker shade of the accent for text on the card's light tint (readability).
+  const accentText = kind === "festival" ? COLORS.warningText : COLORS.infoText;
   const Icon = kind === "festival" ? CelebrationIcon : SellIcon;
 
   if (!event) {
     return (
-      <Paper variant="outlined" sx={{ flex: 1, minWidth: 300, p: 2 }}>
+      <Paper variant="outlined" sx={{ flex: 1, minWidth: 300, px: 1.5, py: 1 }}>
         <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700, letterSpacing: 0.3 }}>
           {label}
         </Typography>
@@ -459,25 +536,22 @@ function EventPanel({
   const names = event.eventName.split(" + ").map((n) => n.trim()).filter(Boolean);
 
   return (
-    <Paper variant="outlined" sx={{ flex: 1, minWidth: 320, overflow: "hidden", display: "flex" }}>
+    <Paper variant="outlined" sx={{ flex: 1, minWidth: 320, overflow: "hidden", display: "flex", borderColor: COLORS.border, borderRadius: "10px" }}>
       <Box
         sx={{
           flex: 1,
-          px: 2.5,
-          py: 2,
-          borderLeft: `4px solid ${accent}`,
-          background:
-            kind === "festival"
-              ? "linear-gradient(135deg, #fff4e8 0%, #ffe6cc 100%)"
-              : "linear-gradient(135deg, #faf0fd 0%, #f6e0fa 100%)",
+          px: 2,
+          py: 1.25,
+          // Soft tint fading to white, 1px grey border (the Paper) - same as the portal's summary cards
+          background: `linear-gradient(135deg, ${kind === "festival" ? "#fff6e6" : "#eef4ff"} 0%, ${COLORS.bgWhite} 100%)`,
         }}
       >
-        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 1 }}>
+        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 0.75 }}>
           <Box
             sx={{
-              width: 22,
-              height: 22,
-              borderRadius: "6px",
+              width: 18,
+              height: 18,
+              borderRadius: "5px",
               bgcolor: accent,
               color: "#fff",
               display: "flex",
@@ -486,17 +560,20 @@ function EventPanel({
               flexShrink: 0,
             }}
           >
-            <Icon sx={{ fontSize: 14 }} />
+            <Icon sx={{ fontSize: 12 }} />
           </Box>
-          <Typography variant="caption" sx={{ fontWeight: 700, letterSpacing: 0.4, color: "text.secondary", flex: 1 }}>
+          <Typography
+            variant="caption"
+            sx={{ fontWeight: 700, letterSpacing: 0.5, color: "text.secondary", flex: 1, fontSize: "0.68rem" }}
+          >
             {label.toUpperCase()}
           </Typography>
-          <Typography variant="body2" sx={{ color: "text.secondary", fontWeight: 600, whiteSpace: "nowrap" }}>
+          <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 600, whiteSpace: "nowrap", fontSize: "0.72rem" }}>
             {formatDateShort(event.eventStart)} – {formatDateShort(event.eventEnd)} · {days} day{days === 1 ? "" : "s"}
           </Typography>
         </Stack>
         {names.length === 1 ? (
-          <Typography variant="h6" sx={{ fontWeight: 800, color: accent, lineHeight: 1.25 }}>
+          <Typography sx={{ fontWeight: 800, color: accentText, lineHeight: 1.3, fontSize: "1rem" }}>
             {names[0]}
           </Typography>
         ) : (
@@ -505,14 +582,14 @@ function EventPanel({
               <Box
                 key={n}
                 sx={{
-                  px: 1.25,
-                  py: 0.4,
+                  px: 1,
+                  py: 0.15,
                   borderRadius: 999,
                   bgcolor: "rgba(255,255,255,0.75)",
                   border: `1px solid ${accent}`,
-                  color: accent,
+                  color: accentText,
                   fontWeight: 700,
-                  fontSize: "0.8rem",
+                  fontSize: "0.72rem",
                   lineHeight: 1.4,
                 }}
               >
@@ -523,7 +600,7 @@ function EventPanel({
         )}
 
         {event.spikeLeadDays !== null && (
-          <Typography variant="caption" sx={{ color: ACTUAL_COLOR, fontWeight: 600, display: "block", mt: 1 }}>
+          <Typography variant="caption" sx={{ color: ACTUAL_COLOR, fontWeight: 600, display: "block", mt: 0.75, fontSize: "0.7rem" }}>
             🔥 Demand historically starts rising ~{event.spikeLeadDays} day{event.spikeLeadDays === 1 ? "" : "s"}{" "}
             before this event
           </Typography>
@@ -537,7 +614,7 @@ function EventPanel({
 function FestivalCard({ outlook }: { outlook: FestivalOutlook | null }) {
   if (!outlook) return null;
   return (
-    <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mb: 2 }}>
+    <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} sx={{ mb: 1.5 }}>
       <EventPanel kind="festival" label="Upcoming Festival" event={outlook.upcomingFestival} />
       <EventPanel kind="sale" label="Upcoming Sale" event={outlook.upcomingSale} />
     </Stack>
@@ -553,8 +630,18 @@ interface OverviewTotals {
 }
 
 /** Page title, the three summary cards and the Upcoming Festival / Sale
- * cards - shown at the top of every tab, above the tab bar. */
-function ForecastOverview({ data, totals }: { data: WeeklyGridResponse; totals: OverviewTotals }) {
+ * cards - shown at the top of every tab, above the tab bar. ``actions``
+ * (the Forecast Latest/Frozen toggle and the export button on the Weekly
+ * Sales Report) sit to the right of the three summary cards. */
+function ForecastOverview({
+  data,
+  totals,
+  actions,
+}: {
+  data: WeeklyGridResponse;
+  totals: OverviewTotals;
+  actions?: ReactNode;
+}) {
   const displayTotals = totals;
   return (
     <>
@@ -563,26 +650,41 @@ function ForecastOverview({ data, totals }: { data: WeeklyGridResponse; totals: 
         actions={<RefreshButton />}
       />
 
-      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }}>
-        <SummaryCard
-          label="Total Forecast (Next 2 Months)"
-          value={displayTotals.totalForecast}
-          color={FORECAST_COLOR}
-          currentWeekLabel={data.currentWeekLabel}
-          currentWeekValue={displayTotals.currentWeekForecast}
-        />
-        <SummaryCard
-          label="Total Actual Sale (Since Apr 2025)"
-          value={displayTotals.totalActual}
-          color={ACTUAL_COLOR}
-          currentWeekLabel={data.currentWeekLabel}
-          currentWeekValue={displayTotals.currentWeekActual}
-        />
-        <SummaryCard
-          label="Total Suggested Production Qty"
-          value={displayTotals.totalSuggestedProduction}
-          color={FORECAST_COLOR}
-        />
+      <Stack
+        direction="row"
+        spacing={1.5}
+        sx={{ mb: 1.5, alignItems: "center", flexWrap: "wrap", rowGap: 1.5 }}
+      >
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ flex: "1 1 600px", minWidth: 0 }}>
+          <SummaryCard
+            label="Total Forecast"
+            note="next 2 months"
+            value={displayTotals.totalForecast}
+            accent={FORECAST_COLOR}
+            currentWeekLabel={data.currentWeekLabel}
+            currentWeekValue={displayTotals.currentWeekForecast}
+          />
+          <SummaryCard
+            label="Total Actual Sale"
+            note="since Apr 2025"
+            value={displayTotals.totalActual}
+            accent={COLORS.primary}
+            currentWeekLabel={data.currentWeekLabel}
+            currentWeekValue={displayTotals.currentWeekActual}
+          />
+          <SummaryCard
+            label="Total Suggested Production"
+            note="qty"
+            value={displayTotals.totalSuggestedProduction}
+            accent={FORECAST_COLOR}
+            footer="Forecast minus stock & WIP"
+          />
+        </Stack>
+        {actions && (
+          <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", flexShrink: 0, ml: "auto" }}>
+            {actions}
+          </Stack>
+        )}
       </Stack>
 
       <FestivalCard outlook={data.festivalOutlook} />
@@ -1030,7 +1132,55 @@ export default function WeeklySalesGrid() {
 
   return (
     <Box>
-      <ForecastOverview data={data} totals={displayTotals} />
+      <ForecastOverview
+        data={data}
+        totals={displayTotals}
+        actions={
+          <>
+            <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+              <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700 }}>FORECAST:</Typography>
+              <Tooltip title={FREEZE.on
+                ? `Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: the forecast of the next 2 months frozen on ${shortIso(FREEZE.on)} and kept unchanged${FREEZE.until ? ` until ${shortIso(FREEZE.until)}` : ""}. Hover any forecast figure to see both.`
+                : "Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: past (completed) weeks only, each with the forecast it had when the week began; running and upcoming weeks show —. Hover any forecast figure to see both."}>
+                <ToggleButtonGroup
+                  exclusive
+                  size="small"
+                  value={forecastView}
+                  onChange={(_e, v) => v && setForecastView(v)}
+                  sx={{
+                    "& .MuiToggleButton-root": {
+                      textTransform: "none", fontWeight: 700, px: 1.25, py: 0.4,
+                      bgcolor: COLORS.bgWhite, color: COLORS.textSecondary, borderColor: COLORS.borderDark,
+                      "&:hover": { bgcolor: COLORS.bgMuted },
+                    },
+                    "& .MuiToggleButton-root.Mui-selected": {
+                      bgcolor: ACTUAL_COLOR, color: "#fff",
+                      "&:hover": { bgcolor: ACTUAL_COLOR },
+                    },
+                  }}
+                >
+                  <ToggleButton value="latest">Latest</ToggleButton>
+                  <ToggleButton value="frozen">{FREEZE.on ? `Frozen (${shortIso(FREEZE.on)})` : "Frozen (past weeks)"}</ToggleButton>
+                </ToggleButtonGroup>
+              </Tooltip>
+            </Stack>
+            {/* Icon only; the name shows on hover. The span lets the tooltip work while the button is disabled. */}
+            <Tooltip title={exporting ? "Exporting…" : "Export Full Report"}>
+              <span>
+                <IconButton
+                  size="small"
+                  aria-label="Export Full Report"
+                  onClick={handleExportAll}
+                  disabled={exporting || data.total === 0}
+                  sx={{ border: `1px solid ${COLORS.borderDark}`, borderRadius: "8px", color: COLORS.primary }}
+                >
+                  <DownloadIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </>
+        }
+      />
       <PageTabs />
 
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, alignItems: "center", mb: 2 }}>
@@ -1105,32 +1255,70 @@ export default function WeeklySalesGrid() {
           </Select>
         </FormControl>
 
-        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", ml: "auto" }}>
-          <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700 }}>FORECAST:</Typography>
-          <Tooltip title={FREEZE.on
-            ? `Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: the forecast of the next 2 months frozen on ${shortIso(FREEZE.on)} and kept unchanged${FREEZE.until ? ` until ${shortIso(FREEZE.until)}` : ""}. Hover any forecast figure to see both.`
-            : "Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: past (completed) weeks only, each with the forecast it had when the week began; running and upcoming weeks show —. Hover any forecast figure to see both."}>
-            <ToggleButtonGroup
-              exclusive
+        {/* Catalog forecast-tier filter (Cloud SQL CatalogStyle.forecastStatus,
+            2026-09-21, user-requested) - a button per tier, clicking one shows
+            only that tier's Styles in the table below. Sits in the same row as
+            the search / Category / Sub Category filters. */}
+        {catalogQuery.data && catalogQuery.data.tiers.length > 0 && (
+          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center", ml: "auto" }}>
+            <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700, mr: 0.5 }}>
+              TIER:
+            </Typography>
+            <Button
+              onClick={() => {
+                setTierFilter("all");
+                setOffset(0);
+              }}
+              variant={tierFilter === "all" ? "contained" : "outlined"}
               size="small"
-              value={forecastView}
-              onChange={(_e, v) => v && setForecastView(v)}
-              sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontWeight: 700, px: 1.25, py: 0.4 } }}
+              sx={{
+                borderRadius: 999,
+                textTransform: "none",
+                fontWeight: 700,
+                px: 1.75,
+                ...(tierFilter === "all"
+                  ? { bgcolor: ACTUAL_COLOR, "&:hover": { bgcolor: ACTUAL_COLOR } }
+                  : { color: ACTUAL_COLOR, borderColor: ACTUAL_COLOR }),
+              }}
             >
-              <ToggleButton value="latest">Latest</ToggleButton>
-              <ToggleButton value="frozen">{FREEZE.on ? `Frozen (${shortIso(FREEZE.on)})` : "Frozen (past weeks)"}</ToggleButton>
-            </ToggleButtonGroup>
-          </Tooltip>
-        </Stack>
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<DownloadIcon fontSize="small" />}
-          onClick={handleExportAll}
-          disabled={exporting || data.total === 0}
-        >
-          {exporting ? "Exporting…" : "Export Full Report"}
-        </Button>
+              All Tiers
+            </Button>
+            {catalogQuery.data.tiers.map((g) => (
+              <Button
+                key={g.tier}
+                onClick={() => {
+                  setTierFilter(g.tier);
+                  setOffset(0);
+                }}
+                variant={tierFilter === g.tier ? "contained" : "outlined"}
+                size="small"
+                sx={{
+                  borderRadius: 999,
+                  textTransform: "none",
+                  fontWeight: 700,
+                  px: 1.75,
+                  ...(tierFilter === g.tier
+                    ? { bgcolor: ACTUAL_COLOR, "&:hover": { bgcolor: ACTUAL_COLOR } }
+                    : { color: ACTUAL_COLOR, borderColor: ACTUAL_COLOR }),
+                }}
+              >
+                {g.tier}
+                <Chip
+                  label={g.count}
+                  size="small"
+                  sx={{
+                    ml: 0.75,
+                    height: 18,
+                    fontSize: "0.68rem",
+                    fontWeight: 700,
+                    bgcolor: tierFilter === g.tier ? "rgba(255,255,255,0.25)" : "rgba(49,44,92,0.1)",
+                    color: tierFilter === g.tier ? "#fff" : ACTUAL_COLOR,
+                  }}
+                />
+              </Button>
+            ))}
+          </Box>
+        )}
       </Box>
 
       {/* Style-lifecycle panel: styles present last calendar year vs newly
@@ -1155,70 +1343,6 @@ export default function WeeklySalesGrid() {
             </Box>
           </Stack>
         </Paper>
-      )}
-
-      {/* Catalog forecast-tier filter (Cloud SQL CatalogStyle.forecastStatus,
-          2026-09-21, user-requested) - a button per tier, clicking one shows
-          only that tier's Styles in the table below. */}
-      {catalogQuery.data && catalogQuery.data.tiers.length > 0 && (
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center", mb: 2 }}>
-          <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700, mr: 0.5 }}>
-            TIER:
-          </Typography>
-          <Button
-            onClick={() => {
-              setTierFilter("all");
-              setOffset(0);
-            }}
-            variant={tierFilter === "all" ? "contained" : "outlined"}
-            size="small"
-            sx={{
-              borderRadius: 999,
-              textTransform: "none",
-              fontWeight: 700,
-              px: 1.75,
-              ...(tierFilter === "all"
-                ? { bgcolor: ACTUAL_COLOR, "&:hover": { bgcolor: ACTUAL_COLOR } }
-                : { color: ACTUAL_COLOR, borderColor: ACTUAL_COLOR }),
-            }}
-          >
-            All Tiers
-          </Button>
-          {catalogQuery.data.tiers.map((g) => (
-            <Button
-              key={g.tier}
-              onClick={() => {
-                setTierFilter(g.tier);
-                setOffset(0);
-              }}
-              variant={tierFilter === g.tier ? "contained" : "outlined"}
-              size="small"
-              sx={{
-                borderRadius: 999,
-                textTransform: "none",
-                fontWeight: 700,
-                px: 1.75,
-                ...(tierFilter === g.tier
-                  ? { bgcolor: ACTUAL_COLOR, "&:hover": { bgcolor: ACTUAL_COLOR } }
-                  : { color: ACTUAL_COLOR, borderColor: ACTUAL_COLOR }),
-              }}
-            >
-              {g.tier}
-              <Chip
-                label={g.count}
-                size="small"
-                sx={{
-                  ml: 0.75,
-                  height: 18,
-                  fontSize: "0.68rem",
-                  fontWeight: 700,
-                  bgcolor: tierFilter === g.tier ? "rgba(255,255,255,0.25)" : "rgba(49,44,92,0.1)",
-                  color: tierFilter === g.tier ? "#fff" : ACTUAL_COLOR,
-                }}
-              />
-            </Button>
-          ))}
-        </Box>
       )}
 
       <Stack direction="row" spacing={2} sx={{ mb: 1, width: "100%", alignItems: "center", justifyContent: "flex-end" }}>
@@ -1263,14 +1387,13 @@ export default function WeeklySalesGrid() {
                     top: 0,
                     zIndex: 3,
                     minWidth: KEY_COL_WIDTH,
-                    bgcolor: "background.paper",
+                    bgcolor: HEAD_BG,
                     fontWeight: 700,
                     textTransform: "uppercase",
                     fontSize: "0.72rem",
                     letterSpacing: 0.4,
                     color: "text.secondary",
-                    borderBottom: "2px solid",
-                    borderColor: "divider",
+                    borderBottom: `2px solid ${COLORS.borderDark}`,
                     verticalAlign: "bottom",
                   }}
                 >
@@ -1284,21 +1407,20 @@ export default function WeeklySalesGrid() {
                     top: 0,
                     zIndex: 3,
                     minWidth: LAUNCH_DATE_COL_WIDTH,
-                    bgcolor: "background.paper",
+                    bgcolor: HEAD_BG,
                     fontWeight: 700,
                     textTransform: "uppercase",
                     fontSize: "0.72rem",
                     letterSpacing: 0.4,
                     color: "text.secondary",
-                    borderRight: "1px solid",
-                    borderBottom: "2px solid",
-                    borderColor: "divider",
+                    borderBottom: `2px solid ${COLORS.borderDark}`,
+                    ...STICKY_EDGE_SX,
                     verticalAlign: "bottom",
                   }}
                 >
                   Launch Date
                 </TableCell>
-                {data.months.map((m, mi) => (
+                {data.months.map((m) => (
                   <TableCell
                     key={m.label}
                     ref={m.label === currentMonthLabel ? currentMonthCellRef : undefined}
@@ -1309,7 +1431,8 @@ export default function WeeklySalesGrid() {
                       top: 0,
                       fontWeight: 700,
                       fontSize: "0.78rem",
-                      bgcolor: mi % 2 === 0 ? "background.paper" : SHADE_COLOR,
+                      bgcolor: HEAD_BG,
+                      color: COLORS.primary,
                       borderLeft: "1px solid",
                       borderColor: "divider",
                       borderBottom: "1px solid",
@@ -1324,14 +1447,15 @@ export default function WeeklySalesGrid() {
                   sx={{
                     position: "sticky",
                     top: 0,
+                    right: 0,
+                    zIndex: 3,
                     minWidth: 150,
-                    bgcolor: "#fff7ed",
+                    bgcolor: SUGGESTED_BG,
                     fontWeight: 700,
                     fontSize: "0.68rem",
                     letterSpacing: 0.4,
-                    borderLeft: "2px solid",
-                    borderColor: "divider",
-                    borderBottom: "2px solid",
+                    borderBottom: `2px solid ${COLORS.borderDark}`,
+                    ...STICKY_EDGE_RIGHT_SX,
                     verticalAlign: "bottom",
                   }}
                 >
@@ -1341,7 +1465,7 @@ export default function WeeklySalesGrid() {
                 </TableCell>
               </TableRow>
               <TableRow>
-                {data.months.map((m, mi) => (
+                {data.months.map((m) => (
                   <Fragment key={m.label}>
                     {m.weeks.map((w) => {
                       // Highlight a week that falls inside a real festival
@@ -1369,10 +1493,11 @@ export default function WeeklySalesGrid() {
                             top: HEADER_ROW1_HEIGHT,
                             fontWeight: accent ? 800 : 600,
                             fontSize: "0.68rem",
-                            color: accent ?? "text.secondary",
-                            bgcolor: accent ? eventTint(w.eventCategory) : mi % 2 === 0 ? "background.paper" : SHADE_COLOR,
-                            borderBottom: accent ? `2px solid ${accent}` : "2px solid",
-                            borderColor: accent ?? "divider",
+                            // Event weeks are not coloured in the header (the faint column tint below is enough);
+                            // only the bold label and the dotted underline hint that they can be clicked
+                            color: accent ? COLORS.textDark : "text.secondary",
+                            bgcolor: HEAD_BG,
+                            borderBottom: `2px solid ${COLORS.borderDark}`,
                             cursor: hasEvents ? "pointer" : undefined,
                             textDecoration: hasEvents ? "underline" : undefined,
                             textDecorationStyle: hasEvents ? "dotted" : undefined,
@@ -1397,9 +1522,9 @@ export default function WeeklySalesGrid() {
                         top: HEADER_ROW1_HEIGHT,
                         fontWeight: 700,
                         fontSize: "0.68rem",
-                        bgcolor: mi % 2 === 0 ? "background.paper" : SHADE_COLOR,
-                        borderBottom: "2px solid",
-                        borderColor: "divider",
+                        bgcolor: HEAD_BG,
+                        color: COLORS.primary,
+                        borderBottom: `2px solid ${COLORS.borderDark}`,
                       }}
                     >
                       TOTAL
@@ -1479,8 +1604,8 @@ export default function WeeklySalesGrid() {
                               left: KEY_COL_WIDTH,
                               zIndex: 1,
                               bgcolor: MARKET_ROW_BG,
-                              borderRight: "1px solid",
                               borderColor: "divider",
+                              ...STICKY_EDGE_SX,
                             }}
                           />
                           {data.months.map((m) => {
@@ -1496,7 +1621,7 @@ export default function WeeklySalesGrid() {
                                     qty={series.cells[w.weekStart]}
                                   />
                                 ))}
-                                <TableCell align="right" sx={{ bgcolor: SHADE_COLOR }}>
+                                <TableCell align="right" sx={{ bgcolor: TOTAL_BG }}>
                                   <Typography variant="body2" sx={{ fontWeight: 700, color: ACTUAL_COLOR }}>
                                     {monthTotal > 0 ? formatNumber(monthTotal) : "—"}
                                   </Typography>
@@ -1589,8 +1714,8 @@ export default function WeeklySalesGrid() {
                             left: KEY_COL_WIDTH,
                             zIndex: 1,
                             bgcolor: "background.paper",
-                            borderRight: "1px solid",
                             borderColor: "divider",
+                            ...STICKY_EDGE_SX,
                           }}
                         >
                           {r.launchDate ? (
@@ -1621,7 +1746,7 @@ export default function WeeklySalesGrid() {
                         ))}
                         <TableCell
                           align="center"
-                          sx={{ bgcolor: "#fff7ed", borderLeft: "2px solid", borderColor: "divider" }}
+                          sx={{ position: "sticky", right: 0, zIndex: 1, bgcolor: SUGGESTED_BG, ...STICKY_EDGE_RIGHT_SX }}
                         >
                           <Typography
                             variant="body2"
@@ -1653,9 +1778,8 @@ export default function WeeklySalesGrid() {
                     left: 0,
                     bottom: totalStickyBottom,
                     zIndex: 3,
-                    bgcolor: SHADE_COLOR,
-                    borderTop: "2px solid",
-                    borderColor: "divider",
+                    bgcolor: HEAD_BG,
+                    borderTop: `2px solid ${COLORS.borderDark}`,
                   }}
                 >
                   <Stack direction="row" spacing={0.25} sx={{ alignItems: "center" }}>
@@ -1680,10 +1804,9 @@ export default function WeeklySalesGrid() {
                     left: KEY_COL_WIDTH,
                     bottom: totalStickyBottom,
                     zIndex: 3,
-                    bgcolor: SHADE_COLOR,
-                    borderRight: "1px solid",
-                    borderTop: "2px solid",
-                    borderColor: "divider",
+                    bgcolor: HEAD_BG,
+                    borderTop: `2px solid ${COLORS.borderDark}`,
+                    ...STICKY_EDGE_SX,
                   }}
                 />
                 {data.months.map((m) => (
@@ -1709,11 +1832,11 @@ export default function WeeklySalesGrid() {
                   sx={{
                     position: "sticky",
                     bottom: totalStickyBottom,
-                    zIndex: 2,
-                    bgcolor: "#fff7ed",
-                    borderLeft: "2px solid",
-                    borderColor: "divider",
-                    borderTop: "2px solid",
+                    right: 0,
+                    zIndex: 3,
+                    bgcolor: SUGGESTED_BG,
+                    borderTop: `2px solid ${COLORS.borderDark}`,
+                    ...STICKY_EDGE_RIGHT_SX,
                   }}
                 >
                   <Typography variant="body2" sx={{ fontWeight: 800, color: FORECAST_COLOR }}>
@@ -1755,8 +1878,8 @@ export default function WeeklySalesGrid() {
                         bottom: marketStickyBottoms[i] ?? 0,
                         zIndex: 3,
                         bgcolor: MARKET_ROW_BG,
-                        borderRight: "1px solid",
                         borderColor: "divider",
+                        ...STICKY_EDGE_SX,
                       }}
                     />
                     {data.months.map((m) => {
@@ -1791,7 +1914,7 @@ export default function WeeklySalesGrid() {
                               position: "sticky",
                               bottom: marketStickyBottoms[i] ?? 0,
                               zIndex: 2,
-                              bgcolor: SHADE_COLOR,
+                              bgcolor: TOTAL_BG,
                             }}
                           >
                             <Typography variant="body2" sx={{ fontWeight: 700, color: ACTUAL_COLOR }}>
@@ -1805,10 +1928,10 @@ export default function WeeklySalesGrid() {
                       sx={{
                         position: "sticky",
                         bottom: marketStickyBottoms[i] ?? 0,
-                        zIndex: 2,
+                        right: 0,
+                        zIndex: 3,
                         bgcolor: MARKET_ROW_BG,
-                        borderLeft: "2px solid",
-                        borderColor: "divider",
+                        ...STICKY_EDGE_RIGHT_SX,
                       }}
                     />
                   </TableRow>
@@ -1923,57 +2046,38 @@ export default function WeeklySalesGrid() {
       <Dialog
         open={lightboxStyle !== null}
         onClose={() => setLightboxStyle(null)}
-        maxWidth={false}
-        slotProps={{ paper: { sx: { bgcolor: "rgba(10,10,14,0.96)", boxShadow: "none", m: 0, maxHeight: "100vh" } } }}
+        maxWidth="sm"
+        fullWidth
       >
         {lightboxStyle && (
-          <Box
-            sx={{
-              position: "relative",
-              width: "100vw",
-              height: "100vh",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <IconButton
-              onClick={() => setLightboxStyle(null)}
-              sx={{ position: "absolute", top: 16, right: 16, color: "#fff", zIndex: 1 }}
-            >
-              <CloseIcon />
-            </IconButton>
-            {lightboxStyle.imageUrl ? (
-              <Box
-                component="img"
-                src={lightboxStyle.imageUrl}
-                alt={lightboxStyle.name}
-                sx={{ maxWidth: "92vw", maxHeight: "82vh", objectFit: "contain" }}
-              />
-            ) : (
-              <Stack spacing={1} sx={{ alignItems: "center", color: "rgba(255,255,255,0.7)" }}>
-                <ImageNotSupportedIcon sx={{ fontSize: 64 }} />
-                <Typography>No image on file</Typography>
-              </Stack>
-            )}
-            <Stack
-              direction="row"
-              spacing={1}
-             
-              sx={{ alignItems: "center", position: "absolute", bottom: 24, color: "#fff" }}
-            >
-              <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                {lightboxStyle.name}
-              </Typography>
-              {lightboxStyle.tier && (
-                <Chip
-                  label={lightboxStyle.tier}
-                  size="small"
-                  sx={{ bgcolor: "rgba(255,255,255,0.18)", color: "#fff", fontWeight: 700 }}
+          <>
+            <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1, pr: 7, fontWeight: 700 }}>
+              {lightboxStyle.name}
+              {lightboxStyle.tier && <Chip label={lightboxStyle.tier} size="small" sx={{ fontWeight: 700 }} />}
+              <IconButton
+                aria-label="Close"
+                onClick={() => setLightboxStyle(null)}
+                sx={{ position: "absolute", top: 12, right: 12, color: "text.secondary" }}
+              >
+                <CloseIcon />
+              </IconButton>
+            </DialogTitle>
+            <DialogContent dividers sx={{ display: "flex", justifyContent: "center", p: 3 }}>
+              {lightboxStyle.imageUrl ? (
+                <Box
+                  component="img"
+                  src={lightboxStyle.imageUrl}
+                  alt={lightboxStyle.name}
+                  sx={{ maxWidth: "100%", maxHeight: "70vh", objectFit: "contain", borderRadius: 2 }}
                 />
+              ) : (
+                <Stack spacing={1} sx={{ alignItems: "center", color: "text.secondary" }}>
+                  <ImageNotSupportedIcon sx={{ fontSize: 64 }} />
+                  <Typography>No image on file</Typography>
+                </Stack>
               )}
-            </Stack>
-          </Box>
+            </DialogContent>
+          </>
         )}
       </Dialog>
 

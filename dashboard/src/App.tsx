@@ -8,6 +8,7 @@ import ProductionLog from "@/pages/ProductionLog";
 import DesignSuggestions from "@/pages/DesignSuggestions";
 import WeeklySalesGrid, { SharedOverview } from "@/pages/WeeklySalesGrid";
 import { ApiError } from "@/services/api";
+import { COLORS } from "@/theme/colors";
 
 const isLoadingResponse = (error: unknown) => error instanceof ApiError && error.status === 503;
 
@@ -25,6 +26,7 @@ const queryClient = new QueryClient({
   },
 });
 
+// Original look, still used by every page except the Weekly Sales Report
 const theme = createTheme({
   palette: {
     mode: "light",
@@ -34,6 +36,34 @@ const theme = createTheme({
   shape: { borderRadius: 8 },
   typography: {
     fontFamily: '"Segoe UI", Roboto, system-ui, sans-serif',
+  },
+});
+
+// Same look as the Orlin portal theme - applied to the Weekly Sales Report only (for now)
+const portalTheme = createTheme({
+  palette: {
+    mode: "light",
+    primary: { main: COLORS.primary, light: COLORS.primaryHover, dark: COLORS.primaryDark, contrastText: "#ffffff" },
+    background: { default: COLORS.bgDefault, paper: COLORS.bgWhite },
+    text: { primary: COLORS.textPrimary, secondary: COLORS.textSecondary },
+    divider: COLORS.border,
+  },
+  shape: { borderRadius: 8 },
+  typography: {
+    fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
+    fontSize: 13,
+    body1: { fontSize: "0.8125rem" },
+    body2: { fontSize: "0.75rem" },
+    caption: { fontSize: "0.6875rem" },
+    button: { textTransform: "none", fontWeight: 600, fontSize: "0.8125rem" },
+  },
+  components: {
+    MuiButton: { styleOverrides: { root: { textTransform: "none", borderRadius: 8, fontWeight: 600, boxShadow: "none" } } },
+    MuiTab: { styleOverrides: { root: { textTransform: "none", fontWeight: 600, fontSize: "0.8125rem" } } },
+    // Row lines as light as the portal tables
+    MuiTableCell: { styleOverrides: { root: { borderBottomColor: COLORS.bgMuted } } },
+    MuiTextField: { defaultProps: { size: "small" } },
+    MuiSelect: { defaultProps: { size: "small" } },
   },
 });
 
@@ -58,13 +88,13 @@ export default function App() {
             <Box sx={{ flexGrow: 1, minWidth: 0 }}>
               <Box component="main" sx={{ p: 3 }}>
                 <Routes>
-                  <Route path="/" element={<WeeklySalesGrid />} />
+                  <Route path="/" element={<ThemeProvider theme={portalTheme}><WeeklySalesGrid /></ThemeProvider>} />
                   <Route path="/analysis/sub-category" element={<WithOverview><CategoryAnalysis key="subCategory" level="subCategory" /></WithOverview>} />
                   <Route path="/analysis/category" element={<WithOverview><CategoryAnalysis key="category" level="category" /></WithOverview>} />
                   <Route path="/analysis/tiers" element={<WithOverview><CategoryAnalysis key="tier" level="tier" /></WithOverview>} />
                   <Route path="/production-log" element={<WithOverview><ProductionLog /></WithOverview>} />
                   <Route path="/design-suggestions" element={<WithOverview><DesignSuggestions /></WithOverview>} />
-                  <Route path="/reports/weekly-sales" element={<WeeklySalesGrid />} />
+                  <Route path="/reports/weekly-sales" element={<ThemeProvider theme={portalTheme}><WeeklySalesGrid /></ThemeProvider>} />
                 </Routes>
               </Box>
             </Box>

@@ -1,5 +1,6 @@
 import { Box, Stack, Typography } from "@mui/material";
 import type { ReactNode } from "react";
+import { COLORS } from "@/theme/colors";
 
 interface PageHeaderProps {
   title: string;
@@ -12,10 +13,11 @@ export default function PageHeader({ title, subtitle, actions }: PageHeaderProps
     <Stack
       direction={{ xs: "column", sm: "row" }}
       spacing={1.5}
-      sx={{ justifyContent: "space-between", alignItems: { sm: "center" }, mb: 2.5 }}
+      sx={{ justifyContent: "space-between", alignItems: { sm: "center" }, mb: 1.5 }}
     >
       <Box>
-        <Typography variant="h5" sx={{ fontWeight: 800 }}>
+        {/* Page title: 15px / 700 / #111827, as in the portal. */}
+        <Typography sx={{ fontSize: "15px", fontWeight: 700, lineHeight: 1.4, color: COLORS.textPrimary }}>
           {title}
         </Typography>
         {subtitle && (
