@@ -75,6 +75,19 @@ export default function TrendStylesDialog({
   const selling = all.filter((s) => s[1] > 0).length;
   const totalNow = all.reduce((a, s) => a + s[1], 0);
   const totalBefore = all.reduce((a, s) => a + s[2], 0);
+  // How many of the best sellers make half of the pieces now (2026-10-29,
+  // user-requested) - those styles are marked in the table.
+  const halfSet = useMemo(() => {
+    const out = new Set<string>();
+    let sum = 0;
+    for (const [style, now] of [...all].sort((a, b) => b[1] - a[1])) {
+      if (sum >= totalNow / 2 || now <= 0) break;
+      out.add(style);
+      sum += now;
+    }
+    return out;
+  }, [all, totalNow]);
+  const halfShare = selling > 0 ? (halfSet.size / selling) * 100 : 0;
 
   const handleClose = () => {
     setSearch("");
@@ -97,7 +110,7 @@ export default function TrendStylesDialog({
   };
 
   return (
-    <Dialog open={item !== null} onClose={handleClose} fullScreen={phone} fullWidth maxWidth="md">
+    <Dialog open={item !== null} onClose={handleClose} fullScreen={phone} fullWidth maxWidth="lg">
       <DialogTitle sx={{ pr: 6, pb: 1 }}>
         <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
           <Typography variant="subtitle1" component="div" sx={{ fontWeight: 800, color: REPORT.actual }}>
@@ -122,6 +135,15 @@ export default function TrendStylesDialog({
           <Chip size="small" label={`${formatNumber(selling)} selling now`} sx={{ fontWeight: 700, bgcolor: COLORS.primaryBgSubtle, color: REPORT.good }} />
           <Chip size="small" label={`${formatNumber(totalNow)} pieces now`} sx={{ fontWeight: 700, bgcolor: COLORS.primaryBgSubtle, color: REPORT.forecastText }} />
           <Chip size="small" label={`${formatNumber(totalBefore)} pieces before`} sx={{ fontWeight: 700, bgcolor: COLORS.primaryBgSubtle, color: COLORS.textSecondary }} />
+          {halfSet.size > 0 && (
+            <Tooltip title={`The ${formatNumber(halfSet.size)} best-selling styles (${halfShare.toFixed(0)}% of the ${formatNumber(selling)} selling now) sold half of the ${formatNumber(totalNow)} pieces. They are marked ★ in the table.`}>
+              <Chip
+                size="small"
+                label={`★ ${formatNumber(halfSet.size)} ${halfSet.size === 1 ? "style makes" : "styles make"} 50% of sales`}
+                sx={{ fontWeight: 800, bgcolor: REPORT.actual, color: "#fff" }}
+              />
+            </Tooltip>
+          )}
         </Stack>
         <Stack direction="row" sx={{ alignItems: "center", flexWrap: "wrap", gap: 1, mb: 1 }}>
           <TextField
@@ -154,7 +176,17 @@ export default function TrendStylesDialog({
                 const change = r.before > 0 ? ((r.now - r.before) / r.before) * 100 : null;
                 return (
                   <TableRow key={r.style} hover sx={{ bgcolor: i % 2 ? REPORT.rowAltBg : undefined }}>
-                    <TableCell sx={{ fontWeight: 700, whiteSpace: "nowrap" }}>
+                    <TableCell
+                      sx={{
+                        fontWeight: 700, whiteSpace: "nowrap",
+                        boxShadow: halfSet.has(r.style) ? `inset 3px 0 0 ${REPORT.actual}` : undefined,
+                      }}
+                    >
+                      {halfSet.has(r.style) && (
+                        <Tooltip title="One of the styles that make 50% of the pieces now">
+                          <Box component="span" sx={{ color: REPORT.actual, mr: 0.5 }}>★</Box>
+                        </Tooltip>
+                      )}
                       {r.style}
                       {r.before === 0 && r.now > 0 && (
                         <Chip label="NEW" size="small" sx={{ ml: 0.75, height: 16, fontSize: "0.6rem", fontWeight: 800, bgcolor: REPORT.good, color: "#fff" }} />
