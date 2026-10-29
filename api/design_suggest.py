@@ -342,8 +342,12 @@ def _build(data) -> dict:
     frame = _chunk_frame(sales, snap, projection)
     lifecycle = _lifecycle(frame, styles, snap)
     tier_now = data._style_tier_map()       # catalog tier per style, for the Trend status styles popup
+    launch_of = _style_launch_dates(data)
     for st, info in lifecycle.get("styleInfo", {}).items():
         info["tier"] = tier_now.get(st.strip().upper(), "")
+        launched = launch_of.get(st.strip().upper(), "")       # days since launch (2026-10-29, user-requested)
+        info["launchDate"] = launched
+        info["daysSinceLaunch"] = (snap - date.fromisoformat(launched)).days if launched else None
     spikes, window["spike"] = _spikes(frame, styles, snap)
     for attr in TREND_STATUS_ATTRS:               # ⚡ on each Trend status row
         for r in lifecycle.get(attr, []):
