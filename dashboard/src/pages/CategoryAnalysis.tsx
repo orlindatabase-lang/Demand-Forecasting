@@ -58,21 +58,14 @@ const STYLE_PAGE_SIZE = 100; // style level: ~1,500 rows, rendered one page at a
 const METRICS = [
   { key: "styles", label: "STYLES", color: STYLE_COLOR },
   { key: "orders", label: "ORDERS", color: ORDER_COLOR },
-  // 2026-10-12, user-requested: the units cell also shows the average pieces
-  // per selling style (Units ÷ Styles) in brackets, e.g. "1,39,589 (274)".
-  { key: "units", label: "UNITS (PER STYLE)", color: UNIT_COLOR },
+  // The "(per style)" average in brackets was removed (2026-10-29, user-requested).
+  { key: "units", label: "UNITS", color: UNIT_COLOR },
   { key: "spike", label: "SPIKE", color: STYLE_COLOR },
 ] as const;
 
 /** Units ÷ Styles - average pieces per style that sold that month (null when no style sold). */
 function unitsPerStyle(c: { styles: number; units: number } | undefined): number | null {
   return c && c.styles > 0 ? c.units / c.styles : null;
-}
-
-/** Whole pieces from 10 up; one decimal below, so small averages still differ (e.g. 2.5). */
-function formatPerStyle(v: number | null): string {
-  if (v === null) return "—";
-  return v >= 10 ? formatNumber(v) : (Math.round(v * 10) / 10).toFixed(1);
 }
 
 interface Cell {
@@ -321,7 +314,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
   const isTier = level === "tier";
   const groupName = level === "category" ? "Category" : level === "style" ? "Style" : isTier ? "Tier" : "Sub Category";
   const metrics = isStyle
-    ? METRICS.filter((mt) => mt.key !== "styles").map((mt) => (mt.key === "units" ? { ...mt, label: "UNITS" } : mt))
+    ? METRICS.filter((mt) => mt.key !== "styles")
     : METRICS;
 
   // Catalog tier per style (Cloud SQL CatalogStyle.forecastStatus) - the same
@@ -482,21 +475,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
             </TableCell>
           )}
           <TableCell sx={{ ...base, color: ORDER_COLOR, fontWeight: bold ? 800 : 600 }}>{c ? formatNumber(c.orders) : "—"}</TableCell>
-          <TableCell sx={{ ...base, color: UNIT_COLOR, whiteSpace: "nowrap" }}>
-            {!c ? "—" : isStyle || c.styles <= 0 ? (
-              // a single style: units per style would just repeat its units
-              formatNumber(c.units)
-            ) : (
-              <Tooltip
-                title={`${formatNumber(c.units)} units ÷ ${formatNumber(c.styles)} styles = ${formatPerStyle(unitsPerStyle(c))} units per style${m === partialMonth ? ` (month so far, to ${dayLabel(dataThrough)})` : ""}`}
-              >
-                <span>
-                  {formatNumber(c.units)}{" "}
-                  <Box component="span" sx={{ color: STYLE_COLOR, fontWeight: bold ? 700 : 500 }}>({formatPerStyle(unitsPerStyle(c))})</Box>
-                </span>
-              </Tooltip>
-            )}
-          </TableCell>
+          <TableCell sx={{ ...base, color: UNIT_COLOR }}>{c ? formatNumber(c.units) : "—"}</TableCell>
           <TableCell sx={{ ...base, borderRight: 1, borderRightColor: "divider" }}>
             <Spike cell={c} month={m} partial={m === partialMonth} dataThrough={dataThrough} />
           </TableCell>
