@@ -87,7 +87,7 @@ export default function TrendStylesDialog({
     }
     return out;
   }, [all, totalNow]);
-  const halfShare = selling > 0 ? (halfSet.size / selling) * 100 : 0;
+  const halfShare = all.length > 0 ? (halfSet.size / all.length) * 100 : 0; // of ALL its styles, not only the selling ones
 
   const handleClose = () => {
     setSearch("");
@@ -136,7 +136,7 @@ export default function TrendStylesDialog({
           <Chip size="small" label={`${formatNumber(totalNow)} pieces now`} sx={{ fontWeight: 700, bgcolor: COLORS.primaryBgSubtle, color: REPORT.forecastText }} />
           <Chip size="small" label={`${formatNumber(totalBefore)} pieces before`} sx={{ fontWeight: 700, bgcolor: COLORS.primaryBgSubtle, color: COLORS.textSecondary }} />
           {halfSet.size > 0 && (
-            <Tooltip title={`The ${formatNumber(halfSet.size)} best-selling styles (${halfShare.toFixed(0)}% of the ${formatNumber(selling)} selling now) sold half of the ${formatNumber(totalNow)} pieces. They are marked ★ in the table.`}>
+            <Tooltip title={`The ${formatNumber(halfSet.size)} best-selling styles (${halfShare.toFixed(0)}% of all ${formatNumber(all.length)} styles) sold half of the ${formatNumber(totalNow)} pieces. They are marked ★ in the table.`}>
               <Chip
                 size="small"
                 label={`★ ${formatNumber(halfSet.size)} ${halfSet.size === 1 ? "style makes" : "styles make"} 50% of sales`}
