@@ -377,7 +377,7 @@ export interface DesignLifecycle {
   colour?: DesignLifecycleItem[];
   fabric?: DesignLifecycleItem[];
   neck?: DesignLifecycleItem[];
-  styleInfo?: Record<string, Record<"category" | "subCategory" | "colour" | "fabric" | "neck", string>>; // each listed style's attributes
+  styleInfo?: Record<string, Record<"category" | "subCategory" | "colour" | "fabric" | "neck" | "tier", string>>; // each listed style's attributes
 }
 
 /** The one rule set every section of the page uses (api design_suggest.rules()). */

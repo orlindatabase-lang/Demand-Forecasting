@@ -66,7 +66,8 @@ export default function TrendStylesDialog({
   const rows = useMemo(
     () => (item?.styles ?? [])
       .map(([style, now, before]) => ({ style, now, before, attrs: info[style] }))
-      .filter((r) => !q || r.style.toLowerCase().includes(q) || others.some((f) => (r.attrs?.[f] ?? "").toLowerCase().includes(q))),
+      .filter((r) => !q || r.style.toLowerCase().includes(q) || (r.attrs?.tier ?? "").toLowerCase() === q
+        || others.some((f) => (r.attrs?.[f] ?? "").toLowerCase().includes(q))),
     [item, info, q, others],
   );
   const all = item?.styles ?? [];
@@ -83,6 +84,7 @@ export default function TrendStylesDialog({
     downloadCsv(
       rowsToCsv(rows.map((r) => ({
         Style: r.style,
+        Tier: r.attrs?.tier ?? "",
         ...Object.fromEntries(others.map((f) => [LABEL[f], r.attrs?.[f] ?? ""])),
         [`Pieces ${nowWeeks} (so far)`]: r.now,
         [`Pieces ${beforeWeeks}`]: r.before,
@@ -136,6 +138,7 @@ export default function TrendStylesDialog({
             <TableHead>
               <TableRow>
                 <TableCell sx={head}>STYLE</TableCell>
+                <TableCell sx={head}>TIER</TableCell>
                 {others.map((f) => <TableCell key={f} sx={head}>{LABEL[f].toUpperCase()}</TableCell>)}
                 <TableCell sx={{ ...head, ...num, color: REPORT.forecastText }}>NOW</TableCell>
                 <TableCell sx={{ ...head, ...num }}>BEFORE</TableCell>
@@ -153,6 +156,7 @@ export default function TrendStylesDialog({
                         <Chip label="NEW" size="small" sx={{ ml: 0.75, height: 16, fontSize: "0.6rem", fontWeight: 800, bgcolor: REPORT.good, color: "#fff" }} />
                       )}
                     </TableCell>
+                    <TableCell sx={{ color: "text.secondary", fontWeight: 600 }}>{r.attrs?.tier || "—"}</TableCell>
                     {others.map((f) => (
                       <TableCell key={f} sx={{ color: "text.secondary" }}>{r.attrs?.[f] || "—"}</TableCell>
                     ))}
@@ -166,7 +170,7 @@ export default function TrendStylesDialog({
               })}
               {rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={others.length + 4}>
+                  <TableCell colSpan={others.length + 5}>
                     <Box sx={{ py: 2, textAlign: "center", color: "text.secondary" }}>
                       {all.length === 0 ? "No style sold in these 8 weeks" : "No styles"}
                     </Box>

@@ -341,6 +341,9 @@ def _build(data) -> dict:
     projection, window = _running_projection(data, sales, snap, styles)
     frame = _chunk_frame(sales, snap, projection)
     lifecycle = _lifecycle(frame, styles, snap)
+    tier_now = data._style_tier_map()       # catalog tier per style, for the Trend status styles popup
+    for st, info in lifecycle.get("styleInfo", {}).items():
+        info["tier"] = tier_now.get(st.strip().upper(), "")
     spikes, window["spike"] = _spikes(frame, styles, snap)
     for attr in TREND_STATUS_ATTRS:               # ⚡ on each Trend status row
         for r in lifecycle.get(attr, []):
