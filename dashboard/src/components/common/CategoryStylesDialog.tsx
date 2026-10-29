@@ -163,7 +163,6 @@ export default function CategoryStylesDialog({
                     {tab === "sold" && <TableCell sx={{ ...head, ...num, color: REPORT.forecastText }}>UNITS</TableCell>}
                     {tab === "sold" && <TableCell sx={{ ...head, ...num }}>ORDERS</TableCell>}
                     <TableCell sx={{ ...head, ...num }}>{prev.toUpperCase()}</TableCell>
-                    {tab === "sold" && <TableCell sx={{ ...head, ...num }}>SHARE</TableCell>}
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -181,9 +180,6 @@ export default function CategoryStylesDialog({
                           <TableCell sx={{ ...num, fontWeight: 700, color: REPORT.forecastText }}>{formatNumber(s.units)}</TableCell>
                           <TableCell sx={{ ...num, color: REPORT.actual }}>{formatNumber(s.orders)}</TableCell>
                           <TableCell sx={{ ...num, color: "text.secondary" }}>{s.prevUnits ? formatNumber(s.prevUnits) : "—"}</TableCell>
-                          <TableCell sx={{ ...num, color: "text.secondary" }}>
-                            {totalUnits > 0 ? `${((s.units / totalUnits) * 100).toFixed(1)}%` : "—"}
-                          </TableCell>
                         </TableRow>
                       ))
                     : stopped.map((s, i) => (
@@ -196,7 +192,7 @@ export default function CategoryStylesDialog({
                       ))}
                   {(tab === "sold" ? sold : stopped).length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={7}>
+                      <TableCell colSpan={6}>
                         <Box sx={{ py: 2, textAlign: "center", color: "text.secondary" }}>No styles</Box>
                       </TableCell>
                     </TableRow>
