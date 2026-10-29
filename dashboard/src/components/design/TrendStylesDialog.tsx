@@ -24,6 +24,7 @@ import CloseIcon from "@mui/icons-material/Close";
 import SearchIcon from "@mui/icons-material/Search";
 import DownloadIcon from "@mui/icons-material/Download";
 import { rowsToCsv, downloadCsv } from "@/components/common/ExportButton";
+import AboutButton from "./AboutButton";
 import type { DesignLifecycle, DesignLifecycleItem } from "@/types";
 import { formatNumber } from "@/utils/format";
 import { COLORS, REPORT, REPORT_HEAD_SX } from "@/theme/colors";
@@ -101,6 +102,7 @@ export default function TrendStylesDialog({
           {stage && (
             <Chip size="small" label={stage.title} sx={{ height: 20, fontWeight: 700, color: "#fff", bgcolor: stage.color }} />
           )}
+          <AboutButton topic="trendStyles" />
         </Stack>
         <Typography variant="caption" component="div" sx={{ color: "text.secondary" }}>
           Pieces sold in {nowWeeks} (so far) vs {beforeWeeks}
