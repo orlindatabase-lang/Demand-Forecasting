@@ -110,6 +110,13 @@ function shortDate(iso: string): string {
   return `${d} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1]}`;
 }
 
+/** "25 Jun 2024" (the Weekly Sales Report's launch dates), "—" if unknown. */
+function launchLabel(iso?: string): string {
+  if (!iso) return "—";
+  const [y] = iso.split("-");
+  return `${shortDate(iso)} ${y}`;
+}
+
 const SUB_STAGES = [
   { key: "both", label: "Trending + In trend" },
   { key: "trending", label: "Trending" },
@@ -173,6 +180,7 @@ function TrendingNow({ trending, window, lifecycle }: { trending: DesignTrending
             <TableHead>
               <TableRow sx={{ "& th": REPORT_HEAD_SX }}>
                 <TableCell>DESIGN</TableCell>
+                <TableCell>LAUNCH DATE</TableCell>
                 <TableCell>SUB CATEGORY</TableCell>
                 <TableCell>COLOUR</TableCell>
                 <TableCell>FABRIC</TableCell>
@@ -191,6 +199,7 @@ function TrendingNow({ trending, window, lifecycle }: { trending: DesignTrending
                       <Chip size="small" label="New launch" sx={{ ml: 1, height: 18, fontSize: "0.65rem", fontWeight: 700, bgcolor: "rgba(234,88,12,0.12)", color: "#c2410c" }} />
                     )}
                   </TableCell>
+                  <TableCell sx={{ whiteSpace: "nowrap", color: MUTED, fontVariantNumeric: "tabular-nums" }}>{launchLabel(st.launchDate)}</TableCell>
                   <TableCell>
                     {st.subCategory || "—"}
                     {STAGE_CHIP[stageOf.get(st.subCategory) ?? ""] && (

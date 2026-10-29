@@ -362,7 +362,7 @@ def _build(data) -> dict:
         "tiers": list(TIERS or ()),
         "tierStyles": int(sales["style"].nunique()),
         "model": model["info"] if model else None,
-        "trendingNow": _trending_now(sales, styles, snap, trend, mom),
+        "trendingNow": _trending_now(sales, styles, snap, trend, mom, _style_launch_dates(data)),
         "window": window,
         "rules": rules(),
         "lifecycle": lifecycle,
@@ -1140,7 +1140,19 @@ def _stage_maps(lifecycle: dict | None) -> dict[str, dict[str, str]]:
 # --------------------------------------------------------------------------- #
 # Trending now: styles and attribute values gaining in the last TREND_CHUNKS report weeks
 # --------------------------------------------------------------------------- #
-def _trending_now(sales, styles, snap: date, trend, mom=None) -> dict:
+def _style_launch_dates(data) -> dict[str, str]:
+    """{style: ISO launch date} - the earliest launch date of its SKUs, the
+    same as the Weekly Sales Report's LAUNCH DATE column."""
+    out: dict[str, str] = {}
+    for r in data.PLAN_ROWS:
+        if r.designNo and r.launchDate:
+            k = str(r.designNo).strip().upper()
+            if k not in out or r.launchDate < out[k]:
+                out[k] = r.launchDate
+    return out
+
+
+def _trending_now(sales, styles, snap: date, trend, mom=None, launch: dict[str, str] | None = None) -> dict:
     """Trending designs: the styles gaining the most in the last TREND_CHUNKS
     report weeks vs the TREND_CHUNKS before (new launches included) - same
     trend numbers and TREND_STRONG rule as everything else. Factor trends
@@ -1166,6 +1178,7 @@ def _trending_now(sales, styles, snap: date, trend, mom=None) -> dict:
             "growthPct": round((now / before - 1) * 100, 1) if before >= 10 else None,
             "gain": now - before,
             "newLaunch": bool(st in first_sale.index and first_sale[st] >= launch_cut),
+            "launchDate": (launch or {}).get(st, ""),  # 2026-10-29, user-requested column
             **{k: (str(a[k]) if a is not None and a[k] else "") for k in ("subCategory", "colour", "fabric", "neck", "sleeve")},
         })
     rows.sort(key=lambda r: r["gain"], reverse=True)

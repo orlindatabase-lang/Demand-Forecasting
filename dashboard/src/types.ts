@@ -400,6 +400,7 @@ export interface DesignTrendingStyle {
   beforeUnits: number; // real pieces in the 4 report weeks before
   growthPct: number | null;
   newLaunch: boolean;
+  launchDate?: string; // ISO, "" if unknown
   subCategory: string;
   colour: string;
   fabric: string;
