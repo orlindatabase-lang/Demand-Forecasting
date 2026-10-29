@@ -6,6 +6,7 @@ import TrendingDownIcon from "@mui/icons-material/TrendingDown";
 import DoNotDisturbOnOutlinedIcon from "@mui/icons-material/DoNotDisturbOnOutlined";
 import AutoGraphIcon from "@mui/icons-material/AutoGraph";
 import AboutButton from "./AboutButton";
+import TrendStylesDialog from "./TrendStylesDialog";
 import type { DesignLifecycle, DesignLifecycleItem, DesignSpike, DesignStage } from "@/types";
 import { COLORS, REPORT } from "@/theme/colors";
 
@@ -67,7 +68,7 @@ function Sparkline({ values, color }: { values: number[]; color: string }) {
   );
 }
 
-function ItemRow({ item, color, blocks, spikeWeek }: { item: DesignLifecycleItem; color: string; blocks: DesignLifecycle["blocks"]; spikeWeek: string }) {
+function ItemRow({ item, color, blocks, spikeWeek, onOpen }: { item: DesignLifecycleItem; color: string; blocks: DesignLifecycle["blocks"]; spikeWeek: string; onOpen: () => void }) {
   const tip = (
     <Box>
       <Typography variant="caption" sx={{ fontWeight: 700, display: "block" }}>Share of sales, 4 report weeks at a time</Typography>
@@ -81,11 +82,21 @@ function ItemRow({ item, color, blocks, spikeWeek }: { item: DesignLifecycleItem
           ? `${item.realNowUnits.toLocaleString("en-IN")} pieces sold so far${item.expectedUnits ? ` + ~${item.expectedUnits.toLocaleString("en-IN")} expected this week` : ""}`
           : `${item.nowUnits.toLocaleString("en-IN")} pieces in the last 4 weeks`} · {item.activeStyles} designs selling
       </Typography>
+      <Typography variant="caption" sx={{ display: "block", mt: 0.5, fontWeight: 700 }}>Click to see its styles</Typography>
     </Box>
   );
   return (
     <Tooltip title={tip} placement="left">
-      <Box sx={{ py: 0.6, borderTop: "1px solid", borderColor: "divider" }}>
+      <Box
+        role="button"
+        tabIndex={0}
+        onClick={onOpen}
+        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onOpen())}
+        sx={{
+          py: 0.6, px: 0.5, mx: -0.5, borderTop: "1px solid", borderColor: "divider", borderRadius: 0.5, cursor: "pointer",
+          "&:hover": { bgcolor: COLORS.primaryBgLight }, "&:focus-visible": { outline: 2, outlineColor: ACCENT },
+        }}
+      >
         <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
           <Typography variant="body2" sx={{ fontWeight: 700, flexGrow: 1, minWidth: 0 }} noWrap>{item.value}</Typography>
           {item.spike && <SpikeBadge spike={item.spike} week={spikeWeek} />}
@@ -97,13 +108,14 @@ function ItemRow({ item, color, blocks, spikeWeek }: { item: DesignLifecycleItem
         <Typography variant="caption" sx={{ color: MUTED, display: "block", mt: 0.25 }}>
           {item.nowShare.toFixed(1)}% of sales now
           {item.fromPeakPct !== null && item.fromPeakPct < -5 ? ` · ${Math.abs(item.fromPeakPct).toFixed(0)}% below its best` : ""}
+          {item.styles ? ` · ${item.styles.length} ${item.styles.length === 1 ? "style" : "styles"}` : ""}
         </Typography>
       </Box>
     </Tooltip>
   );
 }
 
-function StageColumn({ stage, items, blocks, spikeWeek }: { stage: (typeof STAGES)[number]; items: DesignLifecycleItem[]; blocks: DesignLifecycle["blocks"]; spikeWeek: string }) {
+function StageColumn({ stage, items, blocks, spikeWeek, onOpen }: { stage: (typeof STAGES)[number]; items: DesignLifecycleItem[]; blocks: DesignLifecycle["blocks"]; spikeWeek: string; onOpen: (it: DesignLifecycleItem) => void }) {
   const [all, setAll] = useState(false);
   const shown = all ? items : items.slice(0, SHOW);
   const { Icon } = stage;
@@ -117,7 +129,7 @@ function StageColumn({ stage, items, blocks, spikeWeek }: { stage: (typeof STAGE
       <Typography variant="caption" sx={{ color: MUTED, display: "block", mb: 0.75 }}>{stage.hint}</Typography>
       {items.length === 0 && <Typography variant="body2" sx={{ color: MUTED, py: 1 }}>None right now.</Typography>}
       {shown.map((it) => (
-        <ItemRow key={it.value} item={it} color={stage.color} blocks={blocks} spikeWeek={spikeWeek} />
+        <ItemRow key={it.value} item={it} color={stage.color} blocks={blocks} spikeWeek={spikeWeek} onOpen={() => onOpen(it)} />
       ))}
       {items.length > SHOW && (
         <Button size="small" onClick={() => setAll((v) => !v)} sx={{ mt: 0.5, textTransform: "none", fontWeight: 700 }}>
@@ -133,6 +145,8 @@ function StageColumn({ stage, items, blocks, spikeWeek }: { stage: (typeof STAGE
  * same stages feed the model and the scores on the rest of the page. */
 export default function TrendStatus({ lifecycle, note = "", spikeWeek = "this week" }: { lifecycle: DesignLifecycle; note?: string; spikeWeek?: string }) {
   const [factor, setFactor] = useState<(typeof FACTORS)[number]["key"]>("subCategory");
+  // The row whose styles are shown in the popup (2026-10-29, user-requested).
+  const [opened, setOpened] = useState<DesignLifecycleItem | null>(null);
   const items = lifecycle[factor] ?? [];
   const spiking = items.filter((it) => it.spike).length;
   const first = lifecycle.blocks[0];
@@ -168,9 +182,16 @@ export default function TrendStatus({ lifecycle, note = "", spikeWeek = "this we
       </Stack>
       <Stack direction="row" sx={{ flexWrap: "wrap", gap: 1.5 }}>
         {STAGES.map((st) => (
-          <StageColumn key={`${factor}-${st.key}`} stage={st} items={items.filter((it) => it.stage === st.key)} blocks={lifecycle.blocks} spikeWeek={spikeWeek} />
+          <StageColumn key={`${factor}-${st.key}`} stage={st} items={items.filter((it) => it.stage === st.key)} blocks={lifecycle.blocks} spikeWeek={spikeWeek} onOpen={setOpened} />
         ))}
       </Stack>
+      <TrendStylesDialog
+        item={opened}
+        factor={factor}
+        stage={STAGES.find((st) => st.key === opened?.stage)}
+        lifecycle={lifecycle}
+        onClose={() => setOpened(null)}
+      />
     </Paper>
   );
 }

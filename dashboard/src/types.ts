@@ -355,6 +355,7 @@ export interface DesignLifecycleItem {
   onSale: boolean;
   gain: number; // share points gained vs the block before
   spike?: DesignSpike | null; // sudden jump in its share of one report week (window.spike.week)
+  styles?: [string, number, number][]; // [style, pieces in the latest block so far, pieces in the block before]
 }
 /** The report weeks behind every "now" number (Weekly Sales Report's W1-W4). */
 export interface DesignWindow {
@@ -376,6 +377,7 @@ export interface DesignLifecycle {
   colour?: DesignLifecycleItem[];
   fabric?: DesignLifecycleItem[];
   neck?: DesignLifecycleItem[];
+  styleInfo?: Record<string, Record<"category" | "subCategory" | "colour" | "fabric" | "neck", string>>; // each listed style's attributes
 }
 
 /** The one rule set every section of the page uses (api design_suggest.rules()). */

@@ -1008,6 +1008,15 @@ def _lifecycle(frame, styles, snap: date) -> dict:
         blocks.append({"from": _chunk_bounds(first_o)[0].isoformat(), "to": _chunk_bounds(last_o)[1].isoformat(),
                        "weeks": f"{_chunk_label(first_o)} – {_chunk_label(last_o)}"})
     out = {"blocks": blocks}
+    # The styles behind each value (2026-10-29, user-requested: which styles
+    # make up a Sub Category / Colour / Fabric / Neck): real pieces in the
+    # latest block (so far) and the block before, and each style's attributes once.
+    real = recent[~recent["proj"]]
+    style_now = real[real["block"] == LIFE_BLOCKS - 1].groupby("style")["qty"].sum()
+    style_before = real[real["block"] == LIFE_BLOCKS - 2].groupby("style")["qty"].sum()
+    listed = sorted(set(style_now[style_now > 0].index) | set(style_before[style_before > 0].index))
+    out["styleInfo"] = {st: {k: str(attrs.at[st, k]) if k in attrs.columns else "" for k in TREND_STATUS_ATTRS}
+                        for st in listed if st in attrs.index}
     for attr in TREND_STATUS_ATTRS:
         if attr not in attrs.columns:
             out[attr] = []
@@ -1020,6 +1029,11 @@ def _lifecycle(frame, styles, snap: date) -> dict:
         real_now = fv[(fv["block"] == LIFE_BLOCKS - 1) & ~fv["proj"] & (fv["qty"] > 0)]
         active_now = real_now.groupby("value")["style"].nunique()
         real_units_now = real_now.groupby("value")["qty"].sum()
+        members: dict = {}
+        for st in listed:
+            v = attrs.at[st, attr] if st in attrs.index else ""
+            if v:
+                members.setdefault(v, []).append(st)
         rows = []
         for value, u in units.iterrows():
             if u.max() < ON_SALE_MIN_UNITS:
@@ -1050,6 +1064,10 @@ def _lifecycle(frame, styles, snap: date) -> dict:
                 "expectedUnits": int(round(u[LIFE_BLOCKS - 1] - real_units_now.get(value, 0.0))),
                 "activeStyles": int(active_now.get(value, 0)),
                 "onSale": bool(on_sale), "gain": round(now - before, 2),
+                # [style, pieces now (so far), pieces in the block before], biggest first
+                "styles": sorted(([st, int(round(style_now.get(st, 0.0))), int(round(style_before.get(st, 0.0)))]
+                                  for st in members.get(value, ())),
+                                 key=lambda x: (-x[1], -x[2], x[0])),
             })
         # Trending: biggest gain in share first, so a tiny value jumping from
         # 0.02% to 0.2% does not outrank a real mover.
