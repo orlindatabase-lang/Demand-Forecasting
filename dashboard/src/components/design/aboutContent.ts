@@ -97,7 +97,7 @@ export const ABOUT: Record<AboutKey, AboutContent> = {
       {
         heading: "What it shows",
         points: [
-          "The individual designs (design numbers) whose sales are growing the fastest right now.",
+          "Every design (design number) whose sales are growing right now and whose sub category is ▲ Trending or ● In trend in Trend status. Use the buttons to see only one of the two.",
           "\"New launch\" means the design started selling in the last 8 weeks.",
           "This table is about single designs only. For colours, fabrics, necks and product types, see Trend status above.",
         ],

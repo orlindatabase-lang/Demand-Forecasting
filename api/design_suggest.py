@@ -1181,7 +1181,7 @@ def _trending_now(sales, styles, snap: date, trend, mom=None) -> dict:
         "nowWeeks": f"{_chunk_label(o - TREND_CHUNKS + 1)} – {_chunk_label(o)}",
         "beforeWeeks": f"{_chunk_label(o - 2 * TREND_CHUNKS + 1)} – {_chunk_label(o - TREND_CHUNKS)}",
         "runningWeek": _chunk_label(o),
-        "styles": rows[:20],
+        "styles": rows,  # every growing design (2026-10-29, user-requested: was the top 20)
     }
 
 

@@ -13,6 +13,7 @@ import {
   TableCell,
   TableContainer,
   TableHead,
+  TablePagination,
   TableRow,
   ToggleButton,
   ToggleButtonGroup,
@@ -109,21 +110,65 @@ function shortDate(iso: string): string {
   return `${d} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1]}`;
 }
 
+const SUB_STAGES = [
+  { key: "both", label: "Trending + In trend" },
+  { key: "trending", label: "Trending" },
+  { key: "steady", label: "In trend" },
+] as const;
+const STAGE_CHIP: Record<string, { label: string; color: string }> = {
+  trending: { label: "Trending", color: "#0ca30c" },
+  steady: { label: "In trend", color: ACCENT },
+};
+
 /** Trending designs: the designs selling more right now (last 4 report weeks
- * vs the 4 before) - the same for both seasons. Factor trends are in Trend status. */
-function TrendingNow({ trending, window }: { trending: DesignTrendingNow; window?: DesignWindow }) {
+ * vs the 4 before) - the same for both seasons. Factor trends are in Trend status.
+ * Every growing design whose sub category is Trending or In trend in Trend
+ * status (2026-10-29, user-requested: was the top 20 of all). */
+function TrendingNow({ trending, window, lifecycle }: { trending: DesignTrendingNow; window?: DesignWindow; lifecycle?: DesignLifecycle }) {
   const running = trending.runningWeek ?? window?.runningWeek ?? "this week";
+  const [subStage, setSubStage] = useState<(typeof SUB_STAGES)[number]["key"]>("both");
+  const stageOf = useMemo(() => new Map((lifecycle?.subCategory ?? []).map((it) => [it.value, it.stage as string])), [lifecycle]);
+  const inStage = useMemo(
+    () => trending.styles.filter((st) => ["trending", "steady"].includes(stageOf.get(st.subCategory) ?? "")),
+    [trending, stageOf],
+  );
+  const count = (k: string) => (k === "both" ? inStage.length : inStage.filter((st) => stageOf.get(st.subCategory) === k).length);
+  const rows = subStage === "both" ? inStage : inStage.filter((st) => stageOf.get(st.subCategory) === subStage);
+  // Paging (2026-10-29, user-requested): 25 a page, or All.
+  const [page, setPage] = useState(0);
+  const [perPage, setPerPage] = useState(25);
+  const lastPage = perPage < 0 ? 0 : Math.max(0, Math.ceil(rows.length / perPage) - 1);
+  const pageNo = Math.min(page, lastPage);
+  const shown = perPage < 0 ? rows : rows.slice(pageNo * perPage, (pageNo + 1) * perPage);
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
       <SectionTitle
         icon={<WhatshotIcon fontSize="small" sx={{ color: "#ea580c" }} />}
         title="Trending designs"
-        hint={`Designs whose sales are going up the fastest: ${trending.nowWeeks ?? `${shortDate(trending.nowFrom)} – ${shortDate(trending.nowTo)}`} compared with ${trending.beforeWeeks ?? "the 4 weeks before"}. Pieces are real sales; growth also counts the rest of ${running} by its forecast (hover a growth number to see how).`}
+        hint={`Every design selling more in a Trending or In trend sub category, biggest gain first: ${trending.nowWeeks ?? `${shortDate(trending.nowFrom)} – ${shortDate(trending.nowTo)}`} compared with ${trending.beforeWeeks ?? "the 4 weeks before"}. Pieces are real sales; growth also counts the rest of ${running} by its forecast (hover a growth number to see how).`}
         topic="trending"
       />
-      {trending.styles.length === 0 && <Typography variant="body2" sx={{ color: MUTED }}>No design is growing fast right now.</Typography>}
-      {trending.styles.length > 0 && (
-        <TableContainer sx={{ maxHeight: 420 }}>
+      <ToggleButtonGroup
+        exclusive
+        size="small"
+        value={subStage}
+        onChange={(_e, v) => {
+          if (v) {
+            setSubStage(v);
+            setPage(0);
+          }
+        }}
+        sx={{ mb: 1.25, flexWrap: "wrap", "& .MuiToggleButton-root": { textTransform: "none", fontWeight: 700, px: 1.5 } }}
+      >
+        {SUB_STAGES.map((o) => (
+          <ToggleButton key={o.key} value={o.key} sx={{ "&.Mui-selected": { bgcolor: ACCENT, color: "#fff", "&:hover": { bgcolor: ACCENT } } }}>
+            {o.label} ({formatNumber(count(o.key))})
+          </ToggleButton>
+        ))}
+      </ToggleButtonGroup>
+      {rows.length === 0 && <Typography variant="body2" sx={{ color: MUTED }}>No design is growing fast right now.</Typography>}
+      {rows.length > 0 && (
+        <TableContainer sx={{ maxHeight: 520 }}>
           <Table size="small" stickyHeader>
             <TableHead>
               <TableRow sx={{ "& th": REPORT_HEAD_SX }}>
@@ -138,7 +183,7 @@ function TrendingNow({ trending, window }: { trending: DesignTrendingNow; window
               </TableRow>
             </TableHead>
             <TableBody>
-              {trending.styles.map((st) => (
+              {shown.map((st) => (
                 <TableRow key={st.style} hover>
                   <TableCell sx={{ fontWeight: 700, whiteSpace: "nowrap" }}>
                     {st.style}
@@ -146,7 +191,16 @@ function TrendingNow({ trending, window }: { trending: DesignTrendingNow; window
                       <Chip size="small" label="New launch" sx={{ ml: 1, height: 18, fontSize: "0.65rem", fontWeight: 700, bgcolor: "rgba(234,88,12,0.12)", color: "#c2410c" }} />
                     )}
                   </TableCell>
-                  <TableCell>{st.subCategory || "—"}</TableCell>
+                  <TableCell>
+                    {st.subCategory || "—"}
+                    {STAGE_CHIP[stageOf.get(st.subCategory) ?? ""] && (
+                      <Chip
+                        size="small"
+                        label={STAGE_CHIP[stageOf.get(st.subCategory) ?? ""].label}
+                        sx={{ ml: 0.75, height: 18, fontSize: "0.62rem", fontWeight: 700, color: "#fff", bgcolor: STAGE_CHIP[stageOf.get(st.subCategory) ?? ""].color }}
+                      />
+                    )}
+                  </TableCell>
                   <TableCell>{st.colour || "—"}</TableCell>
                   <TableCell>{st.fabric || "—"}</TableCell>
                   <TableCell sx={{ color: MUTED, fontSize: "0.8rem" }}>{[st.neck, st.sleeve].filter(Boolean).join(" · ")}</TableCell>
@@ -170,6 +224,21 @@ function TrendingNow({ trending, window }: { trending: DesignTrendingNow; window
             </TableBody>
           </Table>
         </TableContainer>
+      )}
+      {rows.length > 0 && (
+        <TablePagination
+          component="div"
+          count={rows.length}
+          page={pageNo}
+          onPageChange={(_e, p) => setPage(p)}
+          rowsPerPage={perPage}
+          rowsPerPageOptions={[25, 50, 100, { label: "All", value: -1 }]}
+          onRowsPerPageChange={(e) => {
+            setPerPage(Number(e.target.value));
+            setPage(0);
+          }}
+          labelRowsPerPage="Designs per page:"
+        />
       )}
     </Paper>
   );
@@ -211,7 +280,7 @@ function SeasonView({
     <Stack spacing={2.5}>
       {/* What is happening: trend stages (with sudden spikes), designs taking off, and what the model learned */}
       {lifecycle && <TrendStatus lifecycle={lifecycle} note={runningNote(window)} spikeWeek={window?.spike?.week} />}
-      {trending && <TrendingNow trending={trending} window={window} />}
+      {trending && <TrendingNow trending={trending} window={window} lifecycle={lifecycle} />}
       {(boosts.length > 0 || drags.length > 0) && (
         <Paper variant="outlined" sx={{ p: 2 }}>
           <SectionTitle
