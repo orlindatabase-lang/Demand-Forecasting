@@ -28,27 +28,8 @@ export const ABOUT: Record<AboutKey, AboutContent> = {
       {
         heading: "What it shows",
         points: [
-          "Every design in this Sub Category, Colour, Fabric or Neck that sold in the last 8 report weeks, and how many pieces each one sold.",
-          "It shows which designs are behind the trend. For example, if a sub-category is Trending, you can see whether one design is driving it or many designs are growing together.",
-          "The trend stage (Trending, In trend, Starting to fade, Out of trend) is the one on the Trend status card.",
-        ],
-      },
-      {
-        heading: "Reading a row",
-        points: [
-          "NOW = real pieces sold in the latest 4 report weeks (the running week only up to today). BEFORE = pieces sold in the 4 report weeks before that. Report weeks are W1 1-7, W2 8-15, W3 16-23, W4 24-end.",
-          "CHANGE = NOW vs BEFORE. ▲ green = selling more, ▼ red = selling less. The running week is not finished yet, so NOW can still go up.",
-          "NEW = the design did not sell in the earlier 4 weeks.",
-          "The other columns are the design's other features: on a Sub Category you see its Colour, Fabric and Neck; on a Colour you see its Sub Category, Fabric and Neck, and so on.",
-          "At the top: the number of designs, how many sold at least one piece now, and the total pieces now and before. The total NOW matches the pieces on the Trend status card (it counts real sales only, not the running week's forecast).",
-        ],
-      },
-      {
-        heading: "What to do",
-        points: [
-          "Designs at the top with a big ▲ are the ones to push or make more of.",
-          "If one design makes most of the pieces, the trend depends on it. Watch its stock rather than the whole sub-category.",
-          "Use the search to find designs with a colour or fabric, and Export CSV to share the list.",
+          "The designs behind this trend and the pieces each sold: NOW = latest 4 report weeks (so far), BEFORE = the 4 weeks before.",
+          "▲ green = selling more, ▼ red = selling less, NEW = did not sell before.",
         ],
       },
     ],
