@@ -30,6 +30,7 @@ import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import PageHeader from "@/components/common/PageHeader";
 import CategoryAnalysisCharts from "@/components/charts/CategoryAnalysisCharts";
 import TierSpikeChart from "@/components/charts/TierSpikeChart";
+import CategoryStylesDialog, { type StylesCellSelection } from "@/components/common/CategoryStylesDialog";
 import { rowsToCsv, downloadCsv } from "@/components/common/ExportButton";
 import { LoadingSkeleton, ErrorState } from "@/components/common/StateViews";
 import { useCatalogStyleTiers, useCategoryAnalysis, useCategoryAnalysisChannels } from "@/hooks/useDashboardData";
@@ -197,6 +198,9 @@ const STYLE_ROW_BG = COLORS.primaryBgSubtle; // an expanded tier's style rows
 
 /** main = a table row, child = a style inside an opened tier, channel = a marketplace row. */
 type RowVariant = "main" | "child" | "channel";
+/** Which row a cell belongs to - the STYLES cell opens that row's styles. */
+type RowCtx = { group: string; channel?: string };
+type RenderCells = (cells: Record<string, Cell>, bold: boolean, variant?: RowVariant, ctx?: RowCtx) => ReactNode;
 
 /** Natural tier order: T0, T1, T2, T3, T11, T12, ... then Unclassified. */
 function tierRank(tier: string): number {
@@ -242,7 +246,7 @@ function ChannelRows({
   level: Level;
   group: string;
   colSpan: number;
-  renderCells: (cells: Record<string, Cell>, bold: boolean, variant?: RowVariant) => ReactNode;
+  renderCells: RenderCells;
   indent?: number;
   filter?: CategoryFilter;
 }) {
@@ -270,7 +274,7 @@ function ChannelRows({
           <TableCell sx={stickyCell}>
             <Typography variant="body2" sx={{ color: "text.secondary", fontWeight: 600 }}>{c.group}</Typography>
           </TableCell>
-          {renderCells(c.months, false, "channel")}
+          {renderCells(c.months, false, "channel", { group, channel: c.group })}
         </TableRow>
       ))}
     </>
@@ -289,6 +293,8 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
   const [page, setPage] = useState(0);
   // Rows opened to show their channel (marketplace) breakdown.
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  // The STYLES cell whose styles are shown in the popup (2026-10-29, user-requested).
+  const [stylesSel, setStylesSel] = useState<StylesCellSelection | null>(null);
   const toggleExpanded = (group: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -434,7 +440,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
     downloadCsv(rowsToCsv(rows), isStyle || isTier ? "tiers_spike_rate" : `category_analysis_${level}`);
   };
 
-  const renderCells = (cells: Record<string, Cell>, bold: boolean, variant: RowVariant = "main") =>
+  const renderCells: RenderCells = (cells, bold, variant = "main", ctx) =>
     months.map((m, i) => {
       const c = cells[m];
       const bg = variant === "channel" ? CHANNEL_BG : variant === "child" ? STYLE_ROW_BG : MONTH_BG[i % 2];
@@ -450,16 +456,27 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                 <Tooltip
                   title={c.newStyles !== undefined
                     ? `${shortMonth(prevMonth(m))}: ${formatNumber(c.styles - c.newStyles + (c.stoppedStyles ?? 0))} styles → ${shortMonth(m)}${m === partialMonth ? " so far" : ""}: ${formatNumber(c.styles)} · ${formatNumber(c.newStyles)} new (did not sell in ${shortMonth(prevMonth(m))}) · ${formatNumber(c.stoppedStyles ?? 0)} stopped (sold in ${shortMonth(prevMonth(m))}, not ${m === partialMonth ? "yet " : ""}in ${shortMonth(m)})`
-                    : ""}
+                    + " · click to see the styles"
+                    : "Click to see the styles"}
                 >
-                  <span>
+                  <Box
+                    component="button"
+                    type="button"
+                    onClick={() => ctx && setStylesSel({ group: ctx.group, channel: ctx.channel, month: m })}
+                    sx={{
+                      all: "unset", cursor: "pointer", borderRadius: 0.5, px: 0.25,
+                      textDecoration: "underline dotted", textUnderlineOffset: 3,
+                      "&:hover": { color: REPORT.actual, bgcolor: COLORS.primaryBgLight, textDecorationStyle: "solid" },
+                      "&:focus-visible": { outline: 2, outlineColor: REPORT.actual },
+                    }}
+                  >
                     {formatNumber(c.styles)}
                     {c.newStyles !== undefined && (c.newStyles > 0 || (c.stoppedStyles ?? 0) > 0) && (
                       <Box component="span" sx={{ color: "text.secondary", fontWeight: 400, fontSize: "0.85em", ml: 0.5 }}>
                         (+{formatNumber(c.newStyles)} / −{formatNumber(c.stoppedStyles ?? 0)})
                       </Box>
                     )}
-                  </span>
+                  </Box>
                 </Tooltip>
               )}
             </TableCell>
@@ -714,7 +731,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                               <Typography variant="caption" sx={{ color: "text.secondary", pl: 2.25 }}>{data.subCategoryOf[g.group]}</Typography>
                             )}
                           </TableCell>
-                          {renderCells(g.months, false)}
+                          {renderCells(g.months, false, "main", { group: g.group })}
                         </TableRow>
                         {open && (
                           <ChannelRows level={level} group={g.group} colSpan={months.length * metrics.length} renderCells={renderCells} filter={tableFilter} />
@@ -729,7 +746,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                         {formatNumber(filtered.length)} {level === "category" ? "categories" : isStyle ? "styles" : isTier ? "tiers" : "sub categories"}
                       </Typography>
                     </TableCell>
-                    {renderCells(totals, true)}
+                    {renderCells(totals, true, "main", { group: "" })}
                   </TableRow>
                 </TableBody>
               </Table>
@@ -745,6 +762,8 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
               />
             )}
           </Paper>
+
+          <CategoryStylesDialog level={level} sel={stylesSel} filter={tableFilter} onClose={() => setStylesSel(null)} />
 
           <Box sx={{ mt: 3 }}>
             {isTier ? (

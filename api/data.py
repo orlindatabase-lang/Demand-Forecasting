@@ -3291,6 +3291,33 @@ def _category_channel_frame():
     return frame
 
 
+def _category_group_mask(base, level: str, group: str, category: str = "", sub_category: str = "",
+                         tier_mode: str = "current"):
+    """Rows of _category_channel_frame() that belong to one Category / Sub
+    Category / Style / Tier row of the Category Analysis tables (blank
+    ``group`` = every row, i.e. the TOTAL row), after the Category / Sub
+    Category filters."""
+    import pandas as pd
+
+    if not group:
+        mask = pd.Series(True, index=base.index)
+    elif level == "style":
+        mask = base["style"] == group
+    elif level == "tier" and tier_mode == "sale":
+        sale_date = pd.to_datetime(base["month"] + "-" + base["day"].astype(int).astype(str).str.zfill(2))
+        mask = pd.Series((_tier_at_sale(base["style"], sale_date) == group).to_numpy(), index=base.index)
+    elif level == "tier":
+        tier_of = _style_tier_map()
+        members = {d for d in base["style"].unique() if (tier_of.get(d.strip().upper()) or "Unclassified") == group}
+        mask = base["style"].isin(members)
+    else:
+        group_of = design_attributes.category_of if level == "category" else design_attributes.sub_category_of
+        members = {d for d in base["style"].unique() if (group_of(d) or "Unclassified") == group}
+        mask = base["style"].isin(members)
+    keep = _category_filter_mask(base["style"], category, sub_category)
+    return mask & keep if keep is not None else mask
+
+
 def get_category_analysis_channels(level: str, group: str, category: str = "", sub_category: str = "",
                                    tier_mode: str = "current") -> dict:
     """Channel drill-down of one Category / Sub Category / Style row of the
@@ -3311,24 +3338,7 @@ def get_category_analysis_channels(level: str, group: str, category: str = "", s
     base = _category_channel_frame()
     if base is None or base.empty:
         return out
-    if level == "style":
-        mask = base["style"] == group
-    elif level == "tier" and tier_mode == "sale":
-        sale_date = pd.to_datetime(base["month"] + "-" + base["day"].astype(int).astype(str).str.zfill(2))
-        mask = (_tier_at_sale(base["style"], sale_date) == group).to_numpy()
-        mask = pd.Series(mask, index=base.index)
-    elif level == "tier":
-        tier_of = _style_tier_map()
-        members = {d for d in base["style"].unique() if (tier_of.get(d.strip().upper()) or "Unclassified") == group}
-        mask = base["style"].isin(members)
-    else:
-        group_of = design_attributes.category_of if level == "category" else design_attributes.sub_category_of
-        members = {d for d in base["style"].unique() if (group_of(d) or "Unclassified") == group}
-        mask = base["style"].isin(members)
-    keep = _category_filter_mask(base["style"], category, sub_category)
-    if keep is not None:
-        mask = mask & keep
-    frame = base[mask]
+    frame = base[_category_group_mask(base, level, group, category, sub_category, tier_mode)]
     if frame.empty:
         return out
     rows, partial_month = _month_group_rows(frame, count_styles=True)
@@ -3336,6 +3346,55 @@ def get_category_analysis_channels(level: str, group: str, category: str = "", s
     if len(_CATEGORY_CHANNELS_CACHE) > 256:
         _CATEGORY_CHANNELS_CACHE.clear()
     _CATEGORY_CHANNELS_CACHE[cache_key] = out
+    return out
+
+
+def get_category_analysis_styles(level: str, group: str, month: str, channel: str = "", category: str = "",
+                                 sub_category: str = "", tier_mode: str = "current") -> dict:
+    """The styles behind one STYLES cell of the Category Analysis tables
+    (2026-10-29, user-requested: click the style count to see which styles
+    sold and how much). ``group`` blank = the TOTAL row; ``channel`` = a
+    marketplace sub-row. Per style: units and orders that month, the previous
+    month's units and whether it is new (did not sell in the whole previous
+    month); plus the stopped styles (sold in the previous month, not this one)
+    - the same rules as the +new / -stopped figures next to the count."""
+    import pandas as pd
+
+    if level not in _CATEGORY_LEVELS:
+        raise ValueError(f"level must be one of {_CATEGORY_LEVELS}, got {level!r}")
+    tier_mode = "sale" if level == "tier" and tier_mode == "sale" else "current"
+    prev = str(pd.Period(month, freq="M") - 1)
+    out = {"level": level, "group": group, "channel": channel, "month": month, "prevMonth": prev,
+           "partial": month == f"{SNAPSHOT_DATE.year:04d}-{SNAPSHOT_DATE.month:02d}",
+           "dataThrough": SNAPSHOT_DATE.isoformat(), "styles": [], "stopped": []}
+    base = _category_channel_frame()
+    if base is None or base.empty:
+        return out
+    base = base[base["month"].isin((month, prev))]
+    if channel:
+        base = base[base["group"] == channel]
+    frame = base[_category_group_mask(base, level, group, category, sub_category, tier_mode)]
+    if frame.empty:
+        return out
+    by = frame.groupby(["month", "style"])["qty"].agg(units="sum", orders="size").reset_index()
+    now = by[by["month"] == month].set_index("style")
+    before = by[by["month"] == prev].set_index("style")
+    tier_of = _style_tier_map()
+
+    def info(st: str) -> dict:
+        return {"style": st, "subCategory": design_attributes.sub_category_of(st) or "",
+                "tier": tier_of.get(st.strip().upper()) or ""}
+
+    styles = []
+    for st, r in now.iterrows():
+        p = int(round(before["units"].get(st, 0)))
+        styles.append({**info(st), "units": int(round(r["units"])), "orders": int(r["orders"]),
+                       "prevUnits": p, "new": st not in before.index})
+    styles.sort(key=lambda x: (-x["units"], x["style"]))
+    stopped = [{**info(st), "prevUnits": int(round(r["units"]))}
+               for st, r in before.iterrows() if st not in now.index]
+    stopped.sort(key=lambda x: (-x["prevUnits"], x["style"]))
+    out.update(styles=styles, stopped=stopped)
     return out
 
 

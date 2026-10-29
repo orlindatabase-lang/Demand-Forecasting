@@ -6,6 +6,7 @@ import type {
   StyleLifecycleResponse,
   WeeklyProductionLogRow,
   CategoryAnalysisChannelsResponse,
+  CategoryAnalysisStylesResponse,
   CategoryAnalysisFilteredResponse,
   CategoryAnalysisResponse,
   DesignSuggestionsResponse,
@@ -82,6 +83,12 @@ export const dataService = {
   async categoryAnalysisChannels(level: "category" | "subCategory" | "style" | "tier", group: string, f: CategoryFilter = NO_FILTER) {
     const params = new URLSearchParams({ level, group, category: f.category, subCategory: f.subCategory, tierMode: f.tierMode ?? "current" });
     return apiGet<CategoryAnalysisChannelsResponse>(`/api/reports/category-analysis/channels?${params.toString()}`);
+  },
+
+  /** The styles behind one STYLES cell (group "" = TOTAL row, channel = a marketplace sub-row). */
+  async categoryAnalysisStyles(level: "category" | "subCategory" | "style" | "tier", group: string, month: string, channel = "", f: CategoryFilter = NO_FILTER) {
+    const params = new URLSearchParams({ level, group, month, channel, category: f.category, subCategory: f.subCategory, tierMode: f.tierMode ?? "current" });
+    return apiGet<CategoryAnalysisStylesResponse>(`/api/reports/category-analysis/styles?${params.toString()}`);
   },
 
   /** Season-wise design suggestions (running + upcoming season). */

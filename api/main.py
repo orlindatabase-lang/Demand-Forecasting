@@ -317,6 +317,22 @@ def get_category_analysis_channels(
     return data.get_category_analysis_channels(level, group, category, subCategory, tierMode)
 
 
+@app.get("/api/reports/category-analysis/styles", tags=["plan"])
+def get_category_analysis_styles(
+    level: str = Query("subCategory", pattern="^(category|subCategory|style|tier)$"),
+    month: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="YYYY-MM"),
+    group: str = Query("", description="the Category / Sub Category / Tier row; blank = the TOTAL row"),
+    channel: str = Query("", description="a marketplace sub-row (Amazon, Flipkart, ...); blank = all"),
+    category: str = Query("", description="Only styles in this Category; blank = all"),
+    subCategory: str = Query("", description="Only styles in this Sub Category; blank = all"),
+    tierMode: str = Query("current", pattern="^(current|sale)$"),
+) -> dict:
+    """The styles behind one STYLES cell: each style's units / orders that
+    month vs the previous month, new styles flagged, plus the stopped ones
+    (2026-10-29, user-requested)."""
+    return data.get_category_analysis_styles(level, group, month, channel, category, subCategory, tierMode)
+
+
 @app.get("/api/reports/category-analysis/filtered", tags=["plan"])
 def get_category_analysis_filtered(
     tier: str = Query("", description="Catalog tier (T0, T1, ... or Unclassified); blank = all"),

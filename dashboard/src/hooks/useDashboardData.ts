@@ -107,6 +107,19 @@ export function useCategoryAnalysisChannels(
   });
 }
 
+/** The styles behind one STYLES cell of the Category Analysis tables; fetched only while open. */
+export function useCategoryAnalysisStyles(
+  level: "category" | "subCategory" | "style" | "tier",
+  sel: { group: string; month: string; channel?: string } | null,
+  f: CategoryFilter = NO_FILTER,
+) {
+  return useQuery({
+    queryKey: ["categoryAnalysisStyles", level, sel?.group, sel?.month, sel?.channel ?? "", f.category, f.subCategory, f.tierMode ?? "current"],
+    queryFn: () => dataService.categoryAnalysisStyles(level, sel!.group, sel!.month, sel?.channel ?? "", f),
+    enabled: sel !== null,
+  });
+}
+
 /** Design Suggestions tab. The API builds the result in the background on
  * first request (~1-2 min); poll every 5 s while it says "building". */
 export function useDesignSuggestions() {

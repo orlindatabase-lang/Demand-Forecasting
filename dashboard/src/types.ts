@@ -240,6 +240,26 @@ export interface CategoryAnalysisChannelsResponse {
   rows: CategoryAnalysisRow[];
 }
 
+/** One style behind a STYLES cell - GET /api/reports/category-analysis/styles. */
+export interface CategoryStyleSale {
+  style: string;
+  subCategory: string;
+  tier: string;
+  units: number;
+  orders: number;
+  prevUnits: number; // the whole previous month
+  new: boolean; // did not sell in the previous month
+}
+
+export interface CategoryAnalysisStylesResponse {
+  month: string;
+  prevMonth: string;
+  partial: boolean;
+  dataThrough: string;
+  styles: CategoryStyleSale[];
+  stopped: { style: string; subCategory: string; tier: string; prevUnits: number }[]; // sold last month, not this one
+}
+
 // --- Design Suggestions (GET /api/design/suggestions) ---------------------
 export interface DesignRankItem {
   value: string;
