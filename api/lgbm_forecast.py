@@ -6,7 +6,11 @@ import time
 import warnings
 from pathlib import Path
 
-HORIZON_WEEKS = 13
+# The production plan still uses only its first five forecast weeks.  The
+# longer series also supports the nine-calendar-month expected-sale horizon on
+# Design Suggestions (36 fixed report weeks; 40 Monday-Sunday weeks safely
+# covers its final calendar chunk).
+HORIZON_WEEKS = 40
 _WEEK_LAGS = [1, 2, 4, 8, 12, 26, 52]
 _WEEK_ROLL = [4, 8, 12]
 _WEEK_STD = [4, 8]
@@ -152,7 +156,7 @@ _CACHE_DIR = Path(__file__).resolve().parent / ".cache"
 # predicted every future week as "no promotion" (measured on the training
 # panel with promo = 0 as in production: SKU WAPE 68.6% -> 53.8% without
 # them, bias -59% -> -20%; style 47.2% -> 43.1%, bias -32% -> -14%).
-_CACHE_VERSION = "v50"
+_CACHE_VERSION = "v51"
 
 
 def _cache_file(snapshot: str) -> Path:
@@ -174,7 +178,7 @@ def save_cache(snapshot: str, forecasts: dict) -> None:
     _cache_file(snapshot).write_text(json.dumps(forecasts))
 
 
-_DESIGN_CACHE_VERSION = "d37"
+_DESIGN_CACHE_VERSION = "d38"
 
 
 def _design_cache_file(snapshot: str) -> Path:

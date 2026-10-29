@@ -11,9 +11,10 @@ interface PageHeaderProps {
 export default function PageHeader({ title, subtitle, actions }: PageHeaderProps) {
   return (
     <Stack
-      direction={{ xs: "column", sm: "row" }}
+      direction="row"
       spacing={1.5}
-      sx={{ justifyContent: "space-between", alignItems: { sm: "center" }, mb: 1.5 }}
+      // One row on every screen (title left, actions right), wrapping only if the actions don't fit
+      sx={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", rowGap: 1, mb: 1.5 }}
     >
       <Box>
         {/* Page title: 15px / 700 / #111827, as in the portal. */}

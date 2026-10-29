@@ -29,12 +29,14 @@ import { useCatalogStyleTiers, useWeeklyProductionLog } from "@/hooks/useDashboa
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { formatNumber } from "@/utils/format";
 import type { WeeklyProductionLogRow } from "@/types";
+import { COLORS, REPORT, REPORT_HEAD_SX, REPORT_GROUP_HEAD_SX, STICKY_EDGE_SX } from "@/theme/colors";
 
-const ACTUAL_COLOR = "#312c5c";
-const FORECAST_COLOR = "#f97316";
+// Weekly Sales Report look (theme/colors.ts REPORT)
+const ACTUAL_COLOR = REPORT.actual;
+const FORECAST_COLOR = REPORT.forecastText;
 const SUGGESTED_COLOR = "#0f766e";
-const AVAILABLE_COLOR = "#475569";
-const HEADER_BG = "#eef0f5";
+const AVAILABLE_COLOR = COLORS.textSecondary;
+const HEADER_BG = REPORT.headBg;
 const STYLE_COL_WIDTH = 170;
 const NUM_COL_WIDTH = 96;
 const ROW_H1 = 36; // month header row height, for the sticky second/third rows
@@ -61,9 +63,9 @@ function addDays(iso: string, days: number): string {
 }
 
 const STATUS_CHIP = {
-  open: { bg: "rgba(249,115,22,0.14)", fg: "#c2410c" },
-  settling: { bg: "rgba(202,138,4,0.14)", fg: "#a16207" },
-  completed: { bg: "rgba(21,128,61,0.12)", fg: "#15803d" },
+  open: { bg: COLORS.infoBg, fg: COLORS.infoText },
+  settling: { bg: COLORS.warningBg, fg: COLORS.warningText },
+  completed: { bg: COLORS.successBg, fg: COLORS.successText },
 } as const;
 
 function statusLabel(w: WeekInfo): string {
@@ -103,7 +105,9 @@ const numCell = {
   px: 1.25, py: 0.75, textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
   width: NUM_COL_WIDTH, minWidth: NUM_COL_WIDTH,
 } as const;
-const styleCell = { width: STYLE_COL_WIDTH, minWidth: STYLE_COL_WIDTH, maxWidth: STYLE_COL_WIDTH } as const;
+// Narrower pinned style column on phones (2026-10-29, responsive layout)
+const STYLE_COL = { xs: 130, md: STYLE_COL_WIDTH } as const;
+const styleCell = { width: STYLE_COL, minWidth: STYLE_COL, maxWidth: STYLE_COL } as const;
 
 /** Production Log page (its own tab): per Style and report week, the
  * forecast, stock + WIP, suggested production and actual sale. */
@@ -252,9 +256,9 @@ export default function ProductionLog() {
             setPage(0);
           }}
           slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> } }}
-          sx={{ minWidth: 220 }}
+          sx={{ minWidth: { xs: "100%", sm: 220 } }}
         />
-        <FormControl size="small" sx={{ minWidth: 180 }}>
+        <FormControl size="small" sx={{ minWidth: { xs: "100%", sm: 180 } }}>
           <InputLabel id="log-category-label">Category</InputLabel>
           <Select
             labelId="log-category-label"
@@ -270,7 +274,7 @@ export default function ProductionLog() {
             {categoryOptions.map((c) => <MenuItem key={c} value={c}>{c}</MenuItem>)}
           </Select>
         </FormControl>
-        <FormControl size="small" sx={{ minWidth: 200 }}>
+        <FormControl size="small" sx={{ minWidth: { xs: "100%", sm: 200 } }}>
           <InputLabel id="log-subcategory-label">Sub Category</InputLabel>
           <Select
             labelId="log-subcategory-label"
@@ -354,7 +358,7 @@ export default function ProductionLog() {
                 <TableRow>
                   <TableCell
                     rowSpan={3}
-                    sx={{ ...styleCell, left: 0, zIndex: 4, bgcolor: HEADER_BG, fontWeight: 800, borderRight: 1 }}
+                    sx={{ ...styleCell, left: 0, zIndex: 4, ...REPORT_HEAD_SX, ...STICKY_EDGE_SX, verticalAlign: "bottom" }}
                   >
                     STYLE
                   </TableCell>
@@ -363,7 +367,7 @@ export default function ProductionLog() {
                       key={m.month}
                       colSpan={m.count * 4}
                       align="center"
-                      sx={{ bgcolor: HEADER_BG, fontWeight: 800, borderRight: 1, height: ROW_H1 }}
+                      sx={{ ...REPORT_GROUP_HEAD_SX, borderRight: 1, borderRightColor: "divider", height: ROW_H1 }}
                     >
                       {m.month.toUpperCase()}
                     </TableCell>
@@ -373,7 +377,7 @@ export default function ProductionLog() {
                   {weeks.map((w) => (
                     <TableCell key={w.weekStart} colSpan={4} align="center" sx={{ top: ROW_H1, bgcolor: HEADER_BG, borderRight: 1, py: 0.5 }}>
                       <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", justifyContent: "center" }}>
-                        <Typography variant="body2" sx={{ fontWeight: 800 }}>{w.week}</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 700, color: COLORS.textDark }}>{w.week}</Typography>
                         <Typography variant="caption" sx={{ color: "text.secondary" }}>
                           {formatDay(w.weekStart)}–{formatDay(w.weekEnd)}
                         </Typography>
@@ -398,16 +402,16 @@ export default function ProductionLog() {
                 <TableRow>
                   {weeks.map((w) => (
                     <Fragment key={w.weekStart}>
-                      <TableCell sx={{ ...numCell, top: ROW_H1 + 33, bgcolor: HEADER_BG, color: ACTUAL_COLOR, fontWeight: 700, fontSize: "0.72rem" }}>ACTUAL</TableCell>
-                      <TableCell sx={{ ...numCell, top: ROW_H1 + 33, bgcolor: HEADER_BG, color: FORECAST_COLOR, fontWeight: 700, fontSize: "0.72rem", whiteSpace: "normal", lineHeight: 1.2 }}>
+                      <TableCell sx={{ ...numCell, top: ROW_H1 + 33, ...REPORT_HEAD_SX, fontSize: "0.68rem", color: ACTUAL_COLOR }}>ACTUAL</TableCell>
+                      <TableCell sx={{ ...numCell, top: ROW_H1 + 33, ...REPORT_HEAD_SX, fontSize: "0.68rem", color: FORECAST_COLOR, whiteSpace: "normal", lineHeight: 1.2 }}>
                         FORECAST
                         <Box component="span" sx={{ display: "block", fontWeight: 600, fontSize: "0.65rem" }}>NEXT 2 MONTHS</Box>
                       </TableCell>
-                      <TableCell sx={{ ...numCell, top: ROW_H1 + 33, bgcolor: HEADER_BG, color: AVAILABLE_COLOR, fontWeight: 700, fontSize: "0.72rem", whiteSpace: "normal", lineHeight: 1.2 }}>
+                      <TableCell sx={{ ...numCell, top: ROW_H1 + 33, ...REPORT_HEAD_SX, fontSize: "0.68rem", color: AVAILABLE_COLOR, whiteSpace: "normal", lineHeight: 1.2 }}>
                         AVAILABLE
                         <Box component="span" sx={{ display: "block", fontWeight: 600, fontSize: "0.65rem" }}>STOCK + WIP</Box>
                       </TableCell>
-                      <TableCell sx={{ ...numCell, top: ROW_H1 + 33, bgcolor: HEADER_BG, color: SUGGESTED_COLOR, fontWeight: 700, fontSize: "0.72rem", borderRight: 1 }}>
+                      <TableCell sx={{ ...numCell, top: ROW_H1 + 33, ...REPORT_HEAD_SX, fontSize: "0.68rem", color: SUGGESTED_COLOR, borderRight: 1 }}>
                         SUGGESTED
                       </TableCell>
                     </Fragment>
@@ -417,7 +421,7 @@ export default function ProductionLog() {
               <TableBody>
                 {pageRows.map((s) => (
                   <TableRow key={s.style} hover>
-                    <TableCell sx={{ ...styleCell, position: "sticky", left: 0, bgcolor: "background.paper", zIndex: 1, borderRight: 1 }}>
+                    <TableCell sx={{ ...styleCell, position: "sticky", left: 0, bgcolor: "background.paper", zIndex: 1, ...STICKY_EDGE_SX }}>
                       <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
                         <Typography variant="body2" sx={{ fontWeight: 700 }}>{s.style}</Typography>
                         {tierOf.get(s.style) && (
@@ -447,8 +451,8 @@ export default function ProductionLog() {
                     })}
                   </TableRow>
                 ))}
-                <TableRow sx={{ "& td": { position: "sticky", bottom: 0, bgcolor: HEADER_BG, fontWeight: 800 } }}>
-                  <TableCell sx={{ ...styleCell, left: 0, zIndex: 2, borderRight: 1 }}>
+                <TableRow sx={{ "& td": { position: "sticky", bottom: 0, bgcolor: HEADER_BG, fontWeight: 700, borderTop: `2px solid ${COLORS.borderDark}` } }}>
+                  <TableCell sx={{ ...styleCell, left: 0, zIndex: 3, ...STICKY_EDGE_SX }}>
                     TOTAL
                     <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
                       {formatNumber(filtered.length)} styles

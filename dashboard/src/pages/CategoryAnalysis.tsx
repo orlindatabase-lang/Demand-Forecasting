@@ -37,17 +37,18 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { formatNumber } from "@/utils/format";
 import { NO_FILTER, type CategoryFilter } from "@/services/dataService";
 import type { CategoryAnalysisRow } from "@/types";
+import { COLORS, REPORT, REPORT_HEAD_SX, REPORT_GROUP_HEAD_SX, REPORT_TOTAL_SX, STICKY_EDGE_SX } from "@/theme/colors";
 
 type Level = "category" | "subCategory" | "style" | "tier";
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-const HEADER_BG = "#eef0f5";
-const MONTH_BG = ["#ffffff", "#f4f5f9"]; // alternating month column groups, like the Weekly Sales Report
-const STYLE_COLOR = "#475569";
-const ORDER_COLOR = "#312c5c";
-const UNIT_COLOR = "#f97316";
-const UP_COLOR = "#15803d";
-const DOWN_COLOR = "#dc2626";
+// Weekly Sales Report look (theme/colors.ts REPORT)
+const MONTH_BG = [COLORS.bgWhite, COLORS.primaryBgSubtle]; // alternating month column groups, like the Weekly Sales Report
+const STYLE_COLOR = COLORS.textSecondary;
+const ORDER_COLOR = REPORT.actual;
+const UNIT_COLOR = REPORT.forecastText;
+const UP_COLOR = REPORT.good;
+const DOWN_COLOR = REPORT.bad;
 const GROUP_COL_WIDTH = 220;
 const NUM_COL_WIDTH = 84;
 const ROW_H1 = 38; // month header row height (the second header row sticks below it)
@@ -188,9 +189,11 @@ const numCell = {
   px: 1, py: 0.75, textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
   width: NUM_COL_WIDTH, minWidth: NUM_COL_WIDTH,
 } as const;
-const groupCell = { width: GROUP_COL_WIDTH, minWidth: GROUP_COL_WIDTH, maxWidth: GROUP_COL_WIDTH } as const;
-const CHANNEL_BG = "#faf9ff"; // an expanded row's marketplace sub-rows
-const STYLE_ROW_BG = "#fcfcfe"; // an expanded tier's style rows
+// Narrower pinned name column on phones (2026-10-29, responsive layout)
+const GROUP_COL = { xs: 140, md: GROUP_COL_WIDTH } as const;
+const groupCell = { width: GROUP_COL, minWidth: GROUP_COL, maxWidth: GROUP_COL } as const;
+const CHANNEL_BG = REPORT.rowAltBg; // an expanded row's marketplace sub-rows
+const STYLE_ROW_BG = COLORS.primaryBgSubtle; // an expanded tier's style rows
 
 /** main = a table row, child = a style inside an opened tier, channel = a marketplace row. */
 type RowVariant = "main" | "child" | "channel";
@@ -246,7 +249,7 @@ function ChannelRows({
   const { data, isLoading, isError } = useCategoryAnalysisChannels(level, group, filter);
   const channels = useMemo(() => pivotRows(data?.rows ?? []).groups, [data]);
   const stickyCell = {
-    ...groupCell, position: "sticky", left: 0, zIndex: 1, bgcolor: CHANNEL_BG, borderRight: 1, borderRightColor: "divider", pl: indent,
+    ...groupCell, position: "sticky", left: 0, zIndex: 1, bgcolor: CHANNEL_BG, ...STICKY_EDGE_SX, pl: indent,
   } as const;
   if (isLoading || isError || channels.length === 0) {
     return (
@@ -436,7 +439,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
       const c = cells[m];
       const bg = variant === "channel" ? CHANNEL_BG : variant === "child" ? STYLE_ROW_BG : MONTH_BG[i % 2];
       const base = {
-        ...numCell, bgcolor: bold ? HEADER_BG : bg, fontWeight: bold ? 800 : 400,
+        ...numCell, ...(bold ? REPORT_TOTAL_SX : { bgcolor: bg }), fontWeight: bold ? 700 : 400,
         ...(variant === "main" ? {} : { fontSize: "0.8rem" }),
       };
       return (
@@ -495,7 +498,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
         <ErrorState message="Couldn't load the category analysis." onRetry={() => refetch()} />
       ) : (
         <>
-          <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", mb: 2 }}>
+          <Stack direction="row" sx={{ alignItems: "center", mb: 2, flexWrap: "wrap", gap: 1.5 }}>
             {/* Tiers Spike Rate: no search - only 7 tiers (2026-10-13, user-requested) */}
             {!isTier && (
             <TextField
@@ -507,12 +510,12 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                 setPage(0);
               }}
               slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> } }}
-              sx={{ minWidth: 260 }}
+              sx={{ minWidth: { xs: "100%", sm: 260 } }}
             />
             )}
             {isTier && (
               <>
-                <FormControl size="small" sx={{ minWidth: 170 }}>
+                <FormControl size="small" sx={{ minWidth: { xs: "100%", sm: 170 } }}>
                   <InputLabel id="tier-cat-label">Category</InputLabel>
                   <Select
                     labelId="tier-cat-label"
@@ -530,7 +533,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                     ))}
                   </Select>
                 </FormControl>
-                <FormControl size="small" sx={{ minWidth: 210 }}>
+                <FormControl size="small" sx={{ minWidth: { xs: "100%", sm: 210 } }}>
                   <InputLabel id="tier-sub-label">Sub Category</InputLabel>
                   <Select
                     labelId="tier-sub-label"
@@ -633,20 +636,20 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                   <TableRow>
                     <TableCell
                       rowSpan={2}
-                      sx={{ ...groupCell, left: 0, zIndex: 4, bgcolor: HEADER_BG, fontWeight: 800, borderRight: 1, borderRightColor: "divider" }}
+                      sx={{ ...groupCell, left: 0, zIndex: 4, ...REPORT_HEAD_SX, ...STICKY_EDGE_SX, verticalAlign: "bottom" }}
                     >
                       {groupName.toUpperCase()}
                     </TableCell>
-                    {months.map((m, i) => (
+                    {months.map((m) => (
                       <TableCell
                         key={m}
                         colSpan={metrics.length}
                         align="center"
-                        sx={{ bgcolor: i % 2 ? "#e6e9f1" : HEADER_BG, fontWeight: 800, borderRight: 1, borderRightColor: "divider", height: ROW_H1 }}
+                        sx={{ ...REPORT_GROUP_HEAD_SX, borderRight: 1, borderRightColor: "divider", height: ROW_H1 }}
                       >
                         {monthTitle(m)}
                         {m === partialMonth && (
-                          <Typography component="span" variant="caption" sx={{ ml: 0.75, color: "#c2410c", fontWeight: 700 }}>
+                          <Typography component="span" variant="caption" sx={{ ml: 0.75, color: REPORT.forecastText, fontWeight: 700 }}>
                             (to {dayLabel(dataThrough)})
                           </Typography>
                         )}
@@ -654,14 +657,13 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                     ))}
                   </TableRow>
                   <TableRow>
-                    {months.map((m, i) => (
+                    {months.map((m) => (
                       <Fragment key={m}>
                         {metrics.map((mt) => (
                           <TableCell
                             key={mt.key}
                             sx={{
-                              ...numCell, top: ROW_H1, bgcolor: i % 2 ? "#e6e9f1" : HEADER_BG, color: mt.color,
-                              fontWeight: 700, fontSize: "0.72rem",
+                              ...numCell, top: ROW_H1, ...REPORT_HEAD_SX, fontSize: "0.68rem", color: mt.color,
                               ...(mt.key === "spike" ? { borderRight: 1, borderRightColor: "divider" } : {}),
                             }}
                           >
@@ -682,11 +684,11 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                             onClick={() => toggleExpanded(g.group)}
                             title={open ? "Hide platform-wise sales" : "Show platform-wise sales"}
                             sx={{
-                              ...groupCell, position: "sticky", left: 0, bgcolor: "background.paper", zIndex: 1, borderRight: 1, borderRightColor: "divider",
-                              cursor: "pointer", userSelect: "none", "&:hover": { bgcolor: "#f4f3fb" },
+                              ...groupCell, position: "sticky", left: 0, bgcolor: "background.paper", zIndex: 1, ...STICKY_EDGE_SX,
+                              cursor: "pointer", userSelect: "none", "&:hover": { bgcolor: COLORS.primaryBgLight },
                             }}
                           >
-                            <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+                            <Stack direction="row" sx={{ alignItems: "center", flexWrap: "wrap", columnGap: 0.5, rowGap: 0.25 }}>
                               {open ? (
                                 <KeyboardArrowDownIcon fontSize="small" sx={{ color: ORDER_COLOR, ml: -0.75 }} />
                               ) : (
@@ -721,7 +723,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                     );
                   })}
                   <TableRow sx={{ "& td": { position: "sticky", bottom: 0 } }}>
-                    <TableCell sx={{ ...groupCell, left: 0, zIndex: 2, bgcolor: HEADER_BG, fontWeight: 800, borderRight: 1, borderRightColor: "divider" }}>
+                    <TableCell sx={{ ...groupCell, left: 0, zIndex: 3, ...REPORT_TOTAL_SX, ...STICKY_EDGE_SX, fontWeight: 700 }}>
                       TOTAL
                       <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
                         {formatNumber(filtered.length)} {level === "category" ? "categories" : isStyle ? "styles" : isTier ? "tiers" : "sub categories"}

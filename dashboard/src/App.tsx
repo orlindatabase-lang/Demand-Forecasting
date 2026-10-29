@@ -26,20 +26,8 @@ const queryClient = new QueryClient({
   },
 });
 
-// Original look, still used by every page except the Weekly Sales Report
-const theme = createTheme({
-  palette: {
-    mode: "light",
-    primary: { main: "#312c5c" },
-    background: { default: "#f6f7fa", paper: "#ffffff" },
-  },
-  shape: { borderRadius: 8 },
-  typography: {
-    fontFamily: '"Segoe UI", Roboto, system-ui, sans-serif',
-  },
-});
-
-// Same look as the Orlin portal theme - applied to the Weekly Sales Report only (for now)
+// Same look as the Orlin portal theme, for every page (2026-10-29, user-requested:
+// the Weekly Sales Report's look everywhere in the UI)
 const portalTheme = createTheme({
   palette: {
     mode: "light",
@@ -81,20 +69,20 @@ function WithOverview({ children }: { children: ReactNode }) {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider theme={theme}>
+      <ThemeProvider theme={portalTheme}>
         <CssBaseline />
         <BrowserRouter>
           <Box sx={{ display: "flex" }}>
             <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-              <Box component="main" sx={{ p: 3 }}>
+              <Box component="main" sx={{ p: { xs: 1.5, sm: 2, md: 3 }, maxWidth: "100vw", overflowX: "clip" }}>
                 <Routes>
-                  <Route path="/" element={<ThemeProvider theme={portalTheme}><WeeklySalesGrid /></ThemeProvider>} />
+                  <Route path="/" element={<WeeklySalesGrid />} />
                   <Route path="/analysis/sub-category" element={<WithOverview><CategoryAnalysis key="subCategory" level="subCategory" /></WithOverview>} />
                   <Route path="/analysis/category" element={<WithOverview><CategoryAnalysis key="category" level="category" /></WithOverview>} />
                   <Route path="/analysis/tiers" element={<WithOverview><CategoryAnalysis key="tier" level="tier" /></WithOverview>} />
                   <Route path="/production-log" element={<WithOverview><ProductionLog /></WithOverview>} />
                   <Route path="/design-suggestions" element={<WithOverview><DesignSuggestions /></WithOverview>} />
-                  <Route path="/reports/weekly-sales" element={<ThemeProvider theme={portalTheme}><WeeklySalesGrid /></ThemeProvider>} />
+                  <Route path="/reports/weekly-sales" element={<WeeklySalesGrid />} />
                 </Routes>
               </Box>
             </Box>

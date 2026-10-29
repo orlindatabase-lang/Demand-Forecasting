@@ -331,7 +331,8 @@ def _build(data) -> dict:
     attrs = _load_attributes()
     styles = attrs.set_index("style")
     price = _style_prices(data)
-    style_forecast35 = _style_forecast35(data)
+    style_expected, expected_window = _style_forecast_9w(data)
+    style_weekly = expected_window.pop("_weekly", {})   # per style; goes onto its rows only
 
     run_code, run_year = season_of(snap)
     up_code, up_year = next_season(run_code, run_year)
@@ -352,7 +353,7 @@ def _build(data) -> dict:
     seasons = []
     for role, code, year in (("running", run_code, run_year), ("upcoming", up_code, up_year)):
         seasons.append(_season_block(role, code, year, sales, styles, price, snap, model, trend, lifecycle, spikes, mom,
-                                     style_forecast35))
+                                     style_expected, expected_window, style_weekly))
     return {
         "available": True,
         "dataThrough": snap.isoformat(),
@@ -376,6 +377,57 @@ def _style_prices(data) -> dict[str, float]:
         if r.designNo and r.price:
             acc.setdefault(str(r.designNo).strip().upper(), []).append(float(r.price))
     return {k: float(sum(v) / len(v)) for k, v in acc.items()}
+
+
+# Fixed calendar report weeks (W1..W4) rather than Monday-Sunday weeks:
+# the running report week and the 8 after it (2026-10-27, user-requested:
+# "Expected Sale must be for 9 weeks").
+EXPECTED_SALE_WEEKS = 9
+# The underlying Monday-Sunday forecast horizon; 13 weeks (~91 days) always
+# reaches past the 9th report week, even when the running week is W4.
+EXPECTED_SALE_GRID_WEEKS = 13
+
+
+def _style_forecast_9w(data) -> tuple[dict[str, int], dict]:
+    """Each style's expected sale over the next 9 report weeks.
+
+    The source is the Weekly Sales Report's own forecast: the running report
+    week plus the next 8 fixed calendar chunks (W1 1-7, W2 8-15, W3 16-23,
+    W4 24-end). This keeps the expected-sale column and the weekly drill-down
+    on exactly the same forecast and calendar-week logic.
+    """
+    try:
+        grid = data.get_weekly_grid("style", EXPECTED_SALE_GRID_WEEKS, 2000, 0)
+        weeks = [(m.label, w) for m in grid.months for w in m.weeks]
+        totals = grid.weeklyTotals.cells
+        first = next(i for i, (_, w) in enumerate(weeks)
+                     if w.weekStart in totals and (totals[w.weekStart].actual is None or totals[w.weekStart].partial))
+        ahead = weeks[first:first + EXPECTED_SALE_WEEKS]
+        isos = [w.weekStart for _, w in ahead]
+        expected = {str(r.key).strip().upper(): int(round(sum(r.cells[i].forecast for i in isos if i in r.cells)))
+                    for r in grid.rows}
+        def end_of(k: int) -> str:   # last day of the k-th week ahead
+            nxt = first + k + 1
+            return ((date.fromisoformat(weeks[nxt][1].weekStart) - timedelta(days=1)).isoformat()
+                    if nxt < len(weeks) else ahead[k][1].weekStart)
+        label = lambda m, w: f"{m.split()[0][:3]} {w.label}"   # "Oct W4"
+        # The 9 weeks as the report shows them (2026-10-27, user-requested: the
+        # Weekly Sales Report layout), and each style's forecast per week.
+        week_list = [{"start": w.weekStart, "end": end_of(k), "month": m, "label": w.label,
+                      "eventCategory": getattr(w, "eventCategory", "") or "", "eventName": getattr(w, "eventName", "") or ""}
+                     for k, (m, w) in enumerate(ahead)]
+        run = totals.get(isos[0])
+        running = run is not None and run.partial and run.actual is not None
+        weekly = {str(r.key).strip().upper(): {
+                      "weekly": [int(round(r.cells[i].forecast)) if i in r.cells else 0 for i in isos],
+                      "soldSoFar": int(r.cells[isos[0]].actual or 0) if running and isos[0] in r.cells else None}
+                  for r in grid.rows}
+        return expected, {"weeks": len(isos), "from": label(*ahead[0]), "to": label(*ahead[-1]),
+                          "start": isos[0], "end": end_of(len(ahead) - 1), "running": running,
+                          "weekList": week_list, "_weekly": weekly}
+    except Exception as exc:  # noqa: BLE001 - keep feature recommendations available without mislabelling demand
+        print(f"[design_suggest] 9-week forecast unavailable ({exc!r})", file=sys.stderr)
+        return {}, {"weeks": EXPECTED_SALE_WEEKS, "unavailable": True}
 
 
 def _style_forecast35(data) -> dict[str, int]:
@@ -419,7 +471,7 @@ def _reference_occurrence(code: str, year: int, sales, snap: date) -> tuple[int 
 
 
 def _season_block(role, code, year, sales, styles, price, snap, model, trend=None, lifecycle=None, spikes=None,
-                  mom=None, style_forecast35=None) -> dict:  # spikes: kept for callers; shown in Trend status
+                  mom=None, style_expected=None, expected_window=None, style_weekly=None) -> dict:  # spikes: kept for callers; shown in Trend status
     import pandas as pd
 
     start, end = season_bounds(code, year)
@@ -472,7 +524,17 @@ def _season_block(role, code, year, sales, styles, price, snap, model, trend=Non
     active_now = [v[0] for v in trend.values() if _active(v)] if trend else []
     avg_now = sum(active_now) / max(1, len(active_now))         # last-4-weeks units of an average selling design
     block["products"] = _products(block, sc_rank, model, code, joined_all, stages, avg_now)
-    block["recommendedStyles"] = _recommended_styles(block["products"], joined_all, style_forecast35 or {})
+    # Every Trend status attribute (incl. neck, which the model's stage features leave out).
+    feature_stages = {a: {r["value"]: r["stage"] for r in (lifecycle or {}).get(a, [])} for a in TREND_STATUS_ATTRS}
+    block["recommendedStyles"] = _recommended_styles(
+        block["products"], joined_all, style_expected or {}, feature_stages,
+        include_zero=bool((expected_window or {}).get("unavailable")),
+    )
+    for row in block["recommendedStyles"]:   # its forecast per week of expectedSaleWindow.weekList
+        wk = (style_weekly or {}).get(row["style"]) or {}
+        row["weekly"] = wk.get("weekly", [])
+        row["soldSoFar"] = wk.get("soldSoFar")
+    block["expectedSaleWindow"] = expected_window or {}
     block["overview"] = _overview(block["products"])
     return block
 
@@ -1419,10 +1481,12 @@ STYLE_MATCH_WEIGHTS = {
     "sleeve": 6,
     "topType": 5,
 }
-MIN_STYLE_FEATURE_MATCHES = 4
 STYLE_DESIGN_WEIGHT = 0.75
 STYLE_FORECAST_WEIGHT = 0.25
-RECOMMENDED_STYLES_LIMIT = 50
+# Sub-category x colour first (2026-10-27, user-requested: "Styles to push must
+# be mainly based on sub-category and colour"): a style is listed only in a
+# suggested sub-category AND one of that card's colours, so more rows fit.
+RECOMMENDED_STYLES_LIMIT = 100
 # Strength labels instead of unit numbers: the model ranks well (backtest)
 # but its unit numbers are rough, so only relative levels are shown.
 STRONG_SCORE, GOOD_SCORE = 70, 50          # product score (0-100)
@@ -1529,23 +1593,39 @@ def _products(block: dict, sc_rank: dict, model, code: str, joined_all, stages: 
     return cards
 
 
-def _recommended_styles(cards: list[dict], styles, forecast35: dict[str, int]) -> list[dict]:
+def _recommended_styles(cards: list[dict], styles, expected: dict[str, int],
+                        stages: dict[str, dict[str, str]] | None = None,
+                        include_zero: bool = False) -> list[dict]:
     """Rank existing style codes that match a recommended product card.
 
     This is intentionally an *existing-style* list. A design suggestion tells
     a merchandiser which attributes to prefer; the list then finds catalog
     styles carrying the most of those attributes and blends that match with
-    the already-available five-week design forecast. It does not pretend to
+    the style's expected sale (``expected``, _style_forecast_9w). It does not pretend to
     assign a forecast to an entirely new, uncreated style code.
+
+    ``stages`` ({attr: {value: stage}} from Trend status) gives each matched feature its
+    stage, so the page can list trending features first, then in-trend ones.
+
+    Based on sub-category and colour: a style is listed only when it is in a
+    card's sub-category AND has one of that card's colours; the other
+    features (fabric, embroidery, neck, sleeve, top type) only order it.
     """
-    if styles is None or styles.empty or not cards or not forecast35:
+    stages = stages or {}
+    if styles is None or styles.empty or not cards:
         return []
 
     candidates = []
-    for product in cards:
+    for card_rank, product in enumerate(cards):
         sub_category = product.get("subCategory", "")
         if not sub_category:
             continue
+        # The card's colours, best first: a style must carry one of them.
+        colour_list = [x for x in product.get("use", {}).get("colour", []) if x.get("value")]
+        colour_rank = {str(x["value"]): i for i, x in enumerate(colour_list)}
+        colour_stage = {str(x["value"]): x.get("stage") for x in colour_list}
+        if not colour_rank:
+            continue   # no colour suggested for this sub-category - nothing to push by colour
         suggested = {
             "category": {product.get("category", "")},
             "subCategory": {sub_category},
@@ -1561,12 +1641,13 @@ def _recommended_styles(cards: list[dict], styles, forecast35: dict[str, int]) -
         product_styles = styles[styles["subCategory"] == sub_category]
         for style, attrs in product_styles.iterrows():
             style_code = str(style).strip().upper()
-            units = int(forecast35.get(style_code, 0) or 0)
-            if units <= 0:
+            units = int(expected.get(style_code, 0) or 0)
+            if units <= 0 and not include_zero:
+                continue
+            colour = str(attrs.get("colour", "") or "")
+            if colour not in colour_rank:
                 continue
             matched = [attr for attr, values in suggested.items() if str(attrs.get(attr, "")) in values]
-            if len(matched) < MIN_STYLE_FEATURE_MATCHES:
-                continue
             possible_weight = sum(STYLE_MATCH_WEIGHTS.get(attr, 0) for attr in suggested)
             matched_weight = sum(STYLE_MATCH_WEIGHTS.get(attr, 0) for attr in matched)
             feature_fit = 100 * matched_weight / possible_weight if possible_weight else 0.0
@@ -1578,10 +1659,18 @@ def _recommended_styles(cards: list[dict], styles, forecast35: dict[str, int]) -
                 "style": style_code,
                 "subCategory": sub_category,
                 "category": str(attrs.get("category", "") or product.get("category", "")),
-                "forecast35": units,
+                "subCategoryRank": card_rank,
+                "colour": colour,
+                "colourRank": colour_rank[colour],
+                "colourStage": colour_stage.get(colour) or stages.get("colour", {}).get(colour),
+                "expectedSale": units,
                 "featureMatchCount": len(matched),
                 "suggestedFeatureCount": len(suggested),
                 "matchedFeatures": {attr: str(attrs.get(attr, "")) for attr in matched},
+                # Trend status of each matched feature (category, sub category,
+                # colour, fabric and neck have one; the other details do not).
+                "featureStages": {attr: stages[attr][str(attrs.get(attr, ""))] for attr in matched
+                                  if str(attrs.get(attr, "")) in stages.get(attr, {})},
                 "missingFeatures": [attr for attr in suggested if attr not in matched],
                 # What the style has instead of each suggested value it misses.
                 "styleFeatures": {attr: str(attrs.get(attr, "") or "") for attr in suggested if attr not in matched},
@@ -1593,17 +1682,18 @@ def _recommended_styles(cards: list[dict], styles, forecast35: dict[str, int]) -
 
     if not candidates:
         return []
-    forecast_ranks = _pct_rank([row["forecast35"] for row in candidates])
+    forecast_ranks = _pct_rank([row["expectedSale"] for row in candidates])
     for row, forecast_rank in zip(candidates, forecast_ranks):
         row["forecastScore"] = round(100 * forecast_rank, 1)
         row["recommendationScore"] = round(
             STYLE_DESIGN_WEIGHT * row["designFitScore"] + STYLE_FORECAST_WEIGHT * row["forecastScore"], 1
         )
-    # Most suggested features first (2026-10-26, user-requested: "show these
-    # designs on top which have the maximum design features"), then the
-    # weighted fit (a colour / fabric match counts for more than a sleeve),
-    # then the expected sale.
-    candidates.sort(key=lambda row: (-row["featureMatchCount"], -row["featureFitScore"], -row["forecast35"], row["style"]))
+    # Sub-category (its card's rank), then colour (the card's order, best
+    # first), then most suggested features (2026-10-26: "show these designs on
+    # top which have the maximum design features"), the weighted fit, and the
+    # expected sale.
+    candidates.sort(key=lambda row: (row["subCategoryRank"], row["colourRank"], -row["featureMatchCount"],
+                                     -row["featureFitScore"], -row["expectedSale"], row["style"]))
     for rank, row in enumerate(candidates[:RECOMMENDED_STYLES_LIMIT], start=1):
         row["rank"] = rank
     return candidates[:RECOMMENDED_STYLES_LIMIT]

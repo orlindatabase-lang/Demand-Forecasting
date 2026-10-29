@@ -48,9 +48,14 @@ CREATE TABLE IF NOT EXISTS frozen_snapshot (
 )
 """
 # 2-month freeze (2026-10-15, user-requested: "freeze the forecast snapshot
-# for the whole 2 months"): one snapshot of the running week and every week
-# starting within SNAPSHOT_DAYS, kept unchanged until that window ends; then
-# the next 2 months are frozen.
+# for the whole 2 months"). Rolling since 2026-10-29 (user-requested: "continue
+# the forecast for the upcoming weeks for two months, but freeze it immediately
+# when its forecast appears"): on every refresh, each row's running week and
+# every week starting within SNAPSHOT_DAYS that has no frozen value yet is
+# frozen at today's value, and never changes after that - so a week is frozen
+# the day it first enters the 2-month window (a new style: the day it first
+# has a forecast). Before, one snapshot was kept until its whole 2-month window
+# ended and only then was the next one taken.
 SNAPSHOT_DAYS = 62
 # On by default (2026-10-19, user-requested: brought back after briefly
 # showing past weeks only). FORECAST_2M_FREEZE=off: no new 2-month snapshots,
@@ -175,18 +180,39 @@ def apply(
                    WHERE scope = ? AND key = ? AND period_start = ? AND start_qty IS NULL""",
                 starts,
             )
-        # 2-month freeze: when there is none yet, or the active one's window
-        # has ended, freeze today's forecast of the running week and every week
-        # starting before today + SNAPSHOT_DAYS. It then stays unchanged.
-        active = conn.execute("SELECT MAX(as_of) FROM frozen_snapshot WHERE scope = ?", (scope,)).fetchone()[0]
-        if SNAPSHOT_ENABLED and (active is None or date.fromisoformat(active) + timedelta(days=SNAPSHOT_DAYS) <= today):
-            first = current_week_start(period_end, today)
+        # Rolling 2-month freeze: freeze today's value of every running or
+        # upcoming week (starting before today + SNAPSHOT_DAYS) that has no
+        # frozen value yet. Already frozen weeks are never touched.
+        first = current_week_start(period_end, today)
+        if SNAPSHOT_ENABLED and first:
             horizon = (today + timedelta(days=SNAPSHOT_DAYS)).isoformat()
+            have = set(conn.execute(
+                "SELECT DISTINCT key, period_start FROM frozen_snapshot WHERE scope = ? AND period_start >= ?",
+                (scope, first)))
             snap = [(scope, k, today.isoformat(), p, float(q)) for k, cells in values.items()
-                    for p, q in cells.items() if first and first <= p < horizon]
+                    for p, q in cells.items() if first <= p < horizon and (k, p) not in have]
             if snap:
                 conn.executemany("INSERT OR IGNORE INTO frozen_snapshot VALUES (?, ?, ?, ?, ?)", snap)
     return out
+
+
+def copy_locked_to_frozen(before_iso: str, as_of: str, scopes: tuple[str, ...] = ("grid:style", "grid:subCategory")) -> int:
+    """One-time: set the frozen value of every completed week starting before
+    ``before_iso`` (the running week's start) to its locked value - what the
+    Latest view shows for it (2026-10-29, user-requested: "apply the
+    historical snapshot from Latest to Frozen"). Older frozen values of those
+    weeks are replaced; later weeks are not touched. Returns rows written."""
+    with _LOCK, _connect() as conn:
+        n = 0
+        for scope in scopes:
+            rows = conn.execute(
+                "SELECT key, period_start, qty FROM frozen_forecast WHERE scope = ? AND status = 'locked' AND period_start < ?",
+                (scope, before_iso)).fetchall()
+            conn.execute("DELETE FROM frozen_snapshot WHERE scope = ? AND period_start < ?", (scope, before_iso))
+            conn.executemany("INSERT OR REPLACE INTO frozen_snapshot VALUES (?, ?, ?, ?, ?)",
+                             [(scope, k, as_of, p, float(q)) for k, p, q in rows])
+            n += len(rows)
+        return n
 
 
 def current_week_start(period_end: dict[str, date], today: date) -> str:
@@ -200,24 +226,42 @@ def current_week_start(period_end: dict[str, date], today: date) -> str:
     return ""
 
 
-def frozen_values(scope: str) -> tuple[dict[str, dict[str, float]], str, str]:
-    """({key: {period_start_iso: qty}}, frozen on, frozen until): every week's
-    value from the latest 2-month freeze that covers it (a newer freeze
-    overrides an older one for the same week), plus the active freeze's date
-    and the end of its window ("" if none yet)."""
+def frozen_values(scope: str, today: date | None = None) -> tuple[dict[str, dict[str, float]], str, str]:
+    """({key: {period_start_iso: qty}}, frozen since, ""): every week's frozen
+    value (a newer freeze overrides an older one for the same week), plus the
+    date the oldest still-current week (running or upcoming) was frozen. The
+    third value, the old fixed window's end, is always "" - the freeze rolls."""
+    today = today or date.today()
     with _LOCK, _connect() as conn:
         rows = conn.execute(
             "SELECT key, period_start, qty, as_of FROM frozen_snapshot WHERE scope = ? ORDER BY as_of", (scope,),
         ).fetchall()
     out: dict[str, dict[str, float]] = {}
-    latest = ""
+    current = (today - timedelta(days=8)).isoformat()   # a report week is at most 8 days long
+    since = ""
     for k, p, q, a in rows:
         out.setdefault(k, {})[p] = q
-        latest = max(latest, a)
+        if p >= current and (not since or a < since):
+            since = a
     if not SNAPSHOT_ENABLED:
         return out, "", ""   # past weeks only - no active 2-month freeze to report
-    until = (date.fromisoformat(latest) + timedelta(days=SNAPSHOT_DAYS)).isoformat() if latest else ""
-    return out, latest, until
+    return out, since, ""
+
+
+def refreeze(from_iso: str, scopes: tuple[str, ...] | None = None) -> int:
+    """Drop the frozen values of every week starting on or after ``from_iso``
+    (the running week's start), so the next refresh freezes them again at
+    that day's forecast (2026-10-29, user-requested: "update the Frozen
+    forecast with the current number from Latest"). Completed weeks keep
+    theirs. Returns the number of values dropped."""
+    with _LOCK, _connect() as conn:
+        if scopes:
+            marks = ",".join("?" * len(scopes))
+            cur = conn.execute(f"DELETE FROM frozen_snapshot WHERE period_start >= ? AND scope IN ({marks})",
+                               (from_iso, *scopes))
+        else:
+            cur = conn.execute("DELETE FROM frozen_snapshot WHERE period_start >= ?", (from_iso,))
+        return cur.rowcount
 
 
 def start_values(scope: str) -> dict[str, dict[str, float]]:

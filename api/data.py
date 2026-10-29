@@ -189,10 +189,11 @@ _HIST_WEEKS = 8
 # table shows (2026-09-11, user-requested: show the full history back to
 # April 2025 instead of just the last _HIST_WEEKS).
 _BREAKDOWN_HIST_START = date(2025, 4, 1)
-# Weeks forecast ahead (matches lgbm_forecast.HORIZON_WEEKS: 13 weeks =~ 3
-# months, 2026-09-12 - was 6/35-day-plan). forecast7/10/35 (the dashboard's
-# headline horizons) still only sum the first 5 weeks of this series.
-_FC_WEEKS = 13
+# Weeks forecast ahead (matches lgbm_forecast.HORIZON_WEEKS: 40 weeks).  This
+# safely covers the 36 fixed report weeks used for a nine-calendar-month Design
+# Suggestions expected-sale horizon. forecast7/10/35 and the production plan
+# still only sum the first five weeks of this series.
+_FC_WEEKS = 40
 # Sales windows (in days) reported by the top-selling tables.
 _PERIODS = (10, 30, 90)
 # Optimistic per-group festival forecast boost (see get_weekly_grid(),

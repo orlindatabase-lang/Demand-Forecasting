@@ -104,11 +104,40 @@ def test_no_two_month_snapshot_when_switched_off(monkeypatch):
     assert ff.frozen_values("s") == ({}, "", "")
 
 
-def test_two_month_freeze_is_kept_until_its_window_ends(monkeypatch):
+def test_rolling_freeze_freezes_each_week_when_it_first_appears(monkeypatch):
     monkeypatch.setattr(ff, "SNAPSHOT_ENABLED", True)   # FORECAST_2M_FREEZE=on
-    ff.apply("s", {"A": {"2026-10-01": 10, "2026-10-08": 20, "2026-10-16": 30}}, ENDS, date(2026, 10, 3))
-    vals, on, until = ff.frozen_values("s")
-    assert vals == {"A": {"2026-10-01": 10, "2026-10-08": 20, "2026-10-16": 30}} and on == "2026-10-03"
-    # later refreshes with new forecasts do not move the frozen numbers
-    ff.apply("s", {"A": {"2026-10-01": 11, "2026-10-08": 99, "2026-10-16": 77}}, ENDS, date(2026, 10, 20))
-    assert ff.frozen_values("s")[0] == vals and until == "2026-12-04"
+    ff.apply("s", {"A": {"2026-10-01": 10, "2026-10-08": 20}}, ENDS, date(2026, 10, 3))
+    vals, since, until = ff.frozen_values("s", date(2026, 10, 3))
+    assert vals == {"A": {"2026-10-01": 10, "2026-10-08": 20}} and since == "2026-10-03" and until == ""
+    # later refreshes with new forecasts do not move frozen weeks; a week (or a
+    # style) seen for the first time is frozen at that day's value
+    ff.apply("s", {"A": {"2026-10-01": 11, "2026-10-08": 99, "2026-10-16": 30}, "B": {"2026-10-08": 5}},
+             ENDS, date(2026, 10, 6))
+    assert ff.frozen_values("s", date(2026, 10, 6))[0] == {
+        "A": {"2026-10-01": 10, "2026-10-08": 20, "2026-10-16": 30}, "B": {"2026-10-08": 5}}
+
+
+def test_weeks_beyond_two_months_are_not_frozen_yet(monkeypatch):
+    monkeypatch.setattr(ff, "SNAPSHOT_ENABLED", True)
+    ends = dict(ENDS, **{"2026-12-08": date(2026, 12, 15)})
+    ff.apply("s", {"A": {"2026-10-01": 10, "2026-12-08": 40}}, ends, date(2026, 10, 3))
+    assert ff.frozen_values("s", date(2026, 10, 3))[0] == {"A": {"2026-10-01": 10}}
+    ff.apply("s", {"A": {"2026-12-08": 44}}, ends, date(2026, 10, 9))      # now within 62 days
+    assert ff.frozen_values("s", date(2026, 10, 9))[0]["A"]["2026-12-08"] == 44
+
+
+def test_refreeze_takes_todays_values_for_current_weeks_only(monkeypatch):
+    monkeypatch.setattr(ff, "SNAPSHOT_ENABLED", True)
+    ff.apply("s", {"A": {"2026-09-24": 7, "2026-10-01": 10, "2026-10-08": 20}}, ENDS, date(2026, 9, 25))
+    assert ff.refreeze("2026-10-01") == 2                                    # running + upcoming dropped
+    ff.apply("s", {"A": {"2026-10-01": 12, "2026-10-08": 25}}, ENDS, date(2026, 10, 2))
+    assert ff.frozen_values("s", date(2026, 10, 2))[0] == {"A": {"2026-09-24": 7, "2026-10-01": 12, "2026-10-08": 25}}
+
+
+def test_copy_locked_to_frozen_replaces_completed_weeks_only(monkeypatch):
+    monkeypatch.setattr(ff, "SNAPSHOT_ENABLED", True)
+    ff.apply("g", {"A": {"2026-09-24": 7, "2026-10-01": 10, "2026-10-08": 20}}, ENDS, date(2026, 9, 25))  # frozen early
+    ff.apply("g", {"A": {"2026-09-24": 9, "2026-10-01": 11, "2026-10-08": 21}}, ENDS, date(2026, 9, 30))  # last day of Sep W4
+    ff.apply("g", {"A": {"2026-09-24": 50, "2026-10-01": 12, "2026-10-08": 22}}, ENDS, date(2026, 10, 2))  # Sep W4 locked at 9
+    assert ff.copy_locked_to_frozen("2026-10-01", "2026-10-02", ("g",)) == 1
+    assert ff.frozen_values("g", date(2026, 10, 2))[0] == {"A": {"2026-09-24": 9, "2026-10-01": 10, "2026-10-08": 20}}

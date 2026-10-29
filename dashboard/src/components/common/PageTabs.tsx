@@ -17,7 +17,7 @@ export default function PageTabs() {
   const { pathname } = useLocation();
   const current = PAGES.find((p) => p.path !== "/" && pathname.startsWith(p.path))?.path ?? "/";
   return (
-    <Tabs value={current} sx={{ mb: 3, borderBottom: 1, borderColor: "divider" }} variant="scrollable" scrollButtons="auto">
+    <Tabs value={current} sx={{ mb: { xs: 2, md: 3 }, borderBottom: 1, borderColor: "divider", minWidth: 0 }} variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile>
       {PAGES.map((p) => (
         <Tab key={p.path} value={p.path} label={p.label} component={Link} to={p.path} sx={{ fontWeight: 700 }} />
       ))}

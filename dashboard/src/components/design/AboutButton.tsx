@@ -13,8 +13,9 @@ import {
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import CloseIcon from "@mui/icons-material/Close";
 import { ABOUT, type AboutContent, type AboutKey } from "./aboutContent";
+import { REPORT } from "@/theme/colors";
 
-const ACCENT = "#312c5c";
+const ACCENT = REPORT.actual;
 
 /** Small "About" button next to a Design Suggestions section title; opens a
  * dialog explaining what the section shows, how it is worked out and how to use it.

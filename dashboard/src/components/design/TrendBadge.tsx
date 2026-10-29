@@ -1,9 +1,10 @@
 import { Box, Tooltip } from "@mui/material";
 import type { DesignStage } from "@/types";
+import { COLORS, REPORT } from "@/theme/colors";
 
-export const UP = "#15803d";
-export const DOWN = "#dc2626";
-const MUTED = "#64748b";
+export const UP = REPORT.good;
+export const DOWN = REPORT.bad;
+const MUTED = COLORS.textSecondary;
 
 export const NOW_TIP = "Now: share of the last 4 weeks' sales vs the 4 weeks before";
 // Rising / falling threshold - the API's shared rule (data.rules.trendStrong),

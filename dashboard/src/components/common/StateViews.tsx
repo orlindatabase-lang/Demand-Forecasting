@@ -1,5 +1,6 @@
 import { Box, Skeleton, Stack, Typography } from "@mui/material";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
+import { COLORS } from "@/theme/colors";
 
 export function LoadingSkeleton({ variant = "table" }: { variant?: "table" | "page" }) {
   const rows = variant === "page" ? 8 : 6;
@@ -32,7 +33,7 @@ export function ErrorState({ message, onRetry }: { message?: string; onRetry?: (
         color: "text.secondary",
       }}
     >
-      <ErrorOutlineIcon sx={{ fontSize: 40, mb: 1, color: "#ef4444" }} />
+      <ErrorOutlineIcon sx={{ fontSize: 40, mb: 1, color: COLORS.errorText }} />
       <Typography variant="body1" sx={{ fontWeight: 600 }}>
         Something went wrong.
       </Typography>

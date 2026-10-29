@@ -1,14 +1,17 @@
-import { useState } from "react";
-import { Box, Button, Chip, Paper, Stack, Tooltip, Typography } from "@mui/material";
+import { Fragment, useState } from "react";
+import { Box, Button, Chip, Collapse, IconButton, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Typography } from "@mui/material";
 import LightbulbOutlinedIcon from "@mui/icons-material/LightbulbOutlined";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import AboutButton from "./AboutButton";
 import TrendBadge, { DOWN, UP } from "./TrendBadge";
 import type { AboutContent } from "./aboutContent";
 import type { DesignLevel, DesignProductCard, DesignSeason, DesignStage } from "@/types";
+import { COLORS, REPORT, REPORT_HEAD_SX } from "@/theme/colors";
 
-const ACCENT = "#312c5c";
+const ACCENT = REPORT.actual;
 const ACCENT_SOFT = "rgba(49,44,92,0.08)";
-const MUTED = "#64748b";
+const MUTED = COLORS.textSecondary;
 const SHOW = 8;
 
 const ATTR: Record<string, string> = { colour: "colour", fabric: "fabric" };
@@ -204,7 +207,7 @@ function ProductCard({ card, rank, reference, seasonLabel }: { card: DesignProdu
     seasonText(card, reference),
   ].filter(Boolean);
   return (
-    <Paper variant="outlined" sx={{ p: 2, flex: "1 1 460px", minWidth: 300, borderLeft: 4, borderLeftColor: ACCENT }}>
+    <Paper variant="outlined" sx={{ p: 2, flex: "1 1 460px", minWidth: { xs: 0, sm: 300 }, borderLeft: 4, borderLeftColor: ACCENT }}>
       <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
         <Typography variant="body2" sx={{ color: MUTED, fontWeight: 800, width: 18 }}>{rank}</Typography>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
@@ -285,12 +288,13 @@ function ProductCard({ card, rank, reference, seasonLabel }: { card: DesignProdu
 /** Suggestion tab: the top line + one card per product, all from one ranking. */
 export default function ProductCards({ season }: { season: DesignSeason }) {
   const [all, setAll] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
   const cards = season.products ?? [];
   const o = season.overview;
   const shown = all ? cards : cards.slice(0, SHOW);
   return (
     <Stack spacing={2}>
-      <Paper variant="outlined" sx={{ p: 2, borderLeft: 4, borderLeftColor: ACCENT, bgcolor: "#fbfaff" }}>
+      <Paper variant="outlined" sx={{ p: 2, borderLeft: 4, borderLeftColor: ACCENT, bgcolor: COLORS.primaryBgSubtle }}>
         <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 1 }}>
           <LightbulbOutlinedIcon fontSize="small" sx={{ color: ACCENT }} />
           <Typography variant="subtitle1" sx={{ fontWeight: 800, flexGrow: 1 }}>In short — {season.label}</Typography>
@@ -303,9 +307,119 @@ export default function ProductCards({ season }: { season: DesignSeason }) {
         </Box>
       </Paper>
       {cards.length === 0 && <Paper variant="outlined" sx={{ p: 3, color: MUTED }}>No product is trending or in trend for this season yet.</Paper>}
-      <Stack direction="row" sx={{ flexWrap: "wrap", gap: 2 }}>
-        {shown.map((c, i) => <ProductCard key={c.subCategory} card={c} rank={i + 1} reference={season.reference} seasonLabel={season.label} />)}
-      </Stack>
+      {shown.length > 0 && (
+        <Paper variant="outlined">
+          <TableContainer sx={{ maxHeight: 720 }}>
+            <Table
+              stickyHeader
+              size="small"
+              aria-label="Design suggestion recommendations"
+              sx={{
+                borderCollapse: "collapse",
+                "& .MuiTableCell-root": {
+                  border: "1px solid",
+                  borderColor: "divider",
+                  verticalAlign: "top",
+                },
+              }}
+            >
+              <TableHead>
+                <TableRow sx={{ "& th": { ...REPORT_HEAD_SX, whiteSpace: "nowrap" } }}>
+                  <TableCell sx={{ width: 42 }} />
+                  <TableCell>#</TableCell>
+                  <TableCell>Product</TableCell>
+                  <TableCell>Demand now</TableCell>
+                  <TableCell>Trend</TableCell>
+                  <TableCell>Strength</TableCell>
+                  <TableCell>Use these features</TableCell>
+                  <TableCell>Best mix</TableCell>
+                  <TableCell>Action</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {shown.map((card, index) => {
+                  const rank = index + 1;
+                  const isOpen = open === card.subCategory;
+                  const facts = [
+                    `${card.nowShare}% of sales`,
+                    `${card.activeStyles} designs selling`,
+                    card.vsAverage !== null ? `${card.vsAverage.toFixed(1)}× avg. design` : "",
+                    seasonText(card, season.reference),
+                  ].filter(Boolean);
+                  const details = DETAIL_ORDER.map((k) => card.use.details[k]).filter((value) => value && value !== "Unknown");
+                  const more = new Set(card.makeMore.map((item) => `${item.attribute}:${item.value}`));
+                  const best = card.mixes[0];
+                  return (
+                    <Fragment key={card.subCategory}>
+                      <TableRow hover>
+                        <TableCell sx={{ px: 0.5 }}>
+                          <IconButton
+                            size="small"
+                            onClick={() => setOpen(isOpen ? null : card.subCategory)}
+                            aria-label={isOpen ? `Hide ${card.subCategory} details` : `Show ${card.subCategory} details`}
+                          >
+                            {isOpen ? <KeyboardArrowUpIcon fontSize="small" /> : <KeyboardArrowDownIcon fontSize="small" />}
+                          </IconButton>
+                        </TableCell>
+                        <TableCell sx={{ color: MUTED, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{rank}</TableCell>
+                        <TableCell sx={{ minWidth: 165 }}>
+                          {card.category && <Typography variant="caption" sx={{ display: "block", color: MUTED, fontWeight: 700, letterSpacing: 0.35 }}>{card.category.toUpperCase()}</Typography>}
+                          <Typography variant="body2" sx={{ fontWeight: 800 }}>{card.subCategory}</Typography>
+                        </TableCell>
+                        <TableCell sx={{ minWidth: 175 }}>
+                          {facts.map((fact) => <Typography key={fact} variant="caption" sx={{ display: "block", color: MUTED, lineHeight: 1.5 }}>{fact}</Typography>)}
+                        </TableCell>
+                        <TableCell><TrendBadge value={card.trend} stage={card.stage} /></TableCell>
+                        <TableCell><Level level={card.level} /></TableCell>
+                        <TableCell sx={{ minWidth: 260 }}>
+                          {card.use.colour.length > 0 && (
+                            <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", mb: 0.5 }}>
+                              <Typography variant="caption" sx={{ width: 44, flexShrink: 0, color: MUTED, fontWeight: 700 }}>Colours</Typography>
+                              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                                {card.use.colour.map((item) => <ValueChip key={item.value} value={item.value} stage={item.stage} more={more.has(`colour:${item.value}`)} />)}
+                              </Box>
+                            </Stack>
+                          )}
+                          {card.use.fabric.length > 0 && (
+                            <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", mb: 0.5 }}>
+                              <Typography variant="caption" sx={{ width: 44, flexShrink: 0, color: MUTED, fontWeight: 700 }}>Fabrics</Typography>
+                              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                                {card.use.fabric.map((item) => <ValueChip key={item.value} value={item.value} stage={item.stage} more={more.has(`fabric:${item.value}`)} />)}
+                              </Box>
+                            </Stack>
+                          )}
+                          {details.length > 0 && <Typography variant="caption" sx={{ color: MUTED, display: "block", mt: 0.25 }}>Details: <Box component="span" sx={{ color: "text.primary", fontWeight: 600 }}>{details.join(" · ")}</Box></Typography>}
+                          {card.use.colour.length === 0 && card.use.fabric.length === 0 && <Typography variant="caption" sx={{ color: MUTED }}>Too little data to recommend features.</Typography>}
+                        </TableCell>
+                        <TableCell sx={{ minWidth: 145 }}>
+                          {best ? <>
+                            <Typography variant="body2" sx={{ fontWeight: 700 }}>{best.colour} + {best.fabric}</Typography>
+                            <Typography variant="caption" sx={{ color: best.tried ? ACCENT : UP, fontWeight: 700 }}>{best.tried ? "Made before" : "New idea"}{card.mixes.length > 1 ? ` · +${card.mixes.length - 1} more` : ""}</Typography>
+                          </> : <Typography variant="caption" sx={{ color: MUTED }}>No mix identified</Typography>}
+                        </TableCell>
+                        <TableCell sx={{ minWidth: 135 }}>
+                          {card.makeMore.slice(0, 1).map((item) => <Typography key={`more-${item.value}`} variant="caption" sx={{ display: "block", color: UP, fontWeight: 800 }}>+ {item.value}</Typography>)}
+                          {card.cutBack.slice(0, 2).map((item) => <Typography key={`cut-${item.value}`} variant="caption" sx={{ display: "block", color: DOWN, fontWeight: 800 }}>− {item.value}</Typography>)}
+                          {card.makeMore.length === 0 && card.cutBack.length === 0 && <Typography variant="caption" sx={{ color: MUTED }}>No action flagged</Typography>}
+                        </TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell colSpan={9} sx={{ p: 0, borderBottom: isOpen ? undefined : "none" }}>
+                          <Collapse in={isOpen} timeout="auto" unmountOnExit>
+                            <Box sx={{ p: 1.5, bgcolor: "rgba(49,44,92,0.025)" }}>
+                              <ProductCard card={card} rank={rank} reference={season.reference} seasonLabel={season.label} />
+                            </Box>
+                          </Collapse>
+                        </TableCell>
+                      </TableRow>
+                    </Fragment>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Paper>
+      )}
       {cards.length > SHOW && (
         <Box>
           <Button onClick={() => setAll((v) => !v)} sx={{ textTransform: "none", fontWeight: 700 }}>

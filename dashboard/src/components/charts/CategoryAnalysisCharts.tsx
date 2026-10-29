@@ -9,18 +9,19 @@ import { ChartsTooltip } from "@mui/x-charts/ChartsTooltip";
 import { ChartsAxisHighlight } from "@mui/x-charts/ChartsAxisHighlight";
 import { ChartsReferenceLine } from "@mui/x-charts/ChartsReferenceLine";
 import { formatNumber } from "@/utils/format";
+import { COLORS, REPORT } from "@/theme/colors";
 
 // Indigo steps for the bars (the dashboard's brand hue; one hue = one measure)
 // + teal for the spike line. Bars/line and best-month/line pairs validated
 // (CVD ΔE >= 13.9, contrast >= 3:1 on white).
-const BAR_COLOR = "#8a83d2";
-const BAR_PEAK_COLOR = "#4b42a3"; // the best complete month
-const BAR_PARTIAL_COLOR = "#dcd9f3"; // current month, not complete yet
+const BAR_COLOR = COLORS.primaryHover;
+const BAR_PEAK_COLOR = COLORS.primary; // the best complete month
+const BAR_PARTIAL_COLOR = COLORS.primaryBg; // current month, not complete yet
 const SPIKE_COLOR = "#0f9d8f";
-const GRID_COLOR = "#eceef3";
-const UP_TEXT = "#15803d";
-const DOWN_TEXT = "#dc2626";
-const MUTED = "#64748b";
+const GRID_COLOR = COLORS.bgMuted;
+const UP_TEXT = REPORT.good;
+const DOWN_TEXT = REPORT.bad;
+const MUTED = COLORS.textSecondary;
 const TOTAL_KEY = "__total__";
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -132,7 +133,7 @@ export default function CategoryAnalysisCharts({ months, groups, totals, partial
   const partialCell = partialMonth ? cells[partialMonth] : undefined;
 
   return (
-    <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: "#ffffff" }}>
+    <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: COLORS.bgWhite, borderColor: COLORS.border }}>
       {/* Header: title + legend on the left, selector on the right */}
       <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} sx={{ alignItems: { md: "flex-start" }, justifyContent: "space-between" }}>
         <Box>
@@ -145,7 +146,7 @@ export default function CategoryAnalysisCharts({ months, groups, totals, partial
           </Stack>
         </Box>
         {filters ?? (
-          <FormControl size="small" sx={{ minWidth: 220 }}>
+          <FormControl size="small" sx={{ minWidth: { xs: "100%", sm: 220 } }}>
             <Select value={key} onChange={(e) => setKey(e.target.value)} displayEmpty inputProps={{ "aria-label": groupName }}>
               <MenuItem value={TOTAL_KEY}>All {groupName === "Category" ? "categories" : "sub categories"} (total)</MenuItem>
               {groups.map((g) => (

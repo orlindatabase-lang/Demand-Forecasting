@@ -20,7 +20,7 @@ function sortedUnique(values: string[], byTier = false): string[] {
 
 function FilterSelect({ id, label, value, options, onChange }: { id: string; label: string; value: string; options: string[]; onChange: (v: string) => void }) {
   return (
-    <FormControl size="small" sx={{ minWidth: 150 }}>
+    <FormControl size="small" sx={{ minWidth: { xs: "100%", sm: 150 } }}>
       <InputLabel id={`${id}-label`}>{label}</InputLabel>
       <Select labelId={`${id}-label`} id={id} label={label} value={value} onChange={(e) => onChange(e.target.value)}>
         <MenuItem value={ALL}>All</MenuItem>
@@ -92,7 +92,7 @@ export default function TierSpikeChart({ months, partialMonth }: { months: strin
         <Autocomplete
           id="tsr-style"
           size="small"
-          sx={{ minWidth: 230 }}
+          sx={{ minWidth: { xs: "100%", sm: 230 } }}
           options={styleOptions}
           value={selectedStyle}
           onChange={(_e, o) => setStyle(o?.style ?? ALL)}

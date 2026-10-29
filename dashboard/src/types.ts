@@ -414,6 +414,13 @@ export interface DesignSeason {
   overview?: { focus: string[]; colours: string[]; fabrics: string[] };
   drivers: DesignDriver[];
   recommendedStyles?: DesignRecommendedStyle[];
+  // The report weeks behind expectedSale; normally 9 fixed calendar report weeks.
+  expectedSaleWindow?: {
+    weeks?: number; from?: string; to?: string; start?: string; end?: string; unavailable?: boolean;
+    running?: boolean; // the first week is the running one (has real sales so far)
+    // The 9 report weeks, as the Weekly Sales Report shows them.
+    weekList?: { start: string; end: string; month: string; label: string; eventCategory: string; eventName: string }[];
+  };
 }
 
 /** An existing style carrying a product card's suggested features - most
@@ -423,10 +430,17 @@ export interface DesignRecommendedStyle {
   style: string;
   subCategory: string;
   category: string;
-  forecast35: number; // expected Gross units in the next 35 days (design forecast)
+  subCategoryRank: number; // its sub-category card's position (0 = best)
+  colour: string; // one of its card's suggested colours (required to be listed)
+  colourRank: number; // that colour's position on the card (0 = best)
+  colourStage?: DesignStage | null; // the colour's trend status
+  expectedSale: number; // Weekly Sales Report forecast, running report week + next 8 report weeks (9 weeks)
+  weekly?: number[]; // its forecast per week of expectedSaleWindow.weekList
+  soldSoFar?: number | null; // real sales so far in the running week (null if it has not started)
   featureMatchCount: number;
   suggestedFeatureCount: number;
   matchedFeatures: Record<string, string>; // attribute -> the style's (suggested) value
+  featureStages?: Record<string, DesignStage>; // Trend status of matched features that have one
   missingFeatures: string[]; // suggested attributes the style does not match
   styleFeatures?: Record<string, string>; // what the style has instead, per missing attribute
   featureFitScore: number;

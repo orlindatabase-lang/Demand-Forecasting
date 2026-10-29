@@ -216,7 +216,7 @@ def refresh() -> dict:
 def get_weekly_grid(
     groupBy: str = Query("subCategory", pattern="^(subCategory|style)$",
                           description="'subCategory' or 'style' (DESIGN_NO)"),
-    weeks: int = Query(13, ge=1, le=13, description="Forward forecast horizon in weeks (max 13, =~ 3 months)"),
+    weeks: int = Query(13, ge=1, le=40, description="Forward forecast horizon in weeks (max 40, supports the nine-month Design Suggestions horizon)"),
     limit: int = Query(50, ge=1, le=2000, description="Rows per page (max 2000, enough for the full Style list)"),
     offset: int = Query(0, ge=0, description="Start index for pagination"),
     search: str = Query("", description="Case-insensitive substring filter on the row key"),
@@ -235,7 +235,7 @@ def get_weekly_grid(
     tags=["plan"],
 )
 def get_channel_source_weekly_total(
-    weeks: int = Query(9, ge=1, le=13, description="Forward forecast horizon in weeks — must match the Weekly Sales Report's own request for the returned week axis to line up"),
+    weeks: int = Query(9, ge=1, le=40, description="Forward forecast horizon in weeks — must match the Weekly Sales Report's own request for the returned week axis to line up"),
     search: str = Query("", description="Same search filter as /api/reports/weekly-grid, so the TOTAL row's breakdown covers exactly the same Styles"),
     subCategory: str = Query("", description="Same Sub Category filter as /api/reports/weekly-grid"),
     category: str = Query("", description="Same top-level Category filter as /api/reports/weekly-grid"),
@@ -338,7 +338,7 @@ def get_category_analysis_filtered(
 )
 def get_channel_source_weekly(
     style: str,
-    weeks: int = Query(9, ge=1, le=13, description="Forward forecast horizon in weeks — must match the Weekly Sales Report's own request for the returned week axis to line up"),
+    weeks: int = Query(9, ge=1, le=40, description="Forward forecast horizon in weeks — must match the Weekly Sales Report's own request for the returned week axis to line up"),
 ) -> ChannelSourceWeeklyResponse:
     """Per-marketplace (Amazon/Flipkart/Meesho/Myntra/Nykaa for OMS,
     MOKOSH/Color's Of Earth for WEBSITE) week-wise Gross Sale for one Style —

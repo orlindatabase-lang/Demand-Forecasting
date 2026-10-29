@@ -5,12 +5,12 @@ const REFRESH_MS = 60_000;
 
 export function useWeeklyGrid(
   groupBy: "subCategory" | "style",
-  opts: { limit?: number; offset?: number; search?: string; subCategory?: string; category?: string } = {},
+  opts: { weeks?: number; limit?: number; offset?: number; search?: string; subCategory?: string; category?: string } = {},
 ) {
-  const { limit = 50, offset = 0, search = "", subCategory = "", category = "" } = opts;
+  const { weeks = 9, limit = 50, offset = 0, search = "", subCategory = "", category = "" } = opts;
   return useQuery({
-    queryKey: ["weeklyGrid", groupBy, limit, offset, search, subCategory, category],
-    queryFn: () => dataService.weeklyGrid(groupBy, { limit, offset, search, subCategory, category }),
+    queryKey: ["weeklyGrid", groupBy, weeks, limit, offset, search, subCategory, category],
+    queryFn: () => dataService.weeklyGrid(groupBy, { weeks, limit, offset, search, subCategory, category }),
     refetchInterval: REFRESH_MS,
     // Keep showing the last page's rows while a new limit/offset/filter
     // combination loads (2026-09-21, found while adding the tier filter -

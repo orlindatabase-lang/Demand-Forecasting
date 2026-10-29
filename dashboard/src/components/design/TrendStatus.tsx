@@ -7,9 +7,10 @@ import DoNotDisturbOnOutlinedIcon from "@mui/icons-material/DoNotDisturbOnOutlin
 import AutoGraphIcon from "@mui/icons-material/AutoGraph";
 import AboutButton from "./AboutButton";
 import type { DesignLifecycle, DesignLifecycleItem, DesignSpike, DesignStage } from "@/types";
+import { COLORS, REPORT } from "@/theme/colors";
 
-const ACCENT = "#312c5c";
-const MUTED = "#64748b";
+const ACCENT = REPORT.actual;
+const MUTED = COLORS.textSecondary;
 const SPARK_LINE = "#94a3b8"; // de-emphasised trend line; only the latest point carries the stage colour
 
 // Stage colours = the reserved status palette, always with an icon + label.
@@ -107,7 +108,7 @@ function StageColumn({ stage, items, blocks, spikeWeek }: { stage: (typeof STAGE
   const shown = all ? items : items.slice(0, SHOW);
   const { Icon } = stage;
   return (
-    <Paper variant="outlined" sx={{ p: 1.5, flex: "1 1 260px", minWidth: 240, borderTop: 3, borderTopColor: stage.color }}>
+    <Paper variant="outlined" sx={{ p: 1.5, flex: "1 1 260px", minWidth: { xs: 0, sm: 240 }, borderTop: 3, borderTopColor: stage.color }}>
       <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
         <Icon fontSize="small" sx={{ color: stage.color }} />
         <Typography variant="subtitle2" sx={{ fontWeight: 800, flexGrow: 1 }}>{stage.title}</Typography>

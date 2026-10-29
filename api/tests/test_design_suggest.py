@@ -263,7 +263,7 @@ def test_recommended_styles_rank_feature_fit_with_forecast():
     assert [row["style"] for row in result] == ["FULL", "PARTIAL"]
     assert result[0]["featureMatchCount"] == 8
     assert result[0]["matchedFeatures"]["colour"] == "Red"
-    assert result[1]["forecast35"] == 500 and result[1]["forecastScore"] == 100.0
+    assert result[1]["expectedSale"] == 500 and result[1]["forecastScore"] == 100.0
     assert all(row["style"] != "WRONG" for row in result)  # does not match enough suggested features
 
 
@@ -286,6 +286,56 @@ def test_recommended_styles_put_most_matched_features_first():
     assert result[2]["missingFeatures"] == ["sleeve"] and result[2]["styleFeatures"] == {"sleeve": "Half Sleeve"}
 
 
+def test_recommended_styles_carry_feature_trend_stages():
+    styles = pd.DataFrame([{"style": "A", "category": "Ethnic", "subCategory": "Kurta", "colour": "Red", "fabric": "Silk",
+                            "embroidery": "Zari", "neck": "Round Neck", "sleeve": "", "topType": ""}]).set_index("style")
+    cards = [{"subCategory": "Kurta", "category": "Ethnic", "score": 80, "level": "strong",
+              "use": {"colour": [{"value": "Red"}], "fabric": [{"value": "Silk"}],
+                      "details": {"embroidery": "Zari", "neck": "Round Neck"}}}]
+    stages = {"colour": {"Red": "trending"}, "fabric": {"Silk": "steady"}, "neck": {"V Neck": "trending"}}
+    row = ds._recommended_styles(cards, styles, {"A": 10}, stages)[0]
+    # only matched features with a Trend status get a stage
+    assert row["featureStages"] == {"colour": "trending", "fabric": "steady"}
+
+
+def test_recommended_styles_are_based_on_sub_category_and_colour():
+    def style(code, colour, **kw):
+        return {"style": code, "category": "Ethnic", "subCategory": kw.pop("sc", "Kurta"), "colour": colour, "fabric": "Silk",
+                "embroidery": "Zari", "neck": "Round Neck", "sleeve": "Full Sleeve", "topType": "Dyed", **kw}
+    styles = pd.DataFrame([
+        style("PINK_ALL", "Pink"),                          # 2nd colour, every feature
+        style("RED_FEW", "Red", fabric="Cotton", neck="V Neck"),   # best colour, fewer features
+        style("BLUE_ALL", "Blue"),                          # colour not suggested -> left out
+        style("DRESS_RED", "Red", sc="Dress"),              # 2nd card
+        style("NOCOL", "Red", sc="Shrug"),                  # its card suggests no colour -> left out
+    ]).set_index("style")
+    details = {"embroidery": "Zari", "neck": "Round Neck", "sleeve": "Full Sleeve", "topType": "Dyed"}
+    cards = [
+        {"subCategory": "Kurta", "category": "Ethnic", "score": 80, "level": "strong",
+         "use": {"colour": [{"value": "Red", "stage": "trending"}, {"value": "Pink", "stage": "steady"}],
+                 "fabric": [{"value": "Silk"}], "details": details}},
+        {"subCategory": "Dress", "category": "Ethnic", "score": 60, "level": "good",
+         "use": {"colour": [{"value": "Red"}], "fabric": [{"value": "Silk"}], "details": details}},
+        {"subCategory": "Shrug", "category": "Ethnic", "score": 50, "level": "good",
+         "use": {"colour": [], "fabric": [{"value": "Silk"}], "details": details}},
+    ]
+    rows = ds._recommended_styles(cards, styles, {s: 100 for s in styles.index})
+    # sub-category first, then the card's colour order - before the feature count
+    assert [r["style"] for r in rows] == ["RED_FEW", "PINK_ALL", "DRESS_RED"]
+    assert rows[0]["colour"] == "Red" and rows[0]["colourRank"] == 0 and rows[0]["colourStage"] == "trending"
+    assert rows[2]["subCategoryRank"] == 1
+
+
+def test_recommended_styles_stay_visible_when_the_expected_sale_is_unavailable():
+    styles = pd.DataFrame([{"style": "A", "category": "Ethnic", "subCategory": "Kurta", "colour": "Red", "fabric": "Silk",
+                            "embroidery": "Zari", "neck": "Round Neck", "sleeve": "", "topType": ""}]).set_index("style")
+    cards = [{"subCategory": "Kurta", "category": "Ethnic", "score": 80, "level": "strong",
+              "use": {"colour": [{"value": "Red"}], "fabric": [{"value": "Silk"}],
+                      "details": {"embroidery": "Zari", "neck": "Round Neck"}}}]
+    rows = ds._recommended_styles(cards, styles, {}, include_zero=True)
+    assert len(rows) == 1 and rows[0]["expectedSale"] == 0
+
+
 def test_style_forecast_uses_design_total_once_and_falls_back_to_skus():
     import types
     data = types.SimpleNamespace(PLAN_ROWS=[
@@ -295,6 +345,36 @@ def test_style_forecast_uses_design_total_once_and_falls_back_to_skus():
         types.SimpleNamespace(designNo="B", designForecast35=0, forecast35=30),
     ])
     assert ds._style_forecast35(data) == {"A": 120, "B": 50}
+
+
+def test_style_forecast_9w_sums_running_and_next_report_weeks():
+    import types
+    ns = types.SimpleNamespace
+    starts, months = [], []
+    year, month = 2026, 10
+    for _ in range(4):  # Oct 2026 through Jan 2027: 16 calendar report weeks
+        report_weeks = []
+        for number, day in enumerate((1, 8, 16, 24), start=1):
+            start = date(year, month, day).isoformat()
+            starts.append(start)
+            report_weeks.append(ns(weekStart=start, label=f"W{number}"))
+        months.append(ns(label=date(year, month, 1).strftime("%B %Y"), weeks=report_weeks))
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    # Oct W1/W2/W3 complete, Oct W4 running, the rest upcoming; 10 units a week.
+    def cell(i):   # Oct W4 running with 4 sold so far
+        return ns(actual=5 if i < 3 else 4 if i == 3 else None, partial=i >= 3, forecast=10.0)
+    grid = ns(months=months, weeklyTotals=ns(cells={s: cell(i) for i, s in enumerate(starts)}),
+              rows=[ns(key="a-1", cells={s: cell(i) for i, s in enumerate(starts)})])
+    expected, window = ds._style_forecast_9w(ns(get_weekly_grid=lambda *a, **k: grid))
+    assert expected == {"A-1": 90}                       # Oct W4 .. Dec W4 = 9 report weeks
+    weekly = window.pop("_weekly")
+    week_list = window.pop("weekList")
+    assert window == {"weeks": 9, "from": "Oct W4", "to": "Dec W4", "start": "2026-10-24", "end": "2026-12-31",
+                      "running": True}
+    assert weekly == {"A-1": {"weekly": [10] * 9, "soldSoFar": 4}}
+    assert [w["label"] for w in week_list] == ["W4", "W1", "W2", "W3", "W4", "W1", "W2", "W3", "W4"]
+    assert week_list[0] == {"start": "2026-10-24", "end": "2026-10-31", "month": "October 2026", "label": "W4",
+                            "eventCategory": "", "eventName": ""}
 
 
 def test_top_pick_hit_rate():

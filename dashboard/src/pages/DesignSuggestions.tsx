@@ -33,12 +33,13 @@ import { LoadingSkeleton, ErrorState } from "@/components/common/StateViews";
 import { useDesignSuggestions } from "@/hooks/useDashboardData";
 import { formatNumber } from "@/utils/format";
 import type { DesignDriver, DesignLifecycle, DesignSeason, DesignTrendingNow, DesignWindow } from "@/types";
+import { COLORS, REPORT, REPORT_HEAD_SX } from "@/theme/colors";
 
-const ACCENT = "#312c5c";
+const ACCENT = REPORT.actual;
 const ACCENT_SOFT = "rgba(49,44,92,0.08)";
-const UP = "#15803d";
-const DOWN = "#dc2626";
-const MUTED = "#64748b";
+const UP = REPORT.good;
+const DOWN = REPORT.bad;
+const MUTED = COLORS.textSecondary;
 
 const ATTR_LABEL: Record<string, string> = {
   category: "Category", subCategory: "Sub Category", colour: "Colour", fabric: "Fabric",
@@ -125,7 +126,7 @@ function TrendingNow({ trending, window }: { trending: DesignTrendingNow; window
         <TableContainer sx={{ maxHeight: 420 }}>
           <Table size="small" stickyHeader>
             <TableHead>
-              <TableRow sx={{ "& th": { fontWeight: 800, bgcolor: "#eef0f5", fontSize: "0.75rem" } }}>
+              <TableRow sx={{ "& th": REPORT_HEAD_SX }}>
                 <TableCell>DESIGN</TableCell>
                 <TableCell>SUB CATEGORY</TableCell>
                 <TableCell>COLOUR</TableCell>
@@ -174,7 +175,7 @@ function TrendingNow({ trending, window }: { trending: DesignTrendingNow; window
   );
 }
 
-type View = "analysis" | "suggestion";
+type View = "analysis" | "suggestion" | "styles";
 
 /** " Oct W2 = real sales up to 9 Oct + its weekly forecast for the other 6 days." */
 function runningNote(window?: DesignWindow): string {
@@ -202,14 +203,10 @@ function SeasonView({
   if (season.note) {
     return <Paper variant="outlined" sx={{ p: 3, color: MUTED }}>{season.note}</Paper>;
   }
-  if (view === "suggestion") {
-    return (
-      <Stack spacing={2.5}>
-        <RecommendedStyles styles={season.recommendedStyles ?? []} />
-        <ProductCards season={season} />
-      </Stack>
-    );
+  if (view === "styles") {
+    return <RecommendedStyles styles={season.recommendedStyles ?? []} products={season.products} window={season.expectedSaleWindow} />;
   }
+  if (view === "suggestion") return <ProductCards season={season} />;
   return (
     <Stack spacing={2.5}>
       {/* What is happening: trend stages (with sudden spikes), designs taking off, and what the model learned */}
@@ -232,13 +229,14 @@ function SeasonView({
   );
 }
 
-/** Design Suggestions tab, two sub-tabs: Design Analysis (trend status,
- * trending designs, drivers) and Suggestion (one card per product). */
+/** Design Suggestions tab: analysis, product-level recommendations, and a
+ * separate ranked list of existing styles to push. */
 export default function DesignSuggestions() {
   const { data, isLoading, isError, refetch } = useDesignSuggestions();
   const [role, setRole] = useState<"running" | "upcoming">("running");
   const [params, setParams] = useSearchParams();
-  const view: View = params.get("view") === "suggestion" ? "suggestion" : "analysis";
+  const requestedView = params.get("view");
+  const view: View = requestedView === "suggestion" || requestedView === "styles" ? requestedView : "analysis";
   const season = data?.seasons.find((s) => s.role === role);
   if (data?.rules) RULES.trendStrong = data.rules.trendStrong;
 
@@ -252,6 +250,7 @@ export default function DesignSuggestions() {
       >
         <Tab value="analysis" label="Design Analysis" />
         <Tab value="suggestion" label="Suggestion" />
+        <Tab value="styles" label="Styles to push" />
       </Tabs>
       {isLoading ? (
         <LoadingSkeleton />

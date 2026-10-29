@@ -85,6 +85,14 @@ const KEY_COL_WIDTH = 220;
 // user-requested: keep Launch Date clipped next to Style) so both stay
 // visible together while the week/month columns scroll horizontally.
 const LAUNCH_DATE_COL_WIDTH = 96;
+// Responsive (2026-10-29, user-requested: arrange itself to the screen): below
+// the md breakpoint (900px - phones, portrait tablets) only the STYLE column
+// stays pinned; Launch Date and Suggested Production scroll with the weeks
+// (their header/TOTAL cells keep their top/bottom pinning, only left/right is
+// released), so the week columns have room.
+const PIN_LEFT_LAUNCH = { xs: "auto", md: KEY_COL_WIDTH } as const;
+const PIN_RIGHT = { xs: "auto", md: 0 } as const;
+const KEY_COL_MIN = { xs: 170, md: KEY_COL_WIDTH } as const;
 // Initial guess for react-virtual's size estimate - it self-corrects per
 // row via measureElement, so this only needs to be roughly right to avoid
 // an initial scrollbar jump. Measured at 81px in the actual rendered table
@@ -161,7 +169,7 @@ function SummaryCard({
   return (
     <Paper
       variant="outlined"
-      sx={{ flex: 1, minWidth: 200, px: 2, py: 1, borderColor: COLORS.border, borderLeft: `3px solid ${accent}` }}
+      sx={{ flex: 1, minWidth: { xs: 0, sm: 200 }, px: 2, py: 1, borderColor: COLORS.border, borderLeft: `3px solid ${accent}` }}
     >
       {/* Type sizes / weights / colours follow the portal's KPI cards (SKU
           Analysis): label 10px uppercase, value 17px, unit 11px, pills 10.5px. */}
@@ -202,7 +210,7 @@ function SummaryCard({
                 borderRadius: "6px",
                 px: 0.75,
                 py: 0.125,
-                whiteSpace: "nowrap",
+                whiteSpace: { xs: "normal", sm: "nowrap" },
               }}
             >
               {pill}
@@ -296,7 +304,7 @@ function Cell({
   );
 }
 
-// The active 2-month freeze ("frozen on" / "until"), set from the grid response.
+// The rolling 2-month freeze ("on" = when the current weeks were frozen; "until" is no longer used), set from the grid response.
 const FREEZE = { on: "", until: "" };
 const shortIso = (iso: string) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "");
 
@@ -305,18 +313,18 @@ const shortIso = (iso: string) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDat
 function forecastTip(cell: WeeklyGridCell): string {
   if (cell.frozenMissing) {
     return FREEZE.on
-      ? `Not in the 2-month freeze taken on ${shortIso(FREEZE.on)} - it is frozen in the next freeze${FREEZE.until ? ` (${shortIso(FREEZE.until)})` : ""}. Latest: ${formatNumber(cell.liveForecast ?? 0)}`
+      ? `Not frozen yet - a week is frozen the day it comes within the next 2 months. Latest: ${formatNumber(cell.liveForecast ?? 0)}`
       : `Frozen view shows past weeks only - this week is not finished yet. Latest: ${formatNumber(cell.liveForecast ?? 0)}`;
   }
   if (cell.liveForecast === undefined && cell.frozenForecast === undefined) return "";
   const start = cell.frozenForecast;
   const startText = start == null ? "not frozen" : formatNumber(start);
-  const frozenLabel = FREEZE.on ? `Frozen on ${shortIso(FREEZE.on)}` : "Frozen";
+  const frozenLabel = "Frozen";
   const pct = (a: number, b: number) => (b > 0 ? ` (${a >= b ? "+" : ""}${(((a - b) / b) * 100).toFixed(1)}%)` : "");
   if (cell.actual === null) {
     const now = cell.liveForecast ?? cell.forecast;
     return start == null
-      ? `Latest forecast: ${formatNumber(now)} · beyond this week's 2-month freeze, or not recorded yet`
+      ? `Latest forecast: ${formatNumber(now)} · not frozen yet (more than 2 months away)`
       : `${frozenLabel}: ${formatNumber(start)} · Latest: ${formatNumber(now)}${pct(now, start)}`;
   }
   if (cell.partial) {
@@ -519,7 +527,7 @@ function EventPanel({
 
   if (!event) {
     return (
-      <Paper variant="outlined" sx={{ flex: 1, minWidth: 300, px: 1.5, py: 1 }}>
+      <Paper variant="outlined" sx={{ flex: 1, minWidth: { xs: 0, md: 300 }, px: 1.5, py: 1 }}>
         <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700, letterSpacing: 0.3 }}>
           {label}
         </Typography>
@@ -536,7 +544,7 @@ function EventPanel({
   const names = event.eventName.split(" + ").map((n) => n.trim()).filter(Boolean);
 
   return (
-    <Paper variant="outlined" sx={{ flex: 1, minWidth: 320, overflow: "hidden", display: "flex", borderColor: COLORS.border, borderRadius: "10px" }}>
+    <Paper variant="outlined" sx={{ flex: 1, minWidth: { xs: 0, md: 320 }, overflow: "hidden", display: "flex", borderColor: COLORS.border, borderRadius: "10px" }}>
       <Box
         sx={{
           flex: 1,
@@ -546,7 +554,7 @@ function EventPanel({
           background: `linear-gradient(135deg, ${kind === "festival" ? "#fff6e6" : "#eef4ff"} 0%, ${COLORS.bgWhite} 100%)`,
         }}
       >
-        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 0.75 }}>
+        <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 0.75, flexWrap: "wrap", rowGap: 0.25 }}>
           <Box
             sx={{
               width: 18,
@@ -681,7 +689,7 @@ function ForecastOverview({
           />
         </Stack>
         {actions && (
-          <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", flexShrink: 0, ml: "auto" }}>
+          <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", flexShrink: 0, ml: { xs: 0, sm: "auto" }, flexWrap: "wrap", rowGap: 1 }}>
             {actions}
           </Stack>
         )}
@@ -874,7 +882,7 @@ export default function WeeklySalesGrid() {
   // Forecast: Latest (default - what the report always showed: running and
   // upcoming weeks live, completed weeks locked at their end) or Frozen (each
   // started week as forecast at its start) - 2026-10-14, user-requested.
-  const [forecastView, setForecastView] = useState<"frozen" | "latest">("latest");
+  const [forecastView, setForecastView] = useState<"frozen" | "latest">("frozen"); // Frozen by default (2026-10-29, user-requested)
   if (gridData) {
     FREEZE.on = gridData.weeklyTotals.frozenOn ?? "";
     FREEZE.until = gridData.weeklyTotals.frozenUntil ?? "";
@@ -1088,7 +1096,16 @@ export default function WeeklySalesGrid() {
     if (hasAutoScrolledRef.current || !currentMonthLabel) return;
     const cell = currentMonthCellRef.current;
     if (cell && scrollRef.current) {
-      scrollRef.current.scrollLeft = Math.max(0, cell.offsetLeft - (KEY_COL_WIDTH + LAUNCH_DATE_COL_WIDTH));
+      // Width actually covered by the left-pinned header cells (STYLE, plus
+      // LAUNCH DATE on wide screens) - measured, as cells can render wider
+      // than their minWidth, which hid part of the month's W1 behind them.
+      const pinnedWidth = Array.from(cell.parentElement?.children ?? [])
+        .filter((c) => {
+          const st = getComputedStyle(c);
+          return st.position === "sticky" && st.left !== "auto";
+        })
+        .reduce((sum, c) => sum + c.getBoundingClientRect().width, 0);
+      scrollRef.current.scrollLeft = Math.max(0, cell.offsetLeft - pinnedWidth);
       hasAutoScrolledRef.current = true;
     }
   }, [currentMonthLabel]);
@@ -1140,7 +1157,7 @@ export default function WeeklySalesGrid() {
             <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
               <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700 }}>FORECAST:</Typography>
               <Tooltip title={FREEZE.on
-                ? `Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: the forecast of the next 2 months frozen on ${shortIso(FREEZE.on)} and kept unchanged${FREEZE.until ? ` until ${shortIso(FREEZE.until)}` : ""}. Hover any forecast figure to see both.`
+                ? `Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: rolling 2 months - each week is frozen the day its forecast first appears within the next 2 months and never changes after that (current weeks frozen since ${shortIso(FREEZE.on)}). Hover any forecast figure to see both.`
                 : "Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: past (completed) weeks only, each with the forecast it had when the week began; running and upcoming weeks show —. Hover any forecast figure to see both."}>
                 <ToggleButtonGroup
                   exclusive
@@ -1160,7 +1177,7 @@ export default function WeeklySalesGrid() {
                   }}
                 >
                   <ToggleButton value="latest">Latest</ToggleButton>
-                  <ToggleButton value="frozen">{FREEZE.on ? `Frozen (${shortIso(FREEZE.on)})` : "Frozen (past weeks)"}</ToggleButton>
+                  <ToggleButton value="frozen">{FREEZE.on ? "Frozen (rolling 2 months)" : "Frozen (past weeks)"}</ToggleButton>
                 </ToggleButtonGroup>
               </Tooltip>
             </Stack>
@@ -1201,10 +1218,10 @@ export default function WeeklySalesGrid() {
               ),
             },
           }}
-          sx={{ minWidth: 220 }}
+          sx={{ minWidth: { xs: "100%", sm: 220 } }}
         />
 
-        <FormControl size="small" sx={{ minWidth: 200 }}>
+        <FormControl size="small" sx={{ minWidth: { xs: "100%", sm: 200 } }}>
           <InputLabel id="weekly-grid-category-label">Category</InputLabel>
           <Select
             labelId="weekly-grid-category-label"
@@ -1235,7 +1252,7 @@ export default function WeeklySalesGrid() {
           </Select>
         </FormControl>
 
-        <FormControl size="small" sx={{ minWidth: 200 }}>
+        <FormControl size="small" sx={{ minWidth: { xs: "100%", sm: 200 } }}>
           <InputLabel id="weekly-grid-subcategory-label">Sub Category</InputLabel>
           <Select
             labelId="weekly-grid-subcategory-label"
@@ -1345,7 +1362,7 @@ export default function WeeklySalesGrid() {
         </Paper>
       )}
 
-      <Stack direction="row" spacing={2} sx={{ mb: 1, width: "100%", alignItems: "center", justifyContent: "flex-end" }}>
+      <Stack direction="row" spacing={2} sx={{ mb: 1, width: "100%", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", rowGap: 0.5 }}>
         <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700 }}>
           WEEK COLOR:
         </Typography>
@@ -1386,7 +1403,7 @@ export default function WeeklySalesGrid() {
                     left: 0,
                     top: 0,
                     zIndex: 3,
-                    minWidth: KEY_COL_WIDTH,
+                    minWidth: KEY_COL_MIN,
                     bgcolor: HEAD_BG,
                     fontWeight: 700,
                     textTransform: "uppercase",
@@ -1403,7 +1420,7 @@ export default function WeeklySalesGrid() {
                   rowSpan={2}
                   sx={{
                     position: "sticky",
-                    left: KEY_COL_WIDTH,
+                    left: PIN_LEFT_LAUNCH,
                     top: 0,
                     zIndex: 3,
                     minWidth: LAUNCH_DATE_COL_WIDTH,
@@ -1447,7 +1464,7 @@ export default function WeeklySalesGrid() {
                   sx={{
                     position: "sticky",
                     top: 0,
-                    right: 0,
+                    right: PIN_RIGHT,
                     zIndex: 3,
                     minWidth: 150,
                     bgcolor: SUGGESTED_BG,
@@ -1601,7 +1618,7 @@ export default function WeeklySalesGrid() {
                           <TableCell
                             sx={{
                               position: "sticky",
-                              left: KEY_COL_WIDTH,
+                              left: PIN_LEFT_LAUNCH,
                               zIndex: 1,
                               bgcolor: MARKET_ROW_BG,
                               borderColor: "divider",
@@ -1711,7 +1728,7 @@ export default function WeeklySalesGrid() {
                         <TableCell
                           sx={{
                             position: "sticky",
-                            left: KEY_COL_WIDTH,
+                            left: PIN_LEFT_LAUNCH,
                             zIndex: 1,
                             bgcolor: "background.paper",
                             borderColor: "divider",
@@ -1746,7 +1763,7 @@ export default function WeeklySalesGrid() {
                         ))}
                         <TableCell
                           align="center"
-                          sx={{ position: "sticky", right: 0, zIndex: 1, bgcolor: SUGGESTED_BG, ...STICKY_EDGE_RIGHT_SX }}
+                          sx={{ position: "sticky", right: PIN_RIGHT, zIndex: 1, bgcolor: SUGGESTED_BG, ...STICKY_EDGE_RIGHT_SX }}
                         >
                           <Typography
                             variant="body2"
@@ -1801,7 +1818,7 @@ export default function WeeklySalesGrid() {
                 <TableCell
                   sx={{
                     position: "sticky",
-                    left: KEY_COL_WIDTH,
+                    left: PIN_LEFT_LAUNCH,
                     bottom: totalStickyBottom,
                     zIndex: 3,
                     bgcolor: HEAD_BG,
@@ -1832,7 +1849,7 @@ export default function WeeklySalesGrid() {
                   sx={{
                     position: "sticky",
                     bottom: totalStickyBottom,
-                    right: 0,
+                    right: PIN_RIGHT,
                     zIndex: 3,
                     bgcolor: SUGGESTED_BG,
                     borderTop: `2px solid ${COLORS.borderDark}`,
@@ -1874,7 +1891,7 @@ export default function WeeklySalesGrid() {
                     <TableCell
                       sx={{
                         position: "sticky",
-                        left: KEY_COL_WIDTH,
+                        left: PIN_LEFT_LAUNCH,
                         bottom: marketStickyBottoms[i] ?? 0,
                         zIndex: 3,
                         bgcolor: MARKET_ROW_BG,
@@ -1928,7 +1945,7 @@ export default function WeeklySalesGrid() {
                       sx={{
                         position: "sticky",
                         bottom: marketStickyBottoms[i] ?? 0,
-                        right: 0,
+                        right: PIN_RIGHT,
                         zIndex: 3,
                         bgcolor: MARKET_ROW_BG,
                         ...STICKY_EDGE_RIGHT_SX,
