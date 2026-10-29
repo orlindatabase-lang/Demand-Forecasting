@@ -347,6 +347,19 @@ def _stock_design(s: pd.Series) -> pd.Series:
     return colour.fillna(_design_key(s))
 
 
+def clean_design_no(s: pd.Series) -> pd.Series:
+    """ERP design code -> the style code shown everywhere: extra suffixes
+    dropped, e.g. "050-02-XS-A" -> "050-02", "319-01-SHIRT" -> "319-01"
+    (2026-10-29, user-requested: the ERP master keeps a few designs under
+    such codes, which then showed up as their own style with no sub category
+    or tier). Colour-level letter-series codes (K-108-01) and codes that are
+    already clean are left exactly as they are."""
+    raw = s.astype("object")
+    norm = _stock_design(raw.astype(str))
+    changed = norm.notna() & (norm != raw.astype(str).str.strip().str.upper()) & raw.notna()
+    return raw.where(~changed, norm)
+
+
 def assemble() -> pd.DataFrame:
     """Fetch all four sources and merge into the final sales+ERP panel.
 
@@ -458,7 +471,7 @@ def assemble() -> pd.DataFrame:
     # DESIGN_GROUP/CATALOG_NAME/COLOR/SECTION rather than none at all.
     if "DESIGN_NO" not in merged.columns:
         merged["DESIGN_NO"] = pd.NA
-    merged["DESIGN_NO"] = merged["DESIGN_NO"].fillna(merged["design_key"])
+    merged["DESIGN_NO"] = clean_design_no(merged["DESIGN_NO"].fillna(merged["design_key"]))
     merged["LAUNCH_DATE"] = pd.to_datetime(merged.get("LAUNCH_DATE"), errors="coerce")
 
     # design + size keys from product_sku_code (not listing_sku_code — see

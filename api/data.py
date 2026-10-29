@@ -1175,7 +1175,8 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
         master = live_source.fetch_erp_view(live_source.VIEW_MASTER)
         if not master.empty and "DESIGN_NO" in master.columns:
             master_dt = pd.to_datetime(master.get("LAUNCH_DATE"), errors="coerce")
-            for dn, dt in zip(master["DESIGN_NO"].astype(str), master_dt):
+            # "050-02-XS-A" -> "050-02", the same code as the sales rows (live_source.clean_design_no)
+            for dn, dt in zip(live_source.clean_design_no(master["DESIGN_NO"]).astype(str), master_dt):
                 if pd.isna(dt) or dt < pd.Timestamp("2015-01-01"):
                     continue  # implausible placeholder (e.g. Excel epoch) - treat as unknown
                 if dn not in master_launch or dt < master_launch[dn]:
