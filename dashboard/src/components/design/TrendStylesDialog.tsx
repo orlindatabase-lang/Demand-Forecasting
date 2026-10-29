@@ -140,7 +140,7 @@ export default function TrendStylesDialog({
               <Chip
                 size="small"
                 label={`★ ${formatNumber(halfSet.size)} ${halfSet.size === 1 ? "style makes" : "styles make"} 50% of sales`}
-                sx={{ fontWeight: 800, bgcolor: REPORT.actual, color: "#fff" }}
+                sx={{ fontWeight: 800, bgcolor: COLORS.primaryBgSubtle, color: REPORT.actual }}
               />
             </Tooltip>
           )}
