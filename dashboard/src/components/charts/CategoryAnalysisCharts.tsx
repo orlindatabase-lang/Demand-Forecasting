@@ -14,9 +14,9 @@ import { COLORS, REPORT } from "@/theme/colors";
 // Indigo steps for the bars (the dashboard's brand hue; one hue = one measure)
 // + teal for the spike line. Bars/line and best-month/line pairs validated
 // (CVD ΔE >= 13.9, contrast >= 3:1 on white).
-const BAR_COLOR = COLORS.primaryHover;
-const BAR_PEAK_COLOR = COLORS.primary; // the best complete month
-const BAR_PARTIAL_COLOR = COLORS.primaryBg; // current month, not complete yet
+const BAR_COLOR = "#8a83d2"; // purple (2026-10-29, user-requested for this chart)
+const BAR_PEAK_COLOR = "#4b42a3"; // the best complete month
+const BAR_PARTIAL_COLOR = "#dcd9f3"; // current month, not complete yet
 const SPIKE_COLOR = "#0f9d8f";
 const GRID_COLOR = COLORS.bgMuted;
 const UP_TEXT = REPORT.good;
