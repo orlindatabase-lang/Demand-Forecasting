@@ -295,12 +295,15 @@ def get_category_analysis(
     subCategory: str = Query("", description="Only styles in this Sub Category (Tiers Spike Rate filter); blank = all"),
     tierMode: str = Query("current", pattern="^(current|sale)$",
                           description="tier level: 'current' tier for every month, or the tier at the time of 'sale'"),
+    brand: str = Query("", description="Only this Brand's styles; blank = all"),
+    tier: str = Query("", description="Only styles whose current catalog tier is this; blank = all"),
+    style: str = Query("", description="Only this style; blank = all"),
 ) -> dict:
     """Per month (April 2025 to now) and Category / Sub Category: styles with a
     Gross sale, order count, units, and the units' % change vs the
     previous month (the partial current month vs the same days of the
     previous month) - the Category Analysis page (2026-10-03, user-requested)."""
-    return data.get_category_analysis(level, category, subCategory, tierMode)
+    return data.get_category_analysis(level, category, subCategory, tierMode, brand, tier, style)
 
 
 @app.get("/api/reports/category-analysis/channels", tags=["plan"])
@@ -310,11 +313,14 @@ def get_category_analysis_channels(
     category: str = Query("", description="Only styles in this Category; blank = all"),
     subCategory: str = Query("", description="Only styles in this Sub Category; blank = all"),
     tierMode: str = Query("current", pattern="^(current|sale)$"),
+    brand: str = Query("", description="Only this Brand's styles; blank = all"),
+    tier: str = Query("", description="Only styles whose current catalog tier is this; blank = all"),
+    style: str = Query("", description="Only this style; blank = all"),
 ) -> dict:
     """One Category Analysis row split by marketplace (Amazon, Flipkart, ...):
     the same monthly styles / orders / units / spike - the row's channel
     drill-down (2026-10-09, user-requested)."""
-    return data.get_category_analysis_channels(level, group, category, subCategory, tierMode)
+    return data.get_category_analysis_channels(level, group, category, subCategory, tierMode, brand, tier, style)
 
 
 @app.get("/api/reports/category-analysis/styles", tags=["plan"])
@@ -326,11 +332,14 @@ def get_category_analysis_styles(
     category: str = Query("", description="Only styles in this Category; blank = all"),
     subCategory: str = Query("", description="Only styles in this Sub Category; blank = all"),
     tierMode: str = Query("current", pattern="^(current|sale)$"),
+    brand: str = Query("", description="Only this Brand's styles; blank = all"),
+    tier: str = Query("", description="Only styles whose current catalog tier is this; blank = all"),
+    style: str = Query("", description="Only this style; blank = all"),
 ) -> dict:
     """The styles behind one STYLES cell: each style's units / orders that
     month vs the previous month, new styles flagged, plus the stopped ones
     (2026-10-29, user-requested)."""
-    return data.get_category_analysis_styles(level, group, month, channel, category, subCategory, tierMode)
+    return data.get_category_analysis_styles(level, group, month, channel, category, subCategory, tierMode, brand, tier, style)
 
 
 @app.get("/api/reports/category-analysis/filtered", tags=["plan"])
