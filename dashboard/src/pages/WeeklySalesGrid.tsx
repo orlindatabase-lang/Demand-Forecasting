@@ -66,6 +66,17 @@ import type {
 
 const ACTUAL_COLOR = "#312c5c";
 const FORECAST_COLOR = "#f97316";
+// The filter row (search, Category, Sub Category, TIER chips) stays on ONE line: as the screen gets narrower the
+// chips get smaller padding / text instead of wrapping. Only on very small screens may the row wrap again.
+const TIER_BTN_SHRINK = {
+  minWidth: 0,
+  whiteSpace: "nowrap",
+  "@media (max-width: 1700px)": { px: 1.25, fontSize: "0.75rem" },
+  "@media (max-width: 1500px)": { px: 0.75, fontSize: "0.7rem" },
+} as const;
+const TIER_COUNT_SHRINK = {
+  "@media (max-width: 1500px)": { ml: 0.5, height: 16, fontSize: "0.62rem" },
+} as const;
 // Forecast figure under each actual: a notch darker than the accent orange so it reads on white and on the tints
 const FORECAST_TEXT = "#ea580c";
 // Real server-side pagination (2026-09-14, user-requested Prev/Next footer)
@@ -1200,7 +1211,7 @@ export default function WeeklySalesGrid() {
       />
       <PageTabs />
 
-      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, alignItems: "center", mb: 2 }}>
+      <Box sx={{ display: "flex", flexWrap: { xs: "wrap", lg: "nowrap" }, gap: { xs: 1.5, lg: 1 }, alignItems: "center", mb: 2 }}>
         <TextField
           size="small"
           placeholder="Search style…"
@@ -1218,10 +1229,10 @@ export default function WeeklySalesGrid() {
               ),
             },
           }}
-          sx={{ minWidth: { xs: "100%", sm: 220 } }}
+          sx={{ flex: { xs: "1 1 100%", sm: "0 1 220px" }, minWidth: { xs: "100%", sm: 130 } }}
         />
 
-        <FormControl size="small" sx={{ minWidth: { xs: "100%", sm: 200 } }}>
+        <FormControl size="small" sx={{ flex: { xs: "1 1 100%", sm: "0 1 200px" }, minWidth: { xs: "100%", sm: 150 } }}>
           <InputLabel id="weekly-grid-category-label">Category</InputLabel>
           <Select
             labelId="weekly-grid-category-label"
@@ -1252,7 +1263,7 @@ export default function WeeklySalesGrid() {
           </Select>
         </FormControl>
 
-        <FormControl size="small" sx={{ minWidth: { xs: "100%", sm: 200 } }}>
+        <FormControl size="small" sx={{ flex: { xs: "1 1 100%", sm: "0 1 200px" }, minWidth: { xs: "100%", sm: 150 } }}>
           <InputLabel id="weekly-grid-subcategory-label">Sub Category</InputLabel>
           <Select
             labelId="weekly-grid-subcategory-label"
@@ -1277,8 +1288,8 @@ export default function WeeklySalesGrid() {
             only that tier's Styles in the table below. Sits in the same row as
             the search / Category / Sub Category filters. */}
         {catalogQuery.data && catalogQuery.data.tiers.length > 0 && (
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center", ml: "auto" }}>
-            <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700, mr: 0.5 }}>
+          <Box sx={{ display: "flex", flexWrap: { xs: "wrap", lg: "nowrap" }, gap: { xs: 1, lg: 0.75 }, alignItems: "center", ml: "auto", flexShrink: 1, minWidth: 0 }}>
+            <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700, mr: 0.5, flexShrink: 0 }}>
               TIER:
             </Typography>
             <Button
@@ -1293,6 +1304,7 @@ export default function WeeklySalesGrid() {
                 textTransform: "none",
                 fontWeight: 700,
                 px: 1.75,
+                ...TIER_BTN_SHRINK,
                 ...(tierFilter === "all"
                   ? { bgcolor: ACTUAL_COLOR, "&:hover": { bgcolor: ACTUAL_COLOR } }
                   : { color: ACTUAL_COLOR, borderColor: ACTUAL_COLOR }),
@@ -1314,6 +1326,7 @@ export default function WeeklySalesGrid() {
                   textTransform: "none",
                   fontWeight: 700,
                   px: 1.75,
+                  ...TIER_BTN_SHRINK,
                   ...(tierFilter === g.tier
                     ? { bgcolor: ACTUAL_COLOR, "&:hover": { bgcolor: ACTUAL_COLOR } }
                     : { color: ACTUAL_COLOR, borderColor: ACTUAL_COLOR }),
@@ -1328,6 +1341,7 @@ export default function WeeklySalesGrid() {
                     height: 18,
                     fontSize: "0.68rem",
                     fontWeight: 700,
+                    ...TIER_COUNT_SHRINK,
                     bgcolor: tierFilter === g.tier ? "rgba(255,255,255,0.25)" : "rgba(49,44,92,0.1)",
                     color: tierFilter === g.tier ? "#fff" : ACTUAL_COLOR,
                   }}
