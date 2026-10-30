@@ -29,6 +29,17 @@ export interface CategoryFilter {
   category: string;
   subCategory: string;
   tierMode?: "current" | "sale"; // tier level: current tier, or the tier at the time of sale
+  brand?: string;
+  tier?: string; // the style's current catalog tier
+  style?: string;
+}
+
+/** Query params of a CategoryFilter (blank = any). */
+function filterParams(f: CategoryFilter) {
+  return {
+    category: f.category, subCategory: f.subCategory, tierMode: f.tierMode ?? "current",
+    brand: f.brand ?? "", tier: f.tier ?? "", style: f.style ?? "",
+  };
 }
 export const NO_FILTER: CategoryFilter = { category: "", subCategory: "" };
 
@@ -68,7 +79,7 @@ export const dataService = {
   /** Monthly styles / orders / units / order spike per Category or Sub
    * Category, April 2025 to now - the Category Analysis page. */
   async categoryAnalysis(level: "category" | "subCategory" | "style" | "tier", f: CategoryFilter = NO_FILTER) {
-    const params = new URLSearchParams({ level, category: f.category, subCategory: f.subCategory, tierMode: f.tierMode ?? "current" });
+    const params = new URLSearchParams({ level, ...filterParams(f) });
     return apiGet<CategoryAnalysisResponse>(`/api/reports/category-analysis?${params.toString()}`);
   },
 
@@ -81,13 +92,13 @@ export const dataService = {
 
   /** One Category Analysis row split by marketplace (channel drill-down). */
   async categoryAnalysisChannels(level: "category" | "subCategory" | "style" | "tier", group: string, f: CategoryFilter = NO_FILTER) {
-    const params = new URLSearchParams({ level, group, category: f.category, subCategory: f.subCategory, tierMode: f.tierMode ?? "current" });
+    const params = new URLSearchParams({ level, group, ...filterParams(f) });
     return apiGet<CategoryAnalysisChannelsResponse>(`/api/reports/category-analysis/channels?${params.toString()}`);
   },
 
   /** The styles behind one STYLES cell (group "" = TOTAL row, channel = a marketplace sub-row). */
   async categoryAnalysisStyles(level: "category" | "subCategory" | "style" | "tier", group: string, month: string, channel = "", f: CategoryFilter = NO_FILTER) {
-    const params = new URLSearchParams({ level, group, month, channel, category: f.category, subCategory: f.subCategory, tierMode: f.tierMode ?? "current" });
+    const params = new URLSearchParams({ level, group, month, channel, ...filterParams(f) });
     return apiGet<CategoryAnalysisStylesResponse>(`/api/reports/category-analysis/styles?${params.toString()}`);
   },
 

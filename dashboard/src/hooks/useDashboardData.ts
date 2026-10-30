@@ -75,7 +75,7 @@ export function useWeeklyProductionLog(enabled: boolean) {
 /** Category Analysis page - one query per level (category / subCategory). */
 export function useCategoryAnalysis(level: "category" | "subCategory" | "style" | "tier", f: CategoryFilter = NO_FILTER) {
   return useQuery({
-    queryKey: ["categoryAnalysis", level, f.category, f.subCategory, f.tierMode ?? "current"],
+    queryKey: ["categoryAnalysis", level, f.category, f.subCategory, f.tierMode ?? "current", f.brand ?? "", f.tier ?? "", f.style ?? ""],
     queryFn: () => dataService.categoryAnalysis(level, f),
     refetchInterval: 10 * REFRESH_MS,
     placeholderData: keepPreviousData,
@@ -101,7 +101,7 @@ export function useCategoryAnalysisChannels(
   f: CategoryFilter = NO_FILTER,
 ) {
   return useQuery({
-    queryKey: ["categoryAnalysisChannels", level, group, f.category, f.subCategory, f.tierMode ?? "current"],
+    queryKey: ["categoryAnalysisChannels", level, group, f.category, f.subCategory, f.tierMode ?? "current", f.brand ?? "", f.tier ?? "", f.style ?? ""],
     queryFn: () => dataService.categoryAnalysisChannels(level, group, f),
     refetchInterval: 10 * REFRESH_MS,
   });
@@ -114,7 +114,7 @@ export function useCategoryAnalysisStyles(
   f: CategoryFilter = NO_FILTER,
 ) {
   return useQuery({
-    queryKey: ["categoryAnalysisStyles", level, sel?.group, sel?.month, sel?.channel ?? "", f.category, f.subCategory, f.tierMode ?? "current"],
+    queryKey: ["categoryAnalysisStyles", level, sel?.group, sel?.month, sel?.channel ?? "", f.category, f.subCategory, f.tierMode ?? "current", f.brand ?? "", f.tier ?? "", f.style ?? ""],
     queryFn: () => dataService.categoryAnalysisStyles(level, sel!.group, sel!.month, sel?.channel ?? "", f),
     enabled: sel !== null,
   });

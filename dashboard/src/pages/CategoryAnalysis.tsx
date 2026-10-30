@@ -3,13 +3,8 @@ import {
   Box,
   Button,
   Chip,
-  FormControl,
   ToggleButton,
   ToggleButtonGroup,
-  InputAdornment,
-  InputLabel,
-  MenuItem,
-  Select,
   Paper,
   Stack,
   Table,
@@ -19,11 +14,9 @@ import {
   TableHead,
   TablePagination,
   TableRow,
-  TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
-import SearchIcon from "@mui/icons-material/Search";
 import DownloadIcon from "@mui/icons-material/Download";
 import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
@@ -31,12 +24,12 @@ import PageHeader from "@/components/common/PageHeader";
 import CategoryAnalysisCharts from "@/components/charts/CategoryAnalysisCharts";
 import TierSpikeChart from "@/components/charts/TierSpikeChart";
 import CategoryStylesDialog, { type StylesCellSelection } from "@/components/common/CategoryStylesDialog";
+import StyleFilterBar, { NO_STYLE_FILTERS, type StyleFilters } from "@/components/common/StyleFilterBar";
 import { rowsToCsv, downloadCsv } from "@/components/common/ExportButton";
 import { LoadingSkeleton, ErrorState } from "@/components/common/StateViews";
 import { useCatalogStyleTiers, useCategoryAnalysis, useCategoryAnalysisChannels } from "@/hooks/useDashboardData";
-import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { formatNumber } from "@/utils/format";
-import { NO_FILTER, type CategoryFilter } from "@/services/dataService";
+import type { CategoryFilter } from "@/services/dataService";
 import type { CategoryAnalysisRow } from "@/types";
 import { COLORS, REPORT, REPORT_HEAD_SX, REPORT_GROUP_HEAD_SX, REPORT_TOTAL_SX, STICKY_EDGE_SX } from "@/theme/colors";
 
@@ -280,8 +273,6 @@ function ChannelRows({
 /** One page per level: the app's SUB CATEGORY, CATEGORY and TIERS SPIKE RATE
  * (one row per style, with tier buttons) tabs. */
 export default function CategoryAnalysis({ level }: { level: Level }) {
-  const [searchText, setSearchText] = useState("");
-  const search = useDebouncedValue(searchText, 200);
   const [tier, setTier] = useState("all");
   const [page, setPage] = useState(0);
   // Rows opened to show their channel (marketplace) breakdown.
@@ -295,16 +286,16 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
       else next.add(group);
       return next;
     });
-  // Tiers Spike Rate: Category / Sub Category filters on the table and its
-  // platform rows (2026-10-13, user-requested); the other tabs pass none.
-  const [catFilter, setCatFilter] = useState("");
-  const [subFilter, setSubFilter] = useState("");
+  // Brand / Tier / Category / Sub Category / Style filters on the table, its
+  // platform rows, the styles popup and the chart - every tab (2026-10-30,
+  // user-requested; before, only the Tiers tab had Category / Sub Category).
+  const [styleFilters, setStyleFilters] = useState<StyleFilters>(NO_STYLE_FILTERS);
   // Tier as: the style's current tier for every month, or the tier it had at
   // the time of each sale (Cloud SQL tier history, 2026-10-13, user-requested).
   const [tierMode, setTierMode] = useState<"current" | "sale">("current");
   const tableFilter = useMemo<CategoryFilter>(
-    () => (level === "tier" ? { category: catFilter, subCategory: subFilter, tierMode } : NO_FILTER),
-    [level, catFilter, subFilter, tierMode],
+    () => ({ ...styleFilters, tierMode: level === "tier" ? tierMode : "current" }),
+    [level, styleFilters, tierMode],
   );
   const { data, isLoading, isError, refetch } = useCategoryAnalysis(level, tableFilter);
   const isStyle = level === "style";
@@ -335,13 +326,6 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
     return pivot;
   }, [data, isTier]);
 
-  const q = search.trim().toLowerCase();
-  // Sub Category menu: the chosen category's sub categories, or all of them.
-  const subCategoryChoices = useMemo(() => {
-    const opts = data?.filterOptions ?? {};
-    const list = catFilter ? opts[catFilter] ?? [] : Object.values(opts).flat();
-    return [...new Set(list)].sort((a, b) => a.localeCompare(b));
-  }, [data, catFilter]);
   // Tiers tab: how many styles each tier has (the chip on its row).
   const stylesPerTier = useMemo(() => {
     const out = new Map<string, number>();
@@ -351,9 +335,9 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
 
   const filtered = useMemo(
     () => groups.filter(
-      (g) => (!q || g.group.toLowerCase().includes(q)) && (!isStyle || tier === "all" || tierOf.get(g.group) === tier),
+      (g) => (!isStyle || tier === "all" || tierOf.get(g.group) === tier),
     ),
-    [groups, q, isStyle, tier, tierOf],
+    [groups, isStyle, tier, tierOf],
   );
   // Tier buttons: number of styles per tier that appear in this table.
   const tierCounts = useMemo(() => {
@@ -494,99 +478,48 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
         <ErrorState message="Couldn't load the category analysis." onRetry={() => refetch()} />
       ) : (
         <>
-          <Stack direction="row" sx={{ alignItems: "center", mb: 2, flexWrap: "wrap", gap: 1.5 }}>
-            {/* Tiers Spike Rate: no search - only 7 tiers (2026-10-13, user-requested) */}
-            {!isTier && (
-            <TextField
-              size="small"
-              placeholder={`Search ${groupName.toLowerCase()}…`}
-              value={searchText}
-              onChange={(e) => {
-                setSearchText(e.target.value);
-                setPage(0);
-              }}
-              slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> } }}
-              sx={{ minWidth: { xs: "100%", sm: 260 } }}
-            />
-            )}
-            {isTier && (
+          {/* No search box or Style filter on Category / Sub Category (2026-10-30, user-requested) */}
+          <StyleFilterBar
+            showStyle={isTier}
+            value={styleFilters}
+            onChange={(v) => {
+              setStyleFilters(v);
+              setPage(0);
+            }}
+            actions={
               <>
-                <FormControl size="small" sx={{ minWidth: { xs: "100%", sm: 170 } }}>
-                  <InputLabel id="tier-cat-label">Category</InputLabel>
-                  <Select
-                    labelId="tier-cat-label"
-                    id="tier-cat"
-                    label="Category"
-                    value={catFilter}
-                    onChange={(e) => {
-                      setCatFilter(e.target.value);
-                      setSubFilter("");
-                    }}
-                  >
-                    <MenuItem value="">All</MenuItem>
-                    {Object.keys(data?.filterOptions ?? {}).map((c) => (
-                      <MenuItem key={c} value={c}>{c}</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-                <FormControl size="small" sx={{ minWidth: { xs: "100%", sm: 210 } }}>
-                  <InputLabel id="tier-sub-label">Sub Category</InputLabel>
-                  <Select
-                    labelId="tier-sub-label"
-                    id="tier-sub"
-                    label="Sub Category"
-                    value={subFilter}
-                    onChange={(e) => setSubFilter(e.target.value)}
-                  >
-                    <MenuItem value="">All</MenuItem>
-                    {subCategoryChoices.map((sc) => (
-                      <MenuItem key={sc} value={sc}>{sc}</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-                <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
-                  <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700 }}>TIER AS:</Typography>
-                  <ToggleButtonGroup
-                    exclusive
-                    size="small"
-                    value={tierMode}
-                    onChange={(_e, v) => v && setTierMode(v)}
-                    sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontWeight: 700, px: 1.25, py: 0.4 } }}
-                  >
-                    <ToggleButton value="current">Current tier</ToggleButton>
-                    <ToggleButton value="sale">Tier Log</ToggleButton>
-                  </ToggleButtonGroup>
-                  {tierMode === "sale" && (
-                    <Tooltip title="Tier history starts 1 Jun 2026: from then, each sale counts under the tier the style had that day. Earlier sales use the style's current tier.">
-                      <Typography variant="caption" sx={{ color: "text.secondary" }}>from Jun 2026 ⓘ</Typography>
-                    </Tooltip>
-                  )}
-                </Stack>
-                {(catFilter || subFilter) && (
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      setCatFilter("");
-                      setSubFilter("");
-                    }}
-                    sx={{ textTransform: "none", fontWeight: 700 }}
-                  >
-                    Clear filters
-                  </Button>
+                {isTier && (
+                  <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                    <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700 }}>TIER AS:</Typography>
+                    <ToggleButtonGroup
+                      exclusive
+                      size="small"
+                      value={tierMode}
+                      onChange={(_e, v) => v && setTierMode(v)}
+                      sx={{ "& .MuiToggleButton-root": { textTransform: "none", fontWeight: 700, px: 1.25, py: 0.4 } }}
+                    >
+                      <ToggleButton value="current">Current tier</ToggleButton>
+                      <ToggleButton value="sale">Tier Log</ToggleButton>
+                    </ToggleButtonGroup>
+                    {tierMode === "sale" && (
+                      <Tooltip title="Tier history starts 1 Jun 2026: from then, each sale counts under the tier the style had that day. Earlier sales use the style's current tier.">
+                        <Typography variant="caption" sx={{ color: "text.secondary" }}>from Jun 2026 ⓘ</Typography>
+                      </Tooltip>
+                    )}
+                  </Stack>
                 )}
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<DownloadIcon fontSize="small" />}
+                  onClick={handleExport}
+                  disabled={filtered.length === 0}
+                >
+                  Export CSV
+                </Button>
               </>
-            )}
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<DownloadIcon fontSize="small" />}
-              onClick={handleExport}
-              disabled={filtered.length === 0}
-              sx={{ ml: "auto" }}
-            >
-              Export CSV
-            </Button>
-          </Stack>
+            }
+          />
 
           {isStyle && tierCounts.length > 0 && (
             <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, alignItems: "center", mb: 2 }}>
@@ -746,7 +679,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
 
           <Box sx={{ mt: 3 }}>
             {isTier ? (
-              <TierSpikeChart months={months} partialMonth={partialMonth} />
+              <TierSpikeChart months={months} partialMonth={partialMonth} filters={styleFilters} />
             ) : (
               <CategoryAnalysisCharts
                 key={`${level}-${tier}`}
