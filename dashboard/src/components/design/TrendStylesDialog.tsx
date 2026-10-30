@@ -88,6 +88,12 @@ export default function TrendStylesDialog({
     return out;
   }, [all, totalNow]);
   const halfShare = all.length > 0 ? (halfSet.size / all.length) * 100 : 0; // of ALL its styles, not only the selling ones
+  // The other half: every remaining style, incl. the ones with no sale now.
+  const halfPieces = all.reduce((a, s) => a + (halfSet.has(s[0]) ? s[1] : 0), 0);
+  const restCount = all.length - halfSet.size;
+  const restPieces = totalNow - halfPieces;
+  const restNoSale = all.filter((s) => !halfSet.has(s[0]) && s[1] <= 0).length;
+  const pctOf = (v: number) => (totalNow > 0 ? (v / totalNow) * 100 : 0).toFixed(1);
 
   const handleClose = () => {
     setSearch("");
@@ -136,11 +142,22 @@ export default function TrendStylesDialog({
           <Chip size="small" label={`${formatNumber(totalNow)} pieces now`} sx={{ fontWeight: 700, bgcolor: COLORS.primaryBgSubtle, color: REPORT.forecastText }} />
           <Chip size="small" label={`${formatNumber(totalBefore)} pieces before`} sx={{ fontWeight: 700, bgcolor: COLORS.primaryBgSubtle, color: COLORS.textSecondary }} />
           {halfSet.size > 0 && (
-            <Tooltip title={`The ${formatNumber(halfSet.size)} best-selling styles (${halfShare.toFixed(0)}% of all ${formatNumber(all.length)} styles) sold half of the ${formatNumber(totalNow)} pieces. They are marked ★ in the table.`}>
+            <Tooltip title={`The ${formatNumber(halfSet.size)} best-selling styles (${halfShare.toFixed(0)}% of all ${formatNumber(all.length)} styles) sold ${formatNumber(halfPieces)} of the ${formatNumber(totalNow)} pieces (${pctOf(halfPieces)}%). They are marked ★ in the table.`}>
               <Chip
                 size="small"
-                label={`★ ${formatNumber(halfSet.size)} ${halfSet.size === 1 ? "style makes" : "styles make"} 50% of sales`}
+                label={`★ ${formatNumber(halfSet.size)} ${halfSet.size === 1 ? "style makes" : "styles make"} 50% of sales · ${formatNumber(halfPieces)} pcs (${pctOf(halfPieces)}%)`}
                 sx={{ fontWeight: 800, bgcolor: COLORS.primaryBgSubtle, color: REPORT.actual }}
+              />
+            </Tooltip>
+          )}
+          {halfSet.size > 0 && restCount > 0 && (
+            <Tooltip
+              title={`The other ${formatNumber(restCount)} styles (${(100 - halfShare).toFixed(0)}% of all ${formatNumber(all.length)} styles) sold the remaining ${formatNumber(restPieces)} pieces (${pctOf(restPieces)}%)${restNoSale > 0 ? `; ${formatNumber(restNoSale)} of them sold nothing now` : ""}.`}
+            >
+              <Chip
+                size="small"
+                label={`${formatNumber(restCount)} ${restCount === 1 ? "style makes" : "styles make"} the other 50% · ${formatNumber(restPieces)} pcs (${pctOf(restPieces)}%)`}
+                sx={{ fontWeight: 700, bgcolor: COLORS.primaryBgSubtle, color: COLORS.textSecondary }}
               />
             </Tooltip>
           )}
