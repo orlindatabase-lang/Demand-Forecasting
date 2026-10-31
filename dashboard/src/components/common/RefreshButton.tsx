@@ -27,9 +27,9 @@ export default function RefreshButton() {
       setToast({ severity: "info", message: "Refreshing data from BigQuery/ERP — this can take a few minutes…" });
     },
     onSuccess: (result) => {
-      // Every polled query (weekly grid, production trackers, ...) now
+      // Every loaded query (weekly grid, production log, ...) now
       // re-fetches against the freshly rebuilt data instead of waiting out
-      // its own refetchInterval.
+      // the next page open.
       queryClient.invalidateQueries();
       setToast({
         severity: "success",
