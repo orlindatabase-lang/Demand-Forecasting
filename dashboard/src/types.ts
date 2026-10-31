@@ -46,9 +46,8 @@ export interface WeeklyGridRow {
   grandActualTotal: number;
   grandForecastTotal: number;
   futureForecastTotal: number; // forward-only forecast (excludes historical backtested figures)
-  futureForecastP80: number; // upper planning bound over the same horizon
   availableQty: number; // inventory + WIP summed across this row's SKUs
-  suggestedProduction: number; // max(0, futureForecastP80 - availableQty)
+  suggestedProduction: number; // max(0, futureForecastTotal - availableQty)
   festivalBoosted: boolean; // true if the upcoming festival's weeks were raised above the base forecast
 }
 
@@ -93,7 +92,6 @@ export interface WeeklyGridResponse {
   groupBy: "subCategory" | "style";
   total: number;
   totalForecast: number; // sum of futureForecastTotal across EVERY matching group, not just this page
-  totalForecastP80: number; // upper planning bound across the same horizon
   totalActual: number;   // sum of grandActualTotal across EVERY matching group, not just this page (GROSS: the
   // user's own explicit status allowlist, see api/data.py's _GROSS_SALE_STATUSES - includes returns/RTO)
   currentWeekForecast: number; // current (possibly still in-progress) week's forecast, ALL groups
@@ -173,7 +171,7 @@ export interface WeeklyProductionLogRow {
   forecast_qty: number; // forecast for this week, as of week start
   forecast_2m_qty: number; // legacy field name: P50 forecast for the next 3 months
   available_qty: number; // stock + WIP (live until completed)
-  suggested_production_qty: number; // P80 coverage target minus available (live until completed)
+  suggested_production_qty: number; // 3-month forecast minus available (live until completed)
   captured_on: string; // data date of the week-start capture
   updated_on: string | null; // data date of the last live update
   actual_qty: number | null; // gross units sold in the week (null until completed)

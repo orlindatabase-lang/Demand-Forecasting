@@ -125,7 +125,6 @@ class WeeklyGridRow(BaseModel):
     grandActualTotal: int
     grandForecastTotal: int
     futureForecastTotal: int   # sum of the forward-only forecast weeks (excludes historical backtested figures)
-    futureForecastP80: int = 0 # upper planning bound over the same forward horizon
     availableQty: int          # summed inventory + WIP across this row's SKUs
     suggestedProduction: int   # max(0, futureForecastTotal - availableQty)
     festivalBoosted: bool = False  # true if the upcoming festival's weeks were raised above the base forecast
@@ -192,7 +191,6 @@ class WeeklyGridResponse(BaseModel):
     groupBy: str  # "subCategory" | "style"
     total: int  # total distinct groups matching (before pagination)
     totalForecast: int  # sum of futureForecastTotal across EVERY matching group, not just this page
-    totalForecastP80: int = 0
     totalActual: int    # sum of grandActualTotal across EVERY matching group, not just this page (GROSS: the
     # user's own explicit status allowlist, see data.py's _GROSS_SALE_STATUSES - 2026-09-15, includes returns/RTO)
     currentWeekForecast: int  # sum of the current (possibly still in-progress) week's forecast, ALL groups
