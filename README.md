@@ -1390,6 +1390,8 @@ erDiagram
 | Weekly Sales Report | GET | `/api/weekly-sales/channels/{style}` | One Style split by channel |
 | Weekly Sales Report | GET | `/api/weekly-sales/channels` | The filtered TOTAL row split by channel |
 | Weekly Sales Report | GET | `/api/style-lifecycle` | Styles present last year vs launched this year |
+| Forecast (for new front ends) | GET | `/api/forecast/latest` | Latest forecast: running + upcoming weeks, per Style or Sub Category, per week and month |
+| Forecast (for new front ends) | GET | `/api/forecast/frozen` | Frozen forecast, same shape; `pastWeeks` adds completed weeks |
 | Production Log | GET | `/api/production-log` | Weekly production log |
 | Sub Category / Category / Tiers Spike Rate | GET | `/api/category-analysis?level=` | Monthly styles / orders / units / spike per Category, Sub Category, Style or Tier |
 | Sub Category / Category / Tiers Spike Rate | GET | `/api/category-analysis/channels?level=&group=` | One row of that table split by marketplace |

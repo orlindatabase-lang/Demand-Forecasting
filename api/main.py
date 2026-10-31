@@ -38,9 +38,11 @@ os.environ.setdefault("DEFER_INITIAL_LOAD", "1")
 import catalog_style  # noqa: E402
 import category_analysis  # noqa: E402
 import data  # noqa: E402
+import forecast_api  # noqa: E402
 from models import (
     CatalogStyleTiersResponse,
     ChannelSourceWeeklyResponse,
+    ForecastTable,
     WeeklyGridResponse,
 )
 
@@ -228,6 +230,36 @@ def get_weekly_grid(
     row per Sub Category or Style — the Weekly Sales Report page's data
     source. Rows are sorted by combined actual+forecast volume descending."""
     return data.get_weekly_grid(groupBy, weeks, limit, offset, search, subCategory, category)
+
+
+@app.get("/api/forecast/latest", response_model=ForecastTable, response_model_exclude_none=True, tags=["forecast"])
+def get_latest_forecast(
+    groupBy: str = Query("style", pattern="^(subCategory|style)$", description="One row per 'style' or per 'subCategory'"),
+    weeks: int = Query(13, ge=1, le=40, description="Forecast horizon in weeks (13 = about 3 months)"),
+    category: str = Query("", description="Only this Category (exact name); blank = all"),
+    subCategory: str = Query("", description="Only this Sub Category (exact name); blank = all"),
+    style: str = Query("", description="Only this Style (exact design number); blank = all"),
+) -> ForecastTable:
+    """Latest forecast: today's forecast for the running week and the upcoming
+    weeks, per Style or Sub Category, per week and per month. Changes on every
+    data refresh. Same numbers as the Weekly Sales Report's Forecast: Latest."""
+    return forecast_api.forecast_table("latest", groupBy, weeks, 0, category, subCategory, style)
+
+
+@app.get("/api/forecast/frozen", response_model=ForecastTable, response_model_exclude_none=True, tags=["forecast"])
+def get_frozen_forecast(
+    groupBy: str = Query("style", pattern="^(subCategory|style)$", description="One row per 'style' or per 'subCategory'"),
+    weeks: int = Query(13, ge=1, le=40, description="Forecast horizon in weeks (13 = about 3 months)"),
+    pastWeeks: int = Query(0, ge=0, le=80, description="Also include this many completed weeks before the running one"),
+    category: str = Query("", description="Only this Category (exact name); blank = all"),
+    subCategory: str = Query("", description="Only this Sub Category (exact name); blank = all"),
+    style: str = Query("", description="Only this Style (exact design number); blank = all"),
+) -> ForecastTable:
+    """Frozen forecast: each week's forecast as frozen on the day it first came
+    within the next 3 months; it never changes after that. Same shape as
+    /api/forecast/latest. Same numbers as the Weekly Sales Report's Forecast:
+    Frozen."""
+    return forecast_api.forecast_table("frozen", groupBy, weeks, pastWeeks, category, subCategory, style)
 
 
 @app.get(
