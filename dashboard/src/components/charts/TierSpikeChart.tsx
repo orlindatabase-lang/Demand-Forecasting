@@ -7,7 +7,7 @@ import type { StyleFilters } from "@/components/common/StyleFilterBar";
 /** The Tiers Spike Rate chart (2026-10-13, user-requested): monthly totals
  * summed on the server for exactly the styles matching the page's Brand /
  * Tier / Category / Sub Category / Style filters (StyleFilterBar, shared with
- * the table since 2026-10-30; /api/reports/category-analysis/filtered). */
+ * the table since 2026-10-30; /api/category-analysis/chart). */
 export default function TierSpikeChart({ months, partialMonth, filters }: { months: string[]; partialMonth: string; filters: StyleFilters }) {
   const { data } = useCategoryAnalysisFiltered(filters);
 

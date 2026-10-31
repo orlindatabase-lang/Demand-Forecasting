@@ -117,13 +117,13 @@ def test_rolling_freeze_freezes_each_week_when_it_first_appears(monkeypatch):
         "A": {"2026-10-01": 10, "2026-10-08": 20, "2026-10-16": 30}, "B": {"2026-10-08": 5}}
 
 
-def test_weeks_beyond_two_months_are_not_frozen_yet(monkeypatch):
+def test_weeks_beyond_three_months_are_not_frozen_yet(monkeypatch):
     monkeypatch.setattr(ff, "SNAPSHOT_ENABLED", True)
-    ends = dict(ENDS, **{"2026-12-08": date(2026, 12, 15)})
-    ff.apply("s", {"A": {"2026-10-01": 10, "2026-12-08": 40}}, ends, date(2026, 10, 3))
+    ends = dict(ENDS, **{"2027-01-08": date(2027, 1, 15)})
+    ff.apply("s", {"A": {"2026-10-01": 10, "2027-01-08": 40}}, ends, date(2026, 10, 3))
     assert ff.frozen_values("s", date(2026, 10, 3))[0] == {"A": {"2026-10-01": 10}}
-    ff.apply("s", {"A": {"2026-12-08": 44}}, ends, date(2026, 10, 9))      # now within 62 days
-    assert ff.frozen_values("s", date(2026, 10, 9))[0]["A"]["2026-12-08"] == 44
+    ff.apply("s", {"A": {"2027-01-08": 44}}, ends, date(2026, 10, 9))      # now within 92 days
+    assert ff.frozen_values("s", date(2026, 10, 9))[0]["A"]["2027-01-08"] == 44
 
 
 def test_refreeze_takes_todays_values_for_current_weeks_only(monkeypatch):

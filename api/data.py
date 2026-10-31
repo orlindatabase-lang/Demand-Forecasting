@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import calendar
+import math
 import os
 import random
 import re
@@ -95,6 +96,17 @@ RUNNING_WEEK_PACE_DAYS = int(os.getenv("RUNNING_WEEK_PACE_DAYS", "7"))
 # weighs less.
 RUNRATE_DAYS = int(os.getenv("RUNRATE_DAYS", "60"))
 RUNRATE_WEEKS = RUNRATE_DAYS / 7.0
+# A sudden, unplanned sale must not become the item's "normal" level for the
+# next two months.  Known calendar events are modelled separately by
+# festival.py; unlisted spikes are excluded from the baseline as well.  This
+# is intentionally a *global* day-level screen: a genuine item-specific hit
+# remains useful signal, whereas an all-catalogue flash sale otherwise lifts
+# almost every SKU's naive component together.
+RUNRATE_SPIKE_RATIO = float(os.getenv("RUNRATE_SPIKE_RATIO", "2.0"))
+RUNRATE_MIN_CLEAN_DAYS = int(os.getenv("RUNRATE_MIN_CLEAN_DAYS", "21"))
+# The high-side normal quantile used for a production target.  P50 remains
+# the published demand forecast; P80 is used only for replenishment coverage.
+PRODUCTION_QUANTILE_Z = float(os.getenv("PRODUCTION_QUANTILE_Z", "0.841621"))
 
 
 def _blend(model: float | None, naive: float, mult: float) -> float:
@@ -110,20 +122,18 @@ def _blend(model: float | None, naive: float, mult: float) -> float:
 DAILY_REFRESH = os.getenv("DAILY_REFRESH", "on").strip().lower() != "off"
 REFRESH_HOUR = int(os.getenv("REFRESH_HOUR", "6"))
 REFRESH_MINUTE = int(os.getenv("REFRESH_MINUTE", "0"))
-# SKU/design walk-forward backtest - OFF by default (2026-09-24,
-# user-requested: do not run this automatically on any rebuild - daily
-# refresh, manual refresh, or retrain - until explicitly asked to turn it
-# back on again; don't re-enable it unilaterally, e.g. as a side effect of
-# some other change, without that explicit ask). Set RUN_BACKTEST=1 to
-# enable. While off, OVERALL_ACCURACY/SKU_ACCURACY/DESIGN_ACCURACY
-# etc. fall back to the same "no scoreable snapshot yet"
-# naive-only proxy path already used before any snapshot is old enough to
-# score.
-RUN_BACKTEST = os.getenv("RUN_BACKTEST", "0").strip().lower() in ("1", "true", "on")
+# A multi-month forecast without an out-of-time score is not operationally
+# safe.  This used to default off while the cache was being introduced; it is
+# now on by default and can still be disabled for an emergency fast rebuild.
+RUN_BACKTEST = os.getenv("RUN_BACKTEST", "1").strip().lower() in ("1", "true", "on")
+# The group-level historical festival overlay can only raise demand and was
+# not part of the cached-model backtest.  Leave it opt-in until its *published*
+# output has enough walk-forward history to demonstrate incremental value.
+GROUP_FESTIVAL_BOOST = os.getenv("GROUP_FESTIVAL_BOOST", "off").strip().lower() in ("1", "true", "on")
 # Replenishment lead time = how long a new production lot takes; the default is
 # the empirically-observed median (~12 weeks), overridden per-design by the
 # delay model's real lot lead times when available (see _lead_days). Lead time
-# and safety stock are informational only (see _load_real_plan's 10-week policy).
+# and safety stock now drive the lead-time-aligned replenishment target.
 PROD_LEAD_DAYS = int(os.getenv("PROD_LEAD_DAYS", "84"))
 SERVICE_Z = float(os.getenv("SERVICE_Z", "1.65"))        # 1.65 ≈ 95% service level
 # Local snapshot of the merged order history (fallback / DATA_SOURCE=csv).
@@ -194,6 +204,9 @@ _BREAKDOWN_HIST_START = date(2025, 4, 1)
 # Suggestions expected-sale horizon. forecast7/10/35 and the production plan
 # still only sum the first five weeks of this series.
 _FC_WEEKS = 40
+# Direct forecasts and their backtests cover the report's three-month planning
+# horizon; longer display horizons use the recursive tail as a fallback.
+DIRECT_FORECAST_WEEKS = 13
 # Sales windows (in days) reported by the top-selling tables.
 _PERIODS = (10, 30, 90)
 # Optimistic per-group festival forecast boost (see get_weekly_grid(),
@@ -362,6 +375,54 @@ def _week_festival(week_start: date) -> tuple[float, str | None]:
     return total / 7, (max(counts, key=counts.get) if counts else None)
 
 
+def _robust_runrate(gross_sales, snap: "pd.Timestamp", id_col: str = "product_sku_code"):
+    """Return a clean weekly baseline per requested item identifier.
+
+    Calendar events have their own forward-looking feature/multiplier, so
+    including them in a 60-day baseline double-counts them.  We additionally
+    remove unlisted catalogue-wide spikes using a same-weekday robust median.
+    The calculation deliberately falls back to the unfiltered window when
+    fewer than ``RUNRATE_MIN_CLEAN_DAYS`` remain: no estimate is better than a
+    thin estimate that accidentally divides a handful of quiet days into a
+    full week.
+    """
+    import pandas as pd
+
+    lo = snap - pd.Timedelta(days=RUNRATE_DAYS - 1)
+    recent = gross_sales[
+        (gross_sales["order_date"] >= lo) & (gross_sales["order_date"] <= snap)
+    ].copy()
+    if recent.empty:
+        return pd.Series(dtype="float64"), []
+
+    recent["_day"] = pd.to_datetime(recent["order_date"]).dt.normalize()
+    daily = recent.groupby("_day")["qty"].sum().sort_index()
+    calendar_days = pd.date_range(lo.normalize(), snap.normalize(), freq="D")
+    daily = daily.reindex(calendar_days, fill_value=0.0)
+    event_days = {d for d in daily.index if festival_calendar.is_event_day(d.date())}
+    quiet = daily.loc[~daily.index.isin(event_days)]
+    if quiet.empty:
+        clean_days = set(daily.index)
+    else:
+        weekday_median = quiet.groupby(quiet.index.weekday).median()
+        normal = pd.Series(
+            [float(weekday_median.get(d.weekday(), quiet.median())) for d in daily.index],
+            index=daily.index,
+        ).clip(lower=1.0)
+        unlisted_spikes = set(daily.index[(~daily.index.isin(event_days)) & (daily > normal * RUNRATE_SPIKE_RATIO)])
+        clean_days = set(daily.index) - event_days - unlisted_spikes
+        if len(clean_days) < RUNRATE_MIN_CLEAN_DAYS:
+            # Preserve the historical, all-days baseline rather than creating
+            # an unstable estimate when the calendar dominates the window.
+            clean_days = set(daily.index)
+
+    clean = recent[recent["_day"].isin(clean_days)]
+    days = max(1, len(clean_days))
+    weekly = clean.groupby(id_col)["qty"].sum().astype("float64") * (7.0 / days)
+    excluded = sorted(d.date().isoformat() for d in set(daily.index) - clean_days)
+    return weekly, excluded
+
+
 # 2026-08-22: raised from 21 -- caught in the act dropping real backtest
 # history. A cluster of same-day cache-version bumps (several restarts in
 # one session) pushed the file count from 19 to 23, past the old 21 cap;
@@ -495,9 +556,9 @@ def _backtest_model_accuracy(
         # Naive run-rate AS OF the snapshot date (last 35 days up to it) —
         # reconstructed from today's full history since only the model's own
         # weekly output was ever cached, not the naive figure alongside it.
-        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=RUNRATE_DAYS - 1)
-        hist = sales[(sales["order_date"] >= lo) & (sales["order_date"] <= pd.Timestamp(snap_date))]
-        naive_week = hist.groupby("product_sku_code")["qty"].sum() / RUNRATE_WEEKS
+        naive_week, _ = _robust_runrate(
+            sales[sales["order_date"] <= pd.Timestamp(snap_date)], pd.Timestamp(snap_date),
+        )
 
         mult = _week_festival(week1_start)[0]
         week_iso = week1_start.isoformat()
@@ -577,9 +638,9 @@ def _backtest_model_accuracy(
             continue
 
         max_horizon = max((len(fc.get("weekly") or []) for fc in forecasts.values()), default=0)
-        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=RUNRATE_DAYS - 1)
-        hist = sales[(sales["order_date"] >= lo) & (sales["order_date"] <= pd.Timestamp(snap_date))]
-        naive_week = hist.groupby("product_sku_code")["qty"].sum() / RUNRATE_WEEKS
+        naive_week, _ = _robust_runrate(
+            sales[sales["order_date"] <= pd.Timestamp(snap_date)], pd.Timestamp(snap_date),
+        )
 
         for w in range(max_horizon):
             week_start = _forecast_week_start(snap_date, w)
@@ -646,6 +707,8 @@ def _backtest_design_model_accuracy(
     import json as _json
     import pandas as pd
 
+    global DESIGN_HORIZON_ACCURACY
+
     cache_dir = Path(__file__).resolve().parent / ".cache"
 
     def _snap_date(f: Path) -> date:
@@ -685,9 +748,9 @@ def _backtest_design_model_accuracy(
         ]
         actual = wk_sales.groupby("DESIGN_NO")["qty"].sum()
 
-        lo = pd.Timestamp(snap_date) - pd.Timedelta(days=RUNRATE_DAYS - 1)
-        hist = sales[(sales["order_date"] >= lo) & (sales["order_date"] <= pd.Timestamp(snap_date))]
-        naive_week = hist.groupby("DESIGN_NO")["qty"].sum() / RUNRATE_WEEKS
+        naive_week, _ = _robust_runrate(
+            sales[sales["order_date"] <= pd.Timestamp(snap_date)], pd.Timestamp(snap_date), "DESIGN_NO",
+        )
 
         mult = _week_festival(week1_start)[0]
         week_iso = week1_start.isoformat()
@@ -710,6 +773,62 @@ def _backtest_design_model_accuracy(
 
     used = len(used_weeks)
     design_pct = max(0, min(100, round((1 - model_err / model_act) * 100))) if model_act > 0 else 0
+    # Score every lead week of the deployed design model, not just week 1.
+    # This is particularly important now that weeks 1..13 are direct model
+    # outputs rather than a recursive tail.  Pre-aggregate actuals once so
+    # enabling this audit does not perform hundreds of full-frame scans.
+    by_week = sales.copy()
+    by_week["_forecast_week"] = (
+        pd.to_datetime(by_week["order_date"]) - pd.to_timedelta(pd.to_datetime(by_week["order_date"]).dt.weekday, unit="D")
+    )
+    actual_by_week = by_week.groupby(["_forecast_week", "DESIGN_NO"])["qty"].sum()
+    horizon_err: dict[int, float] = {}
+    horizon_act: dict[int, float] = {}
+    # A recursive cache cannot validate the new direct model.  Keep the
+    # historical files for the long-run week-1 trend above, but publish
+    # horizon accuracy only after the active direct-model version matures.
+    import lgbm_forecast
+    active_prefix = f"lgbm_design_forecasts_{lgbm_forecast._DESIGN_CACHE_VERSION}_"
+    direct_files = [f for f in files if f.name.startswith(active_prefix)]
+    for f in direct_files:
+        try:
+            snap_date = date.fromisoformat(f.stem.rsplit("_", 1)[-1])
+            forecasts = _json.loads(f.read_text())
+        except Exception:
+            continue
+        if not forecasts:
+            continue
+        naive_week, _ = _robust_runrate(
+            sales[sales["order_date"] <= pd.Timestamp(snap_date)], pd.Timestamp(snap_date), "DESIGN_NO",
+        )
+        max_horizon = min(
+            DIRECT_FORECAST_WEEKS,
+            max((len(fc.get("weekly") or []) for fc in forecasts.values()), default=0),
+        )
+        for w in range(max_horizon):
+            week_start = _forecast_week_start(snap_date, w)
+            week_end = week_start + timedelta(days=6)
+            if pd.Timestamp(week_end) + timedelta(days=MATURATION_DAYS) >= snap:
+                continue
+            try:
+                actual = actual_by_week.xs(pd.Timestamp(week_start), level="_forecast_week")
+            except KeyError:
+                actual = pd.Series(dtype="float64")
+            mult = _week_festival(week_start)[0]
+            for design_no, fc in forecasts.items():
+                weekly = fc.get("weekly") if fc else None
+                if not weekly or w >= len(weekly):
+                    continue
+                act = float(actual.get(design_no, 0.0))
+                pred = _blend(weekly[w], float(naive_week.get(design_no, 0.0)), mult)
+                horizon_err[w] = horizon_err.get(w, 0.0) + abs(act - pred)
+                horizon_act[w] = horizon_act.get(w, 0.0) + act
+    DESIGN_HORIZON_ACCURACY = {
+        w + 1: max(0, min(100, round((1 - horizon_err[w] / horizon_act[w]) * 100)))
+        for w in horizon_err if horizon_act.get(w, 0.0) > 0
+    }
+    if DESIGN_HORIZON_ACCURACY:
+        print(f"[data] design direct-horizon backtest accuracy: {DESIGN_HORIZON_ACCURACY}", file=sys.stderr)
     tier_accuracy = _tier_accuracy_breakdown(week_data)
     return design_pct, used, design_model_hist, tier_accuracy
 
@@ -1138,7 +1257,13 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
     # FORECAST_BLEND=0.25, 75% of every published forecast was a NET run-rate
     # shown against a GROSS actual, a structural downward bias having nothing
     # to do with model quality.
-    last35 = window_sum(RUNRATE_DAYS, src=gross_sales)   # name kept; RUNRATE_DAYS days (60)
+    # The baseline portion of the published blend must describe normal demand,
+    # not a recent flash sale.  Known event demand is reintroduced only in
+    # its matching future weeks by _adjusted_weekly().
+    last35, excluded_runrate_days = _robust_runrate(gross_sales, snap)
+    if excluded_runrate_days:
+        print(f"[data] robust run-rate excluded {len(excluded_runrate_days)} event/spike day(s): "
+              f"{', '.join(excluded_runrate_days)}", file=sys.stderr)
     # Realized avg selling price (revenue/qty) over the last 90 days.
     qty90 = window_sum(90)
     revenue90 = window_sum(90, col="total")
@@ -1275,8 +1400,11 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
 
     # Recent-only week keys for sigma_w (see _HIST_WEEKS' comment) - week_actual
     # itself now spans all the way back to _BREAKDOWN_HIST_START.
+    # Demand variance must use completed weeks only; including the current
+    # partial week understates uncertainty and therefore P80 coverage.
+    _last_complete_monday = last_monday if pd.Timestamp(snap).weekday() == 6 else last_monday - pd.Timedelta(weeks=1)
     _recent_week_keys = {
-        (last_monday - pd.Timedelta(weeks=k)).date().isoformat() for k in range(_HIST_WEEKS)
+        (_last_complete_monday - pd.Timedelta(weeks=k)).date().isoformat() for k in range(_HIST_WEEKS)
     }
 
     iso = SNAPSHOT_DATE.isoformat()
@@ -1285,8 +1413,8 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
     naive_week_map: dict[str, float] = {}
     for sku in df["product_sku_code"].unique():
         skey = str(sku)
-        naive35 = int(last35.get(sku, 0))
-        naive_week = naive35 / RUNRATE_WEEKS   # avg weekly run-rate over the last RUNRATE_DAYS days
+        naive35 = float(last35.get(sku, 0.0))
+        naive_week = naive35                  # robust weekly run-rate, already normalised to seven days
         q90 = float(qty90.get(sku, 0))
         price = round(float(revenue90.get(sku, 0)) / q90, 2) if q90 > 0 else 0.0
         fc = forecasts.get(skey) if forecasts else None
@@ -1315,6 +1443,12 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
         acts = [v for wk_iso, v in week_actual.get(skey, {}).items() if wk_iso in _recent_week_keys]
         sigma_w = float(pd.Series(acts, dtype="float64").std()) if len(acts) >= 2 else 0.0
         safety = max(0, round(SERVICE_Z * sigma_w * (lead / 7.0) ** 0.5))
+        lead_weeks = max(1, min(_FC_WEEKS, int(math.ceil(lead / 7.0))))
+        lead_p50 = max(0, round(sum(wseries[:lead_weeks])))
+        # Normal-demand approximation: P80 = P50 + z80 * uncertainty over
+        # the replenishment horizon.  Unlike the old fixed 35-day DRR target,
+        # this is aligned to the SKU's actual lead time.
+        lead_p80 = max(lead_p50, round(lead_p50 + PRODUCTION_QUANTILE_Z * sigma_w * lead_weeks ** 0.5))
         rows.append(
             PlanRow(
                 skuCode=str(sku),
@@ -1328,6 +1462,8 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
                 availableQty=available,
                 leadTimeDays=int(round(lead)),
                 safetyStock=safety,
+                forecastLeadTimeP50=lead_p50,
+                forecastLeadTimeP80=lead_p80,
                 reorderPoint=0,
                 totalSuggestedProduction=0,
                 calculatedProductionSuggestion=0,
@@ -1342,18 +1478,15 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
     lifecycle.classify(rows, sales, returns, launched, SNAPSHOT_DATE)
     attach_festival_spikes(rows, fc_weekly_adj, design_forecasts, naive_week_map)
 
-    # Flat 35-day-demand production policy (2026-08-24, user-specified):
-    # Target = DRR * 35 days (matching forecast35's own horizon). Produce Now
-    # = Target - Available, triggered only when Available < forecast35.
-    # Target uses currentDrr — the HISTORICAL trailing-30-day actual sales
-    # rate set by lifecycle.classify above (same number shown in the
-    # dashboard's DRR column) — not the forward forecast.
+    # Replenishment policy: cover the P80 forward demand over each SKU's real
+    # lead time.  The previous fixed 35-day DRR target contradicted the
+    # default 84-day lead time and the report's 13-week planning horizon.
     for r in rows:
-        target = round(r.currentDrr * 35)
+        target = r.forecastLeadTimeP80
         r.reorderPoint = target
         r.totalSuggestedProduction = target
-        r.calculatedProductionSuggestion = (target - r.availableQty) if r.availableQty < r.forecast35 else 0
-        r.stockStatus = "In Stock" if r.availableQty >= r.forecast35 else "Needs Production"
+        r.calculatedProductionSuggestion = max(0, target - r.availableQty)
+        r.stockStatus = "In Stock" if r.availableQty >= target else "Needs Production"
 
     # Design-level 5-week forecast, for context alongside each SKU's own
     # forecast35 — this table's DRR/reorder/production math above stays
@@ -1386,7 +1519,8 @@ def _load_real_plan(df, forecasts: dict | None = None, design_forecasts: dict | 
     # returns/RTO), so this was structurally UNDERSTATING accuracy, not just
     # measuring it noisily.
     model_pct, naive_pct, n_snapshots, sku_accuracy, sku_week_pred, latest_week_pct, latest_week_iso = (
-        _backtest_model_accuracy(gross_sales, snap) if RUN_BACKTEST else (0, 0, 0, {}, {}, 0, "")
+        _backtest_model_accuracy(gross_sales, snap)
+        if RUN_BACKTEST and not STYLE_ONLY else (0, 0, 0, {}, {}, 0, "")
     )
     if n_snapshots > 0:
         OVERALL_ACCURACY = model_pct
@@ -1565,6 +1699,9 @@ STYLE_LIFECYCLE: dict = {}
 # _backtest_model_accuracy; empty until enough snapshots have matured at each
 # offset. Diagnostic/visibility only — not consumed by the plan itself.
 HORIZON_ACCURACY: dict[int, int] = {}
+# The deployed default is the design/style model, so its direct-horizon
+# backtest is the authoritative 1..13-week score shown in model_status().
+DESIGN_HORIZON_ACCURACY: dict[int, int] = {}
 TOP_STATES: list[TopRegion] = []
 TOP_CITIES: list[TopRegion] = []
 TOP_WAREHOUSES: list[TopWarehouse] = []
@@ -1661,7 +1798,7 @@ _SNAPSHOT_VARS = (
     "_NAIVE_WEEK", "_ACTIVE_FORECASTS", "ACTIVE_FORECAST_MODEL", "FORECAST_SNAPSHOT",
     "OVERALL_ACCURACY", "LATEST_WEEK_ACCURACY", "LATEST_WEEK_ISO", "SKU_ACCURACY",
     "SKU_MODEL_HIST", "DESIGN_ACCURACY", "DESIGN_MODEL_HIST", "TIER_ACCURACY",
-    "HORIZON_ACCURACY", "STYLE_LIFECYCLE", "TOP_STATES", "TOP_CITIES", "TOP_WAREHOUSES",
+    "HORIZON_ACCURACY", "DESIGN_HORIZON_ACCURACY", "STYLE_LIFECYCLE", "TOP_STATES", "TOP_CITIES", "TOP_WAREHOUSES",
     "_DESIGN_LEAD", "_GLOBAL_LEAD", "_DESIGN_SECTION",
 )
 # The only _SOURCE_DF columns the endpoints read (festival outlook, spike
@@ -1880,18 +2017,19 @@ def _warm_caches() -> None:
         _channel_source_base_df()
         get_festival_outlook()
         # Matches the Weekly Sales Report's own default request exactly
-        # (groupBy=style, weeks=9, PAGE_SIZE=200, no filters) - see
+        # (groupBy=style, weeks=13, PAGE_SIZE=200, no filters) - see
         # WeeklySalesGrid.tsx's useWeeklyGrid() call - so the page a user
         # actually lands on is already cached by the time they load it.
-        get_weekly_grid("style", 9, 200, 0, "", "", "")
+        get_weekly_grid("style", 13, 200, 0, "", "", "")
         # Also records the Sub Category rows' running-week forecasts (see
         # forecast_freeze.py) even on days nobody opens that grouping.
-        get_weekly_grid("subCategory", 9, 200, 0, "", "", "")
+        get_weekly_grid("subCategory", 13, 200, 0, "", "", "")
         # Sub Category / Category / Tiers Spike Rate tabs (2026-10-05).
-        for _level in _CATEGORY_LEVELS:
-            get_category_analysis(_level)
+        import category_analysis
+        for _level in category_analysis._CATEGORY_LEVELS:
+            category_analysis.get_category_analysis(_level)
         # ...and their rows' channel drill-down (2026-10-09).
-        _category_channel_frame()
+        category_analysis._category_channel_frame()
     except Exception as exc:  # noqa: BLE001 — a slow first request beats a broken rebuild
         print(f"[data] cache warm-up failed ({exc!r})", file=sys.stderr)
 
@@ -2050,14 +2188,11 @@ def data_health() -> dict:
         window = [SNAPSHOT_DATE - timedelta(days=i) for i in range(RUNRATE_DAYS)]
         spikes = [d for d in window if daily.get(d.isoformat(), 0) > HEALTH_SPIKE_RATIO * normal]
         if spikes:
-            rr = sum(daily.get(d.isoformat(), 0) for d in window) / RUNRATE_WEEKS
-            clears = max(spikes) + timedelta(days=RUNRATE_DAYS)
             add("warning", "runrate_spike", "A sale spike is inside the run-rate",
                 f"{len(spikes)} day(s) between {min(spikes):%d %b} and {max(spikes):%d %b} sold "
-                f"over {HEALTH_SPIKE_RATIO:g}x a normal day ({normal:,} units). The run-rate "
-                f"({rr:,.0f}/week, {rr / (normal * 7):.1f}x normal) carries them until about "
-                f"{clears:%d %b}: upcoming weeks' forecast and Suggested Production may be too high "
-                f"until then. Check the running week's real pace before releasing production.")
+                f"over {HEALTH_SPIKE_RATIO:g}x a normal day ({normal:,} units). The robust baseline "
+                f"excludes unlisted catalogue-wide spikes, but the event still needs a calendar entry "
+                f"before a future recurrence can be forecast reliably.")
         # 4a. A spike with no event in the sale calendar.
         recent = [SNAPSHOT_DATE - timedelta(days=i) for i in range(21)]
         unlisted = [d for d in recent if daily.get(d.isoformat(), 0) > 1.8 * normal
@@ -2123,6 +2258,12 @@ def model_status() -> dict:
         # Snapshot the served model was trained on - older than "snapshot"
         # while that snapshot's own model is still training.
         "forecastSnapshot": FORECAST_SNAPSHOT,
+        # For the default style model this is the relevant lead-time accuracy
+        # (keys are 1..13 forecast weeks).  The SKU counterpart is retained
+        # for FORECAST_LEVEL=both deployments.
+        "horizonAccuracy": DESIGN_HORIZON_ACCURACY if STYLE_ONLY else HORIZON_ACCURACY,
+        "backtestEnabled": RUN_BACKTEST,
+        "groupFestivalBoostEnabled": GROUP_FESTIVAL_BOOST,
         "modelTraining": bool(_LGBM_THREAD and _LGBM_THREAD.is_alive()),
         "lgbmPending": FORECAST_MODEL == "lgbm" and ACTIVE_FORECAST_MODEL != "lightgbm",
     }
@@ -2762,6 +2903,27 @@ def _apply_festival_boost(
     return boosted, festival_boosted
 
 
+def _forecast_p80_total(forecast: list[ForecastPoint], wk_actual: dict[str, int]) -> int:
+    """An upper planning bound for a group's forward horizon.
+
+    The displayed forecast stays P50.  For replenishment we add the normal
+    approximation's 80th-percentile buffer from the group's own recent weekly
+    variability.  This is intentionally computed after all published event
+    adjustments, so a planner never compares stock with an unadjusted model
+    value while looking at an adjusted demand forecast.
+    """
+    p50 = sum(p.qty for p in forecast)
+    hist = [
+        v for week, v in sorted(wk_actual.items())
+        if date.fromisoformat(week) + timedelta(days=6) <= SNAPSHOT_DATE
+    ][-_HIST_WEEKS:]
+    if len(hist) < 2 or not forecast:
+        return int(round(p50))
+    mean = sum(hist) / len(hist)
+    sigma = (sum((v - mean) ** 2 for v in hist) / (len(hist) - 1)) ** 0.5
+    return max(int(round(p50)), int(round(p50 + PRODUCTION_QUANTILE_Z * sigma * len(forecast) ** 0.5)))
+
+
 def _channel_source_base_df():
     """Deduplicated, Gross-filtered real sales rows with a per-row calendar
     month and OMS/WEBSITE source, shared by every Channel & Source drill-down
@@ -2850,7 +3012,7 @@ def _channel_source_series(sub: "pd.DataFrame", chunks) -> list[ChannelSourceWee
     ]
 
 
-def get_channel_source_weekly(style: str, weeks: int = 9) -> ChannelSourceWeeklyResponse:
+def get_channel_source_weekly(style: str, weeks: int = 13) -> ChannelSourceWeeklyResponse:
     """Per-marketplace week-wise Gross Sale for one Style, on the SAME
     calendar-day week axis as the Weekly Sales Report's own row cells - the
     inline expandable-row drill-down behind the Demand Forecasting page's
@@ -2896,7 +3058,7 @@ def _matching_style_keys(search: str, sub_category: str, category: str = "") -> 
 
 
 def get_channel_source_weekly_total(
-    weeks: int = 9, search: str = "", sub_category: str = "", category: str = "",
+    weeks: int = 13, search: str = "", sub_category: str = "", category: str = "",
 ) -> ChannelSourceWeeklyResponse:
     """Per-marketplace week-wise Gross Sale summed across EVERY Style
     currently matching the Weekly Sales Report's own search/Sub Category/
@@ -2922,612 +3084,9 @@ def get_channel_source_weekly_total(
     )
 
 
-# Category / Sub Category monthly analysis (2026-10-03, user-requested):
-# styles sold, orders, units and the month-on-month spike, from April 2025.
-# Gross sale - the SAME units as the Weekly Sales Report's Actual Sale (one
-# definition everywhere, 2026-10-03, user-requested); the spike is on units too.
-_CATEGORY_ANALYSIS_START = date(2025, 4, 1)
-_CATEGORY_LEVELS = ("category", "subCategory", "style", "tier")
-
-
-def _style_tier_map() -> dict[str, str]:
-    """{STYLE (upper-cased): current catalog tier} - Cloud SQL CatalogStyle,
-    the same tiers as the Weekly Sales Report / Production Log. Empty if the
-    catalog is unavailable."""
-    try:
-        import catalog_style
-        return {str(k).strip().upper(): v for k, v in catalog_style.get_current_tier_map().items() if v}
-    except Exception as exc:  # noqa: BLE001
-        print(f"[data] catalog tiers unavailable ({exc!r})", file=sys.stderr)
-        return {}
-def _tier_at_sale(styles, dates):
-    """Each sale's tier AT THE TIME OF SALE (2026-10-13, user-requested
-    "Tier at time of sale" view): the style's latest Cloud SQL tier change on
-    or before the sale date (CatalogStyleForecastHistory). Before a style's
-    first recorded change - the log only starts 2026-06-01 - its CURRENT tier
-    is used, as there is no history to say otherwise."""
-    import numpy as np
-    import pandas as pd
-    key = styles.astype(str).str.strip().str.upper()
-    base = key.map(_style_tier_map()).fillna("Unclassified").to_numpy()
-    try:
-        import catalog_style
-        hist = catalog_style.get_tier_history()
-    except Exception as exc:  # noqa: BLE001
-        print(f"[data] tier history unavailable ({exc!r})", file=sys.stderr)
-        hist = []
-    if not hist:
-        return pd.Series(base, index=styles.index)
-    h = pd.DataFrame(hist)
-    h["key"] = h["name"].astype(str).str.strip().str.upper()
-    # One time resolution on both sides: pandas refuses to match e.g. [us] with [s].
-    h["at"] = pd.to_datetime(h["effectiveFrom"]).astype("datetime64[ns]")
-    h = h.drop_duplicates(["key", "at"], keep="last").sort_values("at")[["key", "at", "tier"]]
-    q = pd.DataFrame({"key": key.to_numpy(), "at": pd.to_datetime(dates).astype("datetime64[ns]").to_numpy(),
-                      "i": np.arange(len(key))}).sort_values("at")
-    m = pd.merge_asof(q, h, on="at", by="key", direction="backward")
-    tier = m.set_index("i")["tier"].reindex(np.arange(len(key))).to_numpy()
-    return pd.Series(np.where(pd.notna(tier), tier, base), index=styles.index)
-
-
-def get_tier_movement() -> dict:
-    """How long styles stay in each catalog tier and where they move
-    (2026-10-13, user-requested), from the Cloud SQL tier-change log
-    (CatalogStyleForecastHistory, from 2026-06-01).
-
-    - journey per style: its tier stays [{tier, from, to, days}], same-day
-      stays dropped (a tier set and changed again the same day = correction)
-    - summary per tier: styles now, moves in / out, median and average days
-      before moving out, median days so far of styles still there, top
-      destinations
-    - moves: from -> to counts
-    A style whose current catalog tier is not in its history (e.g. new
-    launches given a tier without a log entry) gets an "untracked" stay."""
-    import statistics
-    try:
-        import catalog_style
-        hist = catalog_style.get_tier_history()
-        current = {str(k).strip(): v for k, v in catalog_style.get_current_tier_map().items()}
-    except Exception as exc:  # noqa: BLE001
-        print(f"[data] tier movement unavailable ({exc!r})", file=sys.stderr)
-        return {"available": False, "tiers": [], "styles": [], "moves": [], "trackingFrom": ""}
-    today = date.today()
-    by_style: dict[str, list[dict]] = {}
-    for h in hist:
-        by_style.setdefault(str(h["name"]).strip(), []).append(h)
-
-    styles_out = []
-    closed: dict[str, list[int]] = {}
-    open_days: dict[str, list[int]] = {}
-    moves: dict[tuple[str, str], int] = {}
-    for name in sorted(set(by_style) | {k for k, v in current.items() if v}):
-        rows = sorted(by_style.get(name, []), key=lambda r: r["effectiveFrom"])
-        stays: list[dict] = []
-        for r in rows:
-            if stays and stays[-1]["tier"] == r["tier"]:
-                continue
-            if stays and stays[-1]["from"] == r["effectiveFrom"]:
-                stays.pop()                                  # changed again the same day: a correction
-                if stays and stays[-1]["tier"] == r["tier"]:
-                    continue
-            stays.append({"tier": r["tier"], "from": r["effectiveFrom"]})
-        for i, st in enumerate(stays):
-            end = stays[i + 1]["from"] if i + 1 < len(stays) else None
-            st["to"] = end
-            st["days"] = ((end or today) - st["from"]).days
-        cur = current.get(name) or ""
-        if cur and (not stays or stays[-1]["tier"] != cur):
-            if stays and stays[-1]["to"] is None:            # history ends in another tier
-                stays[-1]["untrackedEnd"] = True
-            stays.append({"tier": cur, "from": None, "to": None, "days": None, "untracked": True})
-        for a, b in zip(stays, stays[1:]):
-            if a.get("untrackedEnd") or b.get("untracked"):
-                continue
-            moves[(a["tier"], b["tier"])] = moves.get((a["tier"], b["tier"]), 0) + 1
-            closed.setdefault(a["tier"], []).append(a["days"])
-        last = stays[-1] if stays else None
-        if last and not last.get("untracked") and last["to"] is None and last["tier"] == cur:
-            open_days.setdefault(cur, []).append(last["days"])
-        styles_out.append({
-            "style": name, "tier": cur or "Unclassified",
-            "subCategory": design_attributes.sub_category_of(name) or "",
-            "daysInTier": last["days"] if last and not last.get("untracked") and last["to"] is None else None,
-            "journey": [{"tier": st["tier"], "from": st["from"].isoformat() if st["from"] else None,
-                         "to": st["to"].isoformat() if st["to"] else None, "days": st["days"],
-                         "untracked": bool(st.get("untracked"))} for st in stays],
-        })
-
-    tiers = sorted({*current.values(), *closed, *open_days} - {""},
-                   key=lambda t: (int(t[1:]) if t[1:].isdigit() else 999, t))
-    moved_in: dict[str, int] = {}
-    moved_out: dict[str, int] = {}
-    for (a, b), n in moves.items():
-        moved_out[a] = moved_out.get(a, 0) + n
-        moved_in[b] = moved_in.get(b, 0) + n
-    summary = []
-    for t in tiers:
-        c, o = closed.get(t, []), open_days.get(t, [])
-        dest = sorted(((b, n) for (a, b), n in moves.items() if a == t), key=lambda x: -x[1])[:3]
-        summary.append({
-            "tier": t, "stylesNow": sum(1 for v in current.values() if v == t),
-            "stylesTracked": len(o), "movedIn": moved_in.get(t, 0), "movedOut": moved_out.get(t, 0),
-            "medianDaysBeforeMoving": round(statistics.median(c)) if c else None,
-            "avgDaysBeforeMoving": round(sum(c) / len(c)) if c else None,
-            "medianDaysSoFar": round(statistics.median(o)) if o else None,
-            "movesTo": [{"tier": b, "styles": n} for b, n in dest],
-        })
-    return {
-        "available": True,
-        "trackingFrom": min(h["effectiveFrom"] for h in hist).isoformat() if hist else "",
-        "asOf": today.isoformat(),
-        "tiers": summary,
-        "moves": [{"from": a, "to": b, "styles": n} for (a, b), n in sorted(moves.items(), key=lambda kv: -kv[1])],
-        "styles": styles_out,
-    }
-
-
-_CATEGORY_ANALYSIS_CACHE: dict[tuple, dict] = {}
-_CATEGORY_CHANNELS_CACHE: dict[tuple, dict] = {}  # (data version, level, group) -> channel drill-down
-_CATEGORY_CHANNEL_FRAME = None  # (data version, frame) - see _category_channel_frame()
-
-
-def _category_filter_mask(styles, category: str = "", sub_category: str = "", brand: str = "", tier: str = "",
-                          style: str = ""):
-    """Boolean mask over a Series of style codes: styles in ``category`` and
-    ``sub_category`` (blank = any) - the same names as the Category / Sub
-    Category tables (design_attributes, "Unclassified" when unknown). Also
-    ``brand``, current catalog ``tier`` and one ``style`` (2026-10-30,
-    user-requested: the Brand / Tier / Category / Sub Category / Style filter
-    bar applies to all three tables and their charts). None = no filter."""
-    if not (category or sub_category or brand or tier or style):
-        return None
-    brand_of = _style_brand_map() if brand else {}
-    tier_of = _style_tier_map() if tier else {}
-    keep = {d for d in styles.unique()
-            if (not category or (design_attributes.category_of(d) or "Unclassified") == category)
-            and (not sub_category or (design_attributes.sub_category_of(d) or "Unclassified") == sub_category)
-            and (not brand or brand_of.get(d, "Unclassified") == brand)
-            and (not tier or (tier_of.get(d.strip().upper()) or "Unclassified") == tier)
-            and (not style or d == style)}
-    return styles.isin(keep)
-
-
-def _category_filter_options(styles) -> dict[str, list[str]]:
-    """{category: [its sub categories]} over the given style codes - the
-    Tiers Spike Rate table's Category / Sub Category filter menus."""
-    out: dict[str, set[str]] = {}
-    for d in styles.unique():
-        cat = design_attributes.category_of(d) or "Unclassified"
-        out.setdefault(cat, set()).add(design_attributes.sub_category_of(d) or "Unclassified")
-    return {c: sorted(v) for c, v in sorted(out.items())}
-
-
-def get_category_analysis(level: str = "subCategory", category: str = "", sub_category: str = "",
-                          tier_mode: str = "current", brand: str = "", tier: str = "", style: str = "") -> dict:
-    """One row per (month, Category or Sub Category): distinct styles with a
-    Gross sale that month, order count (order lines), units, and the units'
-    % change vs the previous month for the same group. The current
-    month is partial (data through SNAPSHOT_DATE), so it is compared with the
-    SAME days of the previous month (1..day) instead of the whole month.
-    ``category`` / ``sub_category`` keep only those styles (Tiers Spike Rate
-    filters, 2026-10-13, user-requested); blank = all. ``tier_mode`` (tier
-    level): "current" = every month under the style's current tier; "sale" =
-    each sale under the tier it had at the time (_tier_at_sale)."""
-    import pandas as pd
-
-    if level not in _CATEGORY_LEVELS:
-        raise ValueError(f"level must be one of {_CATEGORY_LEVELS}, got {level!r}")
-    tier_mode = "sale" if level == "tier" and tier_mode == "sale" else "current"
-    cache_key = (_DATA_VERSION, level, category, sub_category, tier_mode, brand, tier, style)
-    if cache_key in _CATEGORY_ANALYSIS_CACHE:
-        return _CATEGORY_ANALYSIS_CACHE[cache_key]
-
-    df = _channel_source_base_df()
-    out = {"level": level, "dataThrough": SNAPSHOT_DATE.isoformat(), "partialMonth": "", "rows": []}
-    if df is None or df.empty:
-        return out
-    df = df[(df["order_date"] >= pd.Timestamp(_CATEGORY_ANALYSIS_START))
-            & (df["order_date"] < pd.Timestamp(SNAPSHOT_DATE) + pd.Timedelta(days=1))]
-    designs = df["DESIGN_NO"].astype(str)
-    if level == "tier":
-        out["filterOptions"] = _category_filter_options(designs)
-    keep = _category_filter_mask(designs, category, sub_category, brand, tier, style)
-    if keep is not None:
-        df, designs = df[keep.to_numpy()], designs[keep.to_numpy()]
-        if df.empty:
-            return out
-    if level == "style":
-        # One row per style (Tiers Spike Rate tab, 2026-10-05, user-requested);
-        # its Sub Category is sent alongside for display.
-        mapping = {d: d for d in designs.unique()}
-        plan_sub = {r.designNo: r.subCategory for r in PLAN_ROWS if r.designNo}
-        out["subCategoryOf"] = {d: plan_sub.get(d) or design_attributes.sub_category_of(d) or "" for d in mapping}
-    elif level == "tier":
-        # One row per catalog tier (Tiers Spike Rate tab, 2026-10-09,
-        # user-requested: T0 / T1 / T2 / T3 / T11 / T12 rows, each opening
-        # into its styles); a style's CURRENT tier, "Unclassified" if none.
-        tier_of = _style_tier_map()
-        mapping = {d: tier_of.get(d.strip().upper()) or "Unclassified" for d in designs.unique()}
-        out["tierOf"] = mapping
-        out["tierMode"] = tier_mode
-    else:
-        group_of = design_attributes.category_of if level == "category" else design_attributes.sub_category_of
-        mapping = {d: (group_of(d) or "Unclassified") for d in designs.unique()}
-    # Months as "YYYY-MM" strings via the 12 possible period values (fast), and
-    # whole-column operations below instead of a per-row loop (2026-10-05:
-    # the style level has ~13k month x style rows).
-    frame = pd.DataFrame({
-        "month": df["_month"].astype(str),
-        "group": _tier_at_sale(designs, df["order_date"]) if tier_mode == "sale" else designs.map(mapping),
-        "qty": pd.to_numeric(df["qty"], errors="coerce").fillna(0),
-        "day": df["order_date"].dt.day,
-    })
-    if level != "style":
-        frame["style"] = designs
-    rows, partial_month = _month_group_rows(frame, count_styles=level != "style")
-    out.update(partialMonth=partial_month, rows=rows)
-    if len(_CATEGORY_ANALYSIS_CACHE) > 64:
-        _CATEGORY_ANALYSIS_CACHE.clear()
-    _CATEGORY_ANALYSIS_CACHE[cache_key] = out
-    return out
-
-
-def _month_group_rows(frame, count_styles: bool) -> tuple[list[dict], str]:
-    """Shared month x group aggregation behind get_category_analysis() and
-    its channel drill-down: ``frame`` has month ("YYYY-MM"), group, qty, day
-    (and style when ``count_styles``). Returns (rows, partial month or "")."""
-    import pandas as pd
-
-    grouped = frame.groupby(["month", "group"], sort=False)
-    agg = grouped.agg(orders=("qty", "size"), units=("qty", "sum")).reset_index()
-    agg["styles"] = grouped["style"].nunique().to_numpy() if count_styles else 1
-    agg["units"] = agg["units"].round().astype(int)
-
-    partial = f"{SNAPSHOT_DATE.year:04d}-{SNAPSHOT_DATE.month:02d}"
-    is_partial = SNAPSHOT_DATE != (pd.Timestamp(SNAPSHOT_DATE) + pd.offsets.MonthEnd(0)).date()
-    prev_partial = str(pd.Period(partial, freq="M") - 1)
-    # Previous month's units: the whole previous month, except for the partial
-    # current month, which is compared with the same days (1..day) of the previous one.
-    agg["prev_month"] = (pd.PeriodIndex(agg["month"], freq="M") - 1).astype(str)
-    prev_full = agg[["month", "group", "units"]].rename(columns={"month": "prev_month", "units": "prevUnits"})
-    agg = agg.merge(prev_full, on=["prev_month", "group"], how="left")
-    agg["prevUnits"] = agg["prevUnits"].astype("float64")
-    agg["partial"] = bool(is_partial) & (agg["month"] == partial)
-    if is_partial:
-        same_days_prev = (frame[(frame["month"] == prev_partial) & (frame["day"] <= SNAPSHOT_DATE.day)]
-                          .groupby("group")["qty"].sum().round())
-        agg.loc[agg["partial"], "prevUnits"] = agg.loc[agg["partial"], "group"].map(same_days_prev).astype("float64").to_numpy()
-    agg["prevUnits"] = agg["prevUnits"].fillna(0).astype(int)
-    prev = agg["prevUnits"].where(agg["prevUnits"] > 0)
-    agg["changePct"] = ((agg["units"] - prev) / prev * 100).round(1)
-    same_cols = []
-    if count_styles and "style" in frame.columns:
-        agg = agg.merge(_same_style_figures(frame, partial, prev_partial, is_partial), on=["month", "group"], how="left")
-        same_cols = ["stylesBoth", "sameUnits", "samePrevUnits", "newStyles", "newUnits", "stoppedStyles"]
-        agg[same_cols] = agg[same_cols].fillna(0)
-        sp = agg["samePrevUnits"].where(agg["samePrevUnits"] > 0)
-        agg["sameChangePct"] = ((agg["sameUnits"] - sp) / sp * 100).round(1)
-        agg["sameChangePct"] = agg["sameChangePct"].astype(object).where(agg["sameChangePct"].notna(), None)
-        same_cols.append("sameChangePct")
-    agg = agg.sort_values(["month", "units"], ascending=False)
-    agg["changePct"] = agg["changePct"].astype(object).where(agg["changePct"].notna(), None)
-    rows = agg[["month", "group", "styles", "orders", "units", "prevUnits", "changePct", "partial", *same_cols]].to_dict("records")
-    for r in rows:  # plain Python types for JSON
-        r["styles"], r["orders"], r["units"], r["prevUnits"] = int(r["styles"]), int(r["orders"]), int(r["units"]), int(r["prevUnits"])
-        r["partial"] = bool(r["partial"])
-        for k in ("stylesBoth", "sameUnits", "samePrevUnits", "newStyles", "newUnits", "stoppedStyles"):
-            if k in r:
-                r[k] = int(round(r[k]))
-    return rows, (partial if is_partial else "")
-
-
-def _same_style_figures(frame, partial: str, prev_partial: str, is_partial: bool):
-    """Per (month, group): the SAME-STYLE spike's parts (2026-10-13,
-    user-requested: styles are added and dropped every month, so total units
-    alone do not compare like with like).
-
-    stylesBoth / sameUnits / samePrevUnits - styles that sold this month AND the
-        previous month, and their units now / before (the same-style spike).
-        For the incomplete current month both sides are the same days (1..day)
-        of the two months, so 12 days are never compared with 30.
-    newStyles / newUnits - sold this month, not at all in the previous month
-    stoppedStyles        - sold in the previous month, not this month
-    New / stopped always compare with the WHOLE previous month (2026-10-13,
-    user-requested), so previous styles - stopped + new = this month's styles,
-    matching the Styles column next to it."""
-    import pandas as pd
-
-    su = frame.groupby(["month", "group", "style"], sort=False)["qty"].sum().reset_index()
-    su["prev_month"] = (pd.PeriodIndex(su["month"], freq="M") - 1).astype(str)
-    before = su[["month", "group", "style", "qty"]].rename(columns={"month": "prev_month", "qty": "prev"})
-    su = su.merge(before, on=["prev_month", "group", "style"], how="left")
-    su["prev_full"] = su["prev"].fillna(0.0)          # the whole previous month - new / stopped
-    same_days = None
-    if is_partial:
-        same_days = (frame[(frame["month"] == prev_partial) & (frame["day"] <= SNAPSHOT_DATE.day)]
-                     .groupby(["group", "style"])["qty"].sum().rename("sd").reset_index())
-        su = su.merge(same_days, on=["group", "style"], how="left")
-        cur = su["month"] == partial
-        su.loc[cur, "prev"] = su.loc[cur, "sd"]
-        su = su.drop(columns="sd")
-    su["prev"] = su["prev"].fillna(0.0)
-    both = (su["qty"] > 0) & (su["prev"] > 0)
-    new = (su["qty"] > 0) & (su["prev_full"] <= 0)
-    su["both"], su["new"] = both, new
-    su["sameNow"] = su["qty"].where(both, 0.0)
-    su["samePrev"] = su["prev"].where(both, 0.0)
-    su["newQty"] = su["qty"].where(new, 0.0)
-    out = su.groupby(["month", "group"]).agg(
-        stylesBoth=("both", "sum"), sameUnits=("sameNow", "sum"), samePrevUnits=("samePrev", "sum"),
-        newStyles=("new", "sum"), newUnits=("newQty", "sum"),
-    ).reset_index()
-
-    # Stopped: sold in the previous period, not this month.
-    months = set(su["month"])
-    prev_sets = su[["month", "group", "style"]].copy()
-    prev_sets["month"] = (pd.PeriodIndex(prev_sets["month"], freq="M") + 1).astype(str)
-    prev_sets = prev_sets[prev_sets["month"].isin(months)]
-    now_sets = su[["month", "group", "style"]].assign(sold=True)
-    stopped = prev_sets.merge(now_sets, on=["month", "group", "style"], how="left")
-    stopped = stopped[stopped["sold"].isna()].groupby(["month", "group"]).size().rename("stoppedStyles").reset_index()
-    return out.merge(stopped, on=["month", "group"], how="left")
-
-
-def _category_channel_frame():
-    """Every Gross sale row of the Category Analysis window as (month, group =
-    marketplace, qty, day, style) - built once per _DATA_VERSION, so opening a
-    row's channel drill-down only filters it (~0.2 s instead of ~1.5 s)."""
-    global _CATEGORY_CHANNEL_FRAME
-    if _CATEGORY_CHANNEL_FRAME is not None and _CATEGORY_CHANNEL_FRAME[0] == _DATA_VERSION:
-        return _CATEGORY_CHANNEL_FRAME[1]
-    import pandas as pd
-
-    df = _channel_source_base_df()
-    if df is None:
-        return None
-    df = df[(df["order_date"] >= pd.Timestamp(_CATEGORY_ANALYSIS_START))
-            & (df["order_date"] < pd.Timestamp(SNAPSHOT_DATE) + pd.Timedelta(days=1))]
-    # Marketplace per row, resolved once per distinct (channel_name, source).
-    pair = df["channel_name"].astype(str) + "\x1f" + df["source"].astype(str)
-    resolved = {p: _marketplace_of(*p.split("\x1f", 1)) for p in pair.unique()}
-    frame = pd.DataFrame({
-        "month": df["_month"].astype(str),
-        "group": pair.map(resolved),
-        "qty": pd.to_numeric(df["qty"], errors="coerce").fillna(0),
-        "day": df["order_date"].dt.day,
-        "style": df["DESIGN_NO"].astype(str),
-    })
-    _CATEGORY_CHANNEL_FRAME = (_DATA_VERSION, frame)
-    return frame
-
-
-def _category_group_mask(base, level: str, group: str, category: str = "", sub_category: str = "",
-                         tier_mode: str = "current", brand: str = "", tier: str = "", style: str = ""):
-    """Rows of _category_channel_frame() that belong to one Category / Sub
-    Category / Style / Tier row of the Category Analysis tables (blank
-    ``group`` = every row, i.e. the TOTAL row), after the Category / Sub
-    Category filters."""
-    import pandas as pd
-
-    if not group:
-        mask = pd.Series(True, index=base.index)
-    elif level == "style":
-        mask = base["style"] == group
-    elif level == "tier" and tier_mode == "sale":
-        sale_date = pd.to_datetime(base["month"] + "-" + base["day"].astype(int).astype(str).str.zfill(2))
-        mask = pd.Series((_tier_at_sale(base["style"], sale_date) == group).to_numpy(), index=base.index)
-    elif level == "tier":
-        tier_of = _style_tier_map()
-        members = {d for d in base["style"].unique() if (tier_of.get(d.strip().upper()) or "Unclassified") == group}
-        mask = base["style"].isin(members)
-    else:
-        group_of = design_attributes.category_of if level == "category" else design_attributes.sub_category_of
-        members = {d for d in base["style"].unique() if (group_of(d) or "Unclassified") == group}
-        mask = base["style"].isin(members)
-    keep = _category_filter_mask(base["style"], category, sub_category, brand, tier, style)
-    return mask & keep if keep is not None else mask
-
-
-def get_category_analysis_channels(level: str, group: str, category: str = "", sub_category: str = "",
-                                   tier_mode: str = "current", brand: str = "", tier: str = "", style: str = "") -> dict:
-    """Channel drill-down of one Category / Sub Category / Style row of the
-    Category Analysis tables (2026-10-09, user-requested): the same monthly
-    styles / orders / units / spike, one row per marketplace (Amazon,
-    Flipkart, ... - the same rollup as the Weekly Sales Report's Channel &
-    Source drill-down, _marketplace_of)."""
-    import pandas as pd
-
-    if level not in _CATEGORY_LEVELS:
-        raise ValueError(f"level must be one of {_CATEGORY_LEVELS}, got {level!r}")
-    tier_mode = "sale" if level == "tier" and tier_mode == "sale" else "current"
-    cache_key = (_DATA_VERSION, level, group, category, sub_category, tier_mode, brand, tier, style)
-    if cache_key in _CATEGORY_CHANNELS_CACHE:
-        return _CATEGORY_CHANNELS_CACHE[cache_key]
-
-    out = {"level": level, "group": group, "dataThrough": SNAPSHOT_DATE.isoformat(), "partialMonth": "", "rows": []}
-    base = _category_channel_frame()
-    if base is None or base.empty:
-        return out
-    frame = base[_category_group_mask(base, level, group, category, sub_category, tier_mode, brand, tier, style)]
-    if frame.empty:
-        return out
-    rows, partial_month = _month_group_rows(frame, count_styles=True)
-    out.update(partialMonth=partial_month, rows=rows)
-    if len(_CATEGORY_CHANNELS_CACHE) > 256:
-        _CATEGORY_CHANNELS_CACHE.clear()
-    _CATEGORY_CHANNELS_CACHE[cache_key] = out
-    return out
-
-
-def get_category_analysis_styles(level: str, group: str, month: str, channel: str = "", category: str = "",
-                                 sub_category: str = "", tier_mode: str = "current", brand: str = "", tier: str = "", style: str = "") -> dict:
-    """The styles behind one STYLES cell of the Category Analysis tables
-    (2026-10-29, user-requested: click the style count to see which styles
-    sold and how much). ``group`` blank = the TOTAL row; ``channel`` = a
-    marketplace sub-row. Per style: units and orders that month, the previous
-    month's units and whether it is new (did not sell in the whole previous
-    month); plus the stopped styles (sold in the previous month, not this one)
-    - the same rules as the +new / -stopped figures next to the count."""
-    import pandas as pd
-
-    if level not in _CATEGORY_LEVELS:
-        raise ValueError(f"level must be one of {_CATEGORY_LEVELS}, got {level!r}")
-    tier_mode = "sale" if level == "tier" and tier_mode == "sale" else "current"
-    prev = str(pd.Period(month, freq="M") - 1)
-    out = {"level": level, "group": group, "channel": channel, "month": month, "prevMonth": prev,
-           "partial": month == f"{SNAPSHOT_DATE.year:04d}-{SNAPSHOT_DATE.month:02d}",
-           "dataThrough": SNAPSHOT_DATE.isoformat(), "styles": [], "stopped": []}
-    base = _category_channel_frame()
-    if base is None or base.empty:
-        return out
-    base = base[base["month"].isin((month, prev))]
-    if channel:
-        base = base[base["group"] == channel]
-    frame = base[_category_group_mask(base, level, group, category, sub_category, tier_mode, brand, tier, style)]
-    if frame.empty:
-        return out
-    by = frame.groupby(["month", "style"])["qty"].agg(units="sum", orders="size").reset_index()
-    now = by[by["month"] == month].set_index("style")
-    before = by[by["month"] == prev].set_index("style")
-    tier_of = _style_tier_map()
-
-    def info(st: str) -> dict:
-        return {"style": st, "subCategory": design_attributes.sub_category_of(st) or "",
-                "tier": tier_of.get(st.strip().upper()) or ""}
-
-    styles = []
-    for st, r in now.iterrows():
-        p = int(round(before["units"].get(st, 0)))
-        styles.append({**info(st), "units": int(round(r["units"])), "orders": int(r["orders"]),
-                       "prevUnits": p, "new": st not in before.index})
-    styles.sort(key=lambda x: (-x["units"], x["style"]))
-    stopped = [{**info(st), "prevUnits": int(round(r["units"]))}
-               for st, r in before.iterrows() if st not in now.index]
-    stopped.sort(key=lambda x: (-x["prevUnits"], x["style"]))
-    out.update(styles=styles, stopped=stopped)
-    return out
-
-
-_CATEGORY_FILTERED_CACHE: dict[tuple, dict] = {}  # (data version, filters) -> filtered monthly totals
-_STYLE_BRAND_CACHE: tuple | None = None  # (data version, {style: brand})
-
-
-def _normalize_brand(name) -> str:
-    """One spelling per brand for the sales orders' free-text brand_name
-    ("MOKOSH" / "mokosh", "coe" / "Colors Of Earth", ...), matching the
-    master sheet's names."""
-    raw = str(name if name is not None else "").strip()
-    key = "".join(ch for ch in raw.lower() if ch.isalnum())
-    if not key or key in ("nan", "none", "na"):
-        return ""
-    if key.startswith("mokosh"):
-        return "Mokosh"
-    if key.startswith("jturritopsis"):
-        return "J.Turritopsis"
-    if key.startswith("curlytales"):
-        return "Curly Tales"
-    if key in ("coe", "colorsofearth", "coloursofearth") or key.startswith("colorsofearth"):
-        return "C.O.E"
-    return raw.title()
-
-
-def _style_brand_map() -> dict[str, str]:
-    """{style: brand} (2026-10-14, user-requested Brand filter): the master
-    sheet's Brand; for a style missing from the sheet, the brand its sales
-    orders carry most often (spelling unified). "Unclassified" if neither."""
-    global _STYLE_BRAND_CACHE
-    if _STYLE_BRAND_CACHE is not None and _STYLE_BRAND_CACHE[0] == _DATA_VERSION:
-        return _STYLE_BRAND_CACHE[1]
-    df = _channel_source_base_df()
-    out: dict[str, str] = {}
-    if df is not None and not df.empty:
-        styles = df["DESIGN_NO"].astype(str)
-        fallback: dict[str, str] = {}
-        if "brand_name" in df.columns:
-            names = df["brand_name"].map(_normalize_brand)
-            counts = (names[names != ""].groupby(styles[names != ""]).agg(lambda s: s.value_counts().idxmax())
-                      if (names != "").any() else {})
-            fallback = dict(counts.items()) if hasattr(counts, "items") else {}
-        for st in styles.unique():
-            out[st] = design_attributes.brand_of(st) or fallback.get(st) or "Unclassified"
-    _STYLE_BRAND_CACHE = (_DATA_VERSION, out)
-    return out
-
-
-def _category_style_options() -> list[dict]:
-    """Every style in the Category Analysis window with its tier, category and
-    sub category - the choices behind the Tiers Spike Rate chart's filters."""
-    base = _category_channel_frame()
-    if base is None or base.empty:
-        return []
-    # The same tier / category / sub category of a style as the Tiers,
-    # Category and Sub Category tables, so the chart's totals match them.
-    tier_of = _style_tier_map()
-    brand_of = _style_brand_map()
-    out = []
-    for st in sorted(base["style"].unique()):
-        out.append({
-            "style": st,
-            "brand": brand_of.get(st, "Unclassified"),
-            "tier": tier_of.get(st.strip().upper()) or "Unclassified",
-            "category": design_attributes.category_of(st) or "Unclassified",
-            "subCategory": design_attributes.sub_category_of(st) or "Unclassified",
-        })
-    return out
-
-
-def get_category_analysis_filtered(tier: str = "", category: str = "", sub_category: str = "", style: str = "",
-                                   brand: str = "") -> dict:
-    """Monthly styles / orders / units / spike for every style matching ALL the
-    given filters together (blank = any) - the Tiers Spike Rate chart's
-    filters (2026-10-13, user-requested: Tier, Category, Sub Category and a
-    searchable Style). Summed on the server from the sale rows, so a month's
-    spike counts styles that sold the month before even when they did not sell
-    this month (the same rule as the tables, see _month_group_rows). Also
-    returns every style's tier / category / sub category for the filter lists."""
-    cache_key = (_DATA_VERSION, tier, category, sub_category, style, brand)
-    if cache_key in _CATEGORY_FILTERED_CACHE:
-        return _CATEGORY_FILTERED_CACHE[cache_key]
-    options = _category_style_options()
-    out = {"dataThrough": SNAPSHOT_DATE.isoformat(), "partialMonth": "", "rows": [], "styleCount": 0, "options": options}
-    base = _category_channel_frame()
-    if base is None or base.empty:
-        return out
-    members = {o["style"] for o in options
-               if (not brand or o["brand"] == brand)
-               and (not tier or o["tier"] == tier) and (not category or o["category"] == category)
-               and (not sub_category or o["subCategory"] == sub_category) and (not style or o["style"] == style)}
-    out["styleCount"] = len(members)
-    frame = base[base["style"].isin(members)]
-    if not frame.empty:
-        frame = frame.assign(group="selection")
-        rows, partial = _month_group_rows(frame, count_styles=True)
-        out.update(rows=rows, partialMonth=partial)
-    if len(_CATEGORY_FILTERED_CACHE) > 256:
-        _CATEGORY_FILTERED_CACHE.clear()
-    _CATEGORY_FILTERED_CACHE[cache_key] = out
-    return out
-
-
-def get_style_lifecycle(sub_category: str = "") -> dict:
-    """STYLE_LIFECYCLE for one Sub Category, or every Sub Category if
-    ``sub_category`` is blank (2026-09-22, user-requested Weekly Sales Report
-    feature: styles present last calendar year vs newly launched this one)."""
-    if not sub_category:
-        return STYLE_LIFECYCLE
-    entry = STYLE_LIFECYCLE.get("bySubCategory", {}).get(sub_category, {
-        "presentCount": 0, "presentStyles": [], "addedCount": 0, "addedStyles": [],
-    })
-    return {
-        "lastYear": STYLE_LIFECYCLE.get("lastYear"),
-        "thisYear": STYLE_LIFECYCLE.get("thisYear"),
-        "bySubCategory": {sub_category: entry},
-    }
-
-
 # Forward horizon of the Weekly Sales Report (dataService.weeklyGrid's
-# default, ~2 months) - the suggestion the weekly production log records.
-_LOG_WEEKS = 9
+# default, ~3 months) - the suggestion the weekly production log records.
+_LOG_WEEKS = DIRECT_FORECAST_WEEKS
 
 
 def _record_stock_snapshot() -> None:
@@ -3556,7 +3115,7 @@ def _record_weekly_production() -> None:
     data has finished - settling for weekly_log.SETTLE_DAYS days because late
     marketplace orders keep arriving, then completed - its other values
     staying as last refreshed while it ran; then saves the running week: each
-    Style's ~2-month forecast, stock + WIP and suggested production,
+    Style's 3-month P50 forecast, stock + WIP and P80-based suggested production,
     refreshed on every publish until the week ends."""
     import weekly_log
     try:
@@ -3783,14 +3342,16 @@ def _compute_weekly_grid(
     # independently for the upcoming Festival AND the upcoming Sale (see
     # festival_calendar.py) - either, both, or neither may end up boosting
     # a given group.
-    boost_windows = [
-        w for w in (
-            _event_boost_windows(outlook.upcomingFestival, forecast_mondays, historical_mondays),
-            _event_boost_windows(outlook.upcomingSale, forecast_mondays, historical_mondays),
-        ) if w is not None
-    ]
+    boost_windows = []
+    if GROUP_FESTIVAL_BOOST:
+        boost_windows = [
+            w for w in (
+                _event_boost_windows(outlook.upcomingFestival, forecast_mondays, historical_mondays),
+                _event_boost_windows(outlook.upcomingSale, forecast_mondays, historical_mondays),
+            ) if w is not None
+        ]
 
-    built: list[tuple[str, int, int, list[ForecastPoint], list[HistoricalPoint], bool]] = []
+    built: list[tuple[str, int, int, list[ForecastPoint], list[HistoricalPoint], bool, int]] = []
     week_qty_by_key: dict[str, dict[str, float]] = {}  # key -> {monday_iso: week qty}, for chunk proration
     for key, skus in groups.items():
         naive_week, wk_actual, series, model_hist = _aggregate_group_series(skus, gross=True)
@@ -3798,8 +3359,9 @@ def _compute_weekly_grid(
             weeks, naive_week, wk_actual, series, model_hist,
         )
         forecast, festival_boosted = _apply_festival_boost(forecast, naive_week, wk_actual, boost_windows)
+        forecast_p80 = _forecast_p80_total(forecast, wk_actual)
 
-        built.append((key, len(skus), len(group_styles[key]), forecast, historical, festival_boosted))
+        built.append((key, len(skus), len(group_styles[key]), forecast, historical, festival_boosted, forecast_p80))
         week_qty: dict[str, float] = {p.date: float(p.forecast) for p in historical}
         week_qty.update({p.date: float(p.qty) for p in forecast})
         week_qty_by_key[key] = week_qty
@@ -3887,8 +3449,8 @@ def _compute_weekly_grid(
     def _frozen_live(keys, c_start, c_end) -> tuple[int | None, int | None]:
         """(frozen, latest) forecast of a week summed over ``keys``
         (2026-10-14 / 2026-10-15, user-requested frozen vs unfrozen view):
-        - frozen: the week's value in the 2-month freeze covering it
-          (forecast_freeze.frozen_values - one snapshot kept for 2 months);
+        - frozen: the week's value in the 3-month freeze covering it
+          (forecast_freeze.frozen_values - rolling, SNAPSHOT_DAYS);
           a completed week outside any freeze: its forecast from when it began.
           None where nothing was frozen.
         - latest: today's forecast for a running or upcoming week; None for a
@@ -3896,7 +3458,7 @@ def _compute_weekly_grid(
           projected back onto a past week is not a forecast)."""
         iso = c_start.isoformat()
         live = None if c_end < today else int(sum(round(live_cells.get(k, {}).get(iso, 0)) for k in keys))
-        # The 2-month freeze covering this week; a completed week outside any
+        # The 3-month freeze covering this week; a completed week outside any
         # freeze: its forecast from when the week began, if recorded.
         # 2026-10-19, user-requested: with the 2-month freeze off, the frozen
         # view shows completed (past) weeks only - running and upcoming weeks
@@ -3927,6 +3489,7 @@ def _compute_weekly_grid(
     # one Style, so these come out the same regardless of which grouping is
     # active (a useful cross-check).
     total_forecast = sum(sum(p.qty for p in item[3]) for item in built)
+    total_forecast_p80 = sum(item[6] for item in built)
 
     # GROSS, not net - total_actual is built from historical/HistoricalPoint,
     # whose wk_actual now comes from _aggregate_group_series(gross=True)
@@ -3960,7 +3523,7 @@ def _compute_weekly_grid(
     # (forward forecast minus available inventory+WIP, floored at 0), summed
     # across EVERY matching group rather than just the current page.
     total_suggested_production = sum(
-        max(0, sum(p.qty for p in item[3]) - group_available.get(item[0], 0))
+        max(0, item[6] - group_available.get(item[0], 0))
         for item in built
     )
 
@@ -4015,7 +3578,7 @@ def _compute_weekly_grid(
     page = built[offset: offset + limit]
 
     rows_payload: list[WeeklyGridRow] = []
-    for key, sku_count, style_count, forecast, historical, festival_boosted in page:
+    for key, sku_count, style_count, forecast, historical, festival_boosted, forecast_p80 in page:
         row_fc = fc_cells.get(key, {})
         day_actual = _aggregate_group_day_actual(groups.get(key, []), gross=True)
         # Launch date only means something for a single design (group_by=
@@ -4083,14 +3646,16 @@ def _compute_weekly_grid(
                 # this grand total never drifts for weeks already finished.
                 grandForecastTotal=sum(month_forecast.values()),
                 futureForecastTotal=future_forecast_total,
+                futureForecastP80=forecast_p80,
                 availableQty=available,
-                suggestedProduction=max(0, future_forecast_total - available),
+                suggestedProduction=max(0, forecast_p80 - available),
                 festivalBoosted=festival_boosted,
             )
         )
 
     return WeeklyGridResponse(
-        groupBy=group_by, total=total, totalForecast=total_forecast, totalActual=total_actual,
+        groupBy=group_by, total=total, totalForecast=total_forecast, totalForecastP80=total_forecast_p80,
+        totalActual=total_actual,
         currentWeekForecast=current_week_forecast, currentWeekActual=current_week_actual,
         currentWeekLabel=current_week_label,
         totalSuggestedProduction=total_suggested_production,

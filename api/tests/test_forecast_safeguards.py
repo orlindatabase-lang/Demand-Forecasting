@@ -126,3 +126,26 @@ def test_calendar_sale_with_normal_sales_is_flagged(health, monkeypatch):
 def test_stale_data_is_flagged(health, monkeypatch):
     monkeypatch.setattr(data, "SNAPSHOT_DATE", date.today() - timedelta(days=5))
     assert "data_stale" in _codes()
+
+
+def test_robust_runrate_drops_an_unlisted_catalogue_spike(monkeypatch):
+    """A flash-sale day cannot lift every SKU's normal weekly baseline."""
+    import pandas as pd
+
+    start = pd.Timestamp("2026-01-01")
+    days = pd.date_range(start, periods=21, freq="D")
+    qty = [10.0] * len(days)
+    qty[-1] = 100.0
+    sales = pd.DataFrame({
+        "order_date": days,
+        "product_sku_code": ["A"] * len(days),
+        "qty": qty,
+    })
+    monkeypatch.setattr(data, "RUNRATE_DAYS", 21)
+    monkeypatch.setattr(data, "RUNRATE_MIN_CLEAN_DAYS", 14)
+    monkeypatch.setattr(data.festival_calendar, "is_event_day", lambda _d: False)
+
+    weekly, excluded = data._robust_runrate(sales, days[-1])
+
+    assert weekly["A"] == pytest.approx(70.0)
+    assert days[-1].date().isoformat() in excluded

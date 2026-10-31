@@ -341,7 +341,8 @@ def _build(data) -> dict:
     projection, window = _running_projection(data, sales, snap, styles)
     frame = _chunk_frame(sales, snap, projection)
     lifecycle = _lifecycle(frame, styles, snap)
-    tier_now = data._style_tier_map()       # catalog tier per style, for the Trend status styles popup
+    import category_analysis
+    tier_now = category_analysis._style_tier_map()       # catalog tier per style, for the Trend status styles popup
     launch_of = _style_launch_dates(data)
     for st, info in lifecycle.get("styleInfo", {}).items():
         info["tier"] = tier_now.get(st.strip().upper(), "")

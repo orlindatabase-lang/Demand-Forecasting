@@ -1,7 +1,7 @@
 """
 Weekly production log (2026-09-28, user-requested): one row per Style per
 Weekly Sales Report week (1-7 / 8-15 / 16-23 / 24-end). While the week runs,
-its ~2-month forecast, stock + WIP and suggested production are refreshed on
+its three-month P50 forecast, stock + WIP and P80-based suggested production are refreshed on
 every data refresh. Once the week has finished, its forecast / stock + WIP /
 suggestion are locked and the row becomes 'settling': its actual sale is
 re-read on every data refresh for SETTLE_DAYS days, because marketplace-
@@ -40,9 +40,9 @@ CREATE TABLE IF NOT EXISTS weekly_production (
     week_start               TEXT    NOT NULL,  -- ISO date
     week_end                 TEXT    NOT NULL,  -- ISO date
     forecast_qty             INTEGER NOT NULL,  -- forecast for this week, as of week start (never updated)
-    forecast_2m_qty          INTEGER NOT NULL,  -- forecast for the ~2 months from the week (live until completed)
+    forecast_2m_qty          INTEGER NOT NULL,  -- legacy column name: P50 forecast for the 3 months from the week
     available_qty            INTEGER NOT NULL,  -- stock + WIP (live until completed)
-    suggested_production_qty INTEGER NOT NULL,  -- max(0, forecast_2m - available) (live until completed)
+    suggested_production_qty INTEGER NOT NULL,  -- max(0, P80 horizon demand - available) (live until completed)
     captured_on              TEXT    NOT NULL,  -- data date of the week-start capture
     updated_on               TEXT,              -- data date of the last live update
     actual_qty               INTEGER,           -- gross units sold in the week (once the week ended)
@@ -69,7 +69,7 @@ def save_running_week(rows: list[dict], month: str, week: str, week_start: date,
     """Save the running week for every Style (``rows``: dicts with style,
     sub_category, category, forecast_qty, forecast_2m_qty, available_qty,
     suggested_production_qty): new Styles are inserted; existing OPEN rows
-    get their ~2-month forecast, stock + WIP and suggestion refreshed.
+    get their three-month P50 forecast, stock + WIP and P80 suggestion refreshed.
     forecast_qty and captured_on keep their week-start values, and
     completed rows are never touched."""
     with _LOCK, _connect() as conn:

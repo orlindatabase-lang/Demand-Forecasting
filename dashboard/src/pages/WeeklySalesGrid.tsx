@@ -49,7 +49,7 @@ import {
   useStyleLifecycle,
 } from "@/hooks/useDashboardData";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
-import { dataService } from "@/services/dataService";
+import { dataService, FORECAST_WEEKS } from "@/services/dataService";
 import { formatNumber } from "@/utils/format";
 import { COLORS } from "@/theme/colors";
 import type {
@@ -304,16 +304,16 @@ function Cell({
   );
 }
 
-// The rolling 2-month freeze ("on" = when the current weeks were frozen; "until" is no longer used), set from the grid response.
+// The rolling 3-month freeze ("on" = when the current weeks were frozen; "until" is no longer used), set from the grid response.
 const FREEZE = { on: "", until: "" };
 const shortIso = (iso: string) => (iso ? new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "");
 
-/** Frozen (2-month freeze) vs unfrozen (latest / at week end) forecast of one
+/** Frozen (3-month freeze) vs unfrozen (latest / at week end) forecast of one
  * week (2026-10-14 / 2026-10-15, user-requested). */
 function forecastTip(cell: WeeklyGridCell): string {
   if (cell.frozenMissing) {
     return FREEZE.on
-      ? `Not frozen yet - a week is frozen the day it comes within the next 2 months. Latest: ${formatNumber(cell.liveForecast ?? 0)}`
+      ? `Not frozen yet - a week is frozen the day it comes within the next 3 months. Latest: ${formatNumber(cell.liveForecast ?? 0)}`
       : `Frozen view shows past weeks only - this week is not finished yet. Latest: ${formatNumber(cell.liveForecast ?? 0)}`;
   }
   if (cell.liveForecast === undefined && cell.frozenForecast === undefined) return "";
@@ -324,7 +324,7 @@ function forecastTip(cell: WeeklyGridCell): string {
   if (cell.actual === null) {
     const now = cell.liveForecast ?? cell.forecast;
     return start == null
-      ? `Latest forecast: ${formatNumber(now)} · not frozen yet (more than 2 months away)`
+      ? `Latest forecast: ${formatNumber(now)} · not frozen yet (more than 3 months away)`
       : `${frozenLabel}: ${formatNumber(start)} · Latest: ${formatNumber(now)}${pct(now, start)}`;
   }
   if (cell.partial) {
@@ -631,6 +631,7 @@ function FestivalCard({ outlook }: { outlook: FestivalOutlook | null }) {
 
 interface OverviewTotals {
   totalForecast: number;
+  totalForecastP80: number;
   totalActual: number;
   totalSuggestedProduction: number;
   currentWeekForecast: number;
@@ -666,7 +667,7 @@ function ForecastOverview({
         <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ flex: "1 1 600px", minWidth: 0 }}>
           <SummaryCard
             label="Total Forecast"
-            note="next 2 months"
+            note="next 3 months"
             value={displayTotals.totalForecast}
             accent={FORECAST_COLOR}
             currentWeekLabel={data.currentWeekLabel}
@@ -682,10 +683,10 @@ function ForecastOverview({
           />
           <SummaryCard
             label="Total Suggested Production"
-            note="qty"
+            note="P80 coverage target"
             value={displayTotals.totalSuggestedProduction}
             accent={FORECAST_COLOR}
-            footer="Forecast minus stock & WIP"
+            footer={`P50 ${formatNumber(displayTotals.totalForecast)} · P80 ${formatNumber(displayTotals.totalForecastP80)}`}
           />
         </Stack>
         {actions && (
@@ -827,7 +828,7 @@ export default function WeeklySalesGrid() {
   // currently-matching Style instead of one; only fetched while expanded.
   const [totalExpanded, setTotalExpanded] = useState(false);
   const totalChannelQuery = useChannelSourceWeeklyTotal(
-    totalExpanded, 9, debouncedSearch,
+    totalExpanded, FORECAST_WEEKS, debouncedSearch,
     subCategoryFilter === "all" ? "" : subCategoryFilter,
     categoryFilter === "all" ? "" : categoryFilter,
   );
@@ -919,6 +920,7 @@ export default function WeeklySalesGrid() {
     if (tierStyleSet === null) {
       return {
         totalForecast: data.totalForecast,
+        totalForecastP80: data.totalForecastP80,
         totalActual: data.totalActual,
         totalSuggestedProduction: data.totalSuggestedProduction,
         currentWeekForecast: data.currentWeekForecast,
@@ -927,6 +929,7 @@ export default function WeeklySalesGrid() {
       };
     }
     const totalForecast = visibleRows.reduce((s, r) => s + r.futureForecastTotal, 0);
+    const totalForecastP80 = visibleRows.reduce((s, r) => s + r.futureForecastP80, 0);
     const totalActual = visibleRows.reduce((s, r) => s + r.grandActualTotal, 0);
     const totalSuggestedProduction = visibleRows.reduce((s, r) => s + r.suggestedProduction, 0);
 
@@ -971,6 +974,7 @@ export default function WeeklySalesGrid() {
 
     return {
       totalForecast,
+      totalForecastP80,
       totalActual,
       totalSuggestedProduction,
       currentWeekForecast,
@@ -985,8 +989,8 @@ export default function WeeklySalesGrid() {
   const expandedList = useMemo(() => Array.from(expandedStyles), [expandedStyles]);
   const weeklyResults = useQueries({
     queries: expandedList.map((style) => ({
-      queryKey: ["channelSourceWeekly", style, 9],
-      queryFn: () => dataService.channelSourceWeekly(style, 9),
+      queryKey: ["channelSourceWeekly", style, FORECAST_WEEKS],
+      queryFn: () => dataService.channelSourceWeekly(style, FORECAST_WEEKS),
     })),
   });
 
@@ -1157,7 +1161,7 @@ export default function WeeklySalesGrid() {
             <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
               <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700 }}>FORECAST:</Typography>
               <Tooltip title={FREEZE.on
-                ? `Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: rolling 2 months - each week is frozen the day its forecast first appears within the next 2 months and never changes after that (current weeks frozen since ${shortIso(FREEZE.on)}). Hover any forecast figure to see both.`
+                ? `Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: rolling 3 months - each week is frozen the day its forecast first appears within the next 3 months and never changes after that (current weeks frozen since ${shortIso(FREEZE.on)}). Hover any forecast figure to see both.`
                 : "Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: past (completed) weeks only, each with the forecast it had when the week began; running and upcoming weeks show —. Hover any forecast figure to see both."}>
                 <ToggleButtonGroup
                   exclusive
@@ -1177,7 +1181,7 @@ export default function WeeklySalesGrid() {
                   }}
                 >
                   <ToggleButton value="latest">Latest</ToggleButton>
-                  <ToggleButton value="frozen">{FREEZE.on ? "Frozen (rolling 2 months)" : "Frozen (past weeks)"}</ToggleButton>
+                  <ToggleButton value="frozen">{FREEZE.on ? "Frozen (rolling 3 months)" : "Frozen (past weeks)"}</ToggleButton>
                 </ToggleButtonGroup>
               </Tooltip>
             </Stack>
@@ -1775,7 +1779,7 @@ export default function WeeklySalesGrid() {
                             {formatNumber(r.suggestedProduction)}
                           </Typography>
                           <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
-                            Fc {formatNumber(r.futureForecastTotal)} · Avl {formatNumber(r.availableQty)}
+                            P50 {formatNumber(r.futureForecastTotal)} · P80 {formatNumber(r.futureForecastP80)} · Avl {formatNumber(r.availableQty)}
                           </Typography>
                         </TableCell>
                       </TableRow>
