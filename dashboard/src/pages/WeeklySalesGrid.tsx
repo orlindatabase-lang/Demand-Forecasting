@@ -1073,18 +1073,25 @@ export default function WeeklySalesGrid() {
 
   // Which month contains today, by ISO week-start date rather than string-
   // matching the "%B %Y" label - immune to any locale mismatch between the
-  // backend's Python strftime and the browser's date formatting.
+  // backend's Python strftime and the browser's date formatting. The month of
+  // the last week starting on or before today (local date): report weeks run
+  // 7-9 days (24-end), so "start + 6 days" missed a month's last days and the
+  // grid stayed at its first month (2026-10-31, user-reported).
   const currentMonthLabel = useMemo(() => {
     if (!data) return null;
-    const todayIso = new Date().toISOString().slice(0, 10);
-    const currentMonth = data.months.find((m) =>
-      m.weeks.some((w) => {
-        const weekEnd = new Date(w.weekStart);
-        weekEnd.setDate(weekEnd.getDate() + 6);
-        return w.weekStart <= todayIso && weekEnd.toISOString().slice(0, 10) >= todayIso;
-      }),
-    );
-    return currentMonth?.label ?? null;
+    const now = new Date();
+    const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    let label: string | null = null;
+    let latest = "";
+    for (const m of data.months) {
+      for (const w of m.weeks) {
+        if (w.weekStart <= todayIso && w.weekStart > latest) {
+          latest = w.weekStart;
+          label = m.label;
+        }
+      }
+    }
+    return label;
   }, [data]);
 
   // Auto-scroll to the current month once on first load (2026-09-22, user-
@@ -1099,20 +1106,35 @@ export default function WeeklySalesGrid() {
   useLayoutEffect(() => {
     if (hasAutoScrolledRef.current || !currentMonthLabel) return;
     const cell = currentMonthCellRef.current;
-    if (cell && scrollRef.current) {
-      // Width actually covered by the left-pinned header cells (STYLE, plus
-      // LAUNCH DATE on wide screens) - measured, as cells can render wider
-      // than their minWidth, which hid part of the month's W1 behind them.
-      const pinnedWidth = Array.from(cell.parentElement?.children ?? [])
+    const box = scrollRef.current;
+    if (!cell || !box) return;
+    // Width actually covered by the left-pinned header cells (STYLE, plus
+    // LAUNCH DATE on wide screens) - measured, as cells can render wider
+    // than their minWidth, which hid part of the month's W1 behind them.
+    // On-screen positions: the month's left edge goes exactly where the
+    // pinned cells end (offsetLeft minus their summed widths left W1 partly
+    // under them).
+    const align = () => {
+      const pinnedRight = Array.from(cell.parentElement?.children ?? [])
         .filter((c) => {
           const st = getComputedStyle(c);
           return st.position === "sticky" && st.left !== "auto";
         })
-        .reduce((sum, c) => sum + c.getBoundingClientRect().width, 0);
-      scrollRef.current.scrollLeft = Math.max(0, cell.offsetLeft - pinnedWidth);
-      hasAutoScrolledRef.current = true;
-    }
-  }, [currentMonthLabel]);
+        .reduce((right, c) => Math.max(right, c.getBoundingClientRect().right), box.getBoundingClientRect().left);
+      box.scrollLeft = Math.max(0, box.scrollLeft + cell.getBoundingClientRect().left - pinnedRight);
+      return box.scrollLeft;
+    };
+    hasAutoScrolledRef.current = true;
+    // Columns widen once the virtualized rows render, so align again after
+    // they settle - unless the user has scrolled in the meantime.
+    let last = align();
+    const timers = [150, 600, 1500].map((ms) =>
+      window.setTimeout(() => {
+        if (box.scrollLeft === last) last = align();
+      }, ms),
+    );
+    return () => timers.forEach(window.clearTimeout);
+  }, [currentMonthLabel, data]);
 
   // Exports the ENTIRE filtered table (every Style matching the current
   // search/Sub Category filter, not just the current 200-row page) with
