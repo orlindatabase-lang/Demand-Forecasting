@@ -225,9 +225,9 @@ export default function ProductionLog() {
         const r = s.weeks[w.weekStart];
         const label = `${w.month} ${w.week}`;
         out[`${label} Actual${w.status === "open" ? " (so far)" : w.status === "settling" ? " (still updating)" : ""}`] = r?.actual_qty ?? r?.actual_so_far ?? "";
-        out[`${label} Forecast P50 (3 months)`] = r?.forecast_2m_qty ?? "";
+        out[`${label} Forecast (3 months)`] = r?.forecast_2m_qty ?? "";
         out[`${label} Available (stock + WIP)`] = r?.available_qty ?? "";
-        out[`${label} Suggested Production (P80, 3 months)`] = r?.suggested_production_qty ?? "";
+        out[`${label} Suggested Production (3 months)`] = r?.suggested_production_qty ?? "";
       }
       return out;
     });
@@ -405,7 +405,7 @@ export default function ProductionLog() {
                       <TableCell sx={{ ...numCell, top: ROW_H1 + 33, ...REPORT_HEAD_SX, fontSize: "0.68rem", color: ACTUAL_COLOR }}>ACTUAL</TableCell>
                       <TableCell sx={{ ...numCell, top: ROW_H1 + 33, ...REPORT_HEAD_SX, fontSize: "0.68rem", color: FORECAST_COLOR, whiteSpace: "normal", lineHeight: 1.2 }}>
                         FORECAST
-                        <Box component="span" sx={{ display: "block", fontWeight: 600, fontSize: "0.65rem" }}>P50 · NEXT 3 MONTHS</Box>
+                        <Box component="span" sx={{ display: "block", fontWeight: 600, fontSize: "0.65rem" }}>NEXT 3 MONTHS</Box>
                       </TableCell>
                       <TableCell sx={{ ...numCell, top: ROW_H1 + 33, ...REPORT_HEAD_SX, fontSize: "0.68rem", color: AVAILABLE_COLOR, whiteSpace: "normal", lineHeight: 1.2 }}>
                         AVAILABLE
@@ -413,7 +413,6 @@ export default function ProductionLog() {
                       </TableCell>
                       <TableCell sx={{ ...numCell, top: ROW_H1 + 33, ...REPORT_HEAD_SX, fontSize: "0.68rem", color: SUGGESTED_COLOR, borderRight: 1 }}>
                         SUGGESTED
-                        <Box component="span" sx={{ display: "block", fontWeight: 600, fontSize: "0.65rem" }}>P80 COVERAGE</Box>
                       </TableCell>
                     </Fragment>
                   ))}
