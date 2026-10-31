@@ -908,7 +908,7 @@ flowchart LR
 | Produce Now (SKU) | `max(0, P80 forecast over the SKU's replenishment lead time − available)` |
 | Stock status | "In Stock" if available ≥ P80 lead-time demand, otherwise "Needs Production" |
 | Lifecycle-adjusted suggestion | `max(0, 35-day forecast × stage factor − available)` |
-| Style suggestion (report) | `max(0, P80 forward forecast over the report horizon − available)` |
+| Style suggestion (report) | `max(0, forecast over the report horizon − available)` (stock + WIP) |
 | Safety stock | `z · σ_weekly · √(lead time in weeks)`; z is the service-level score |
 
 ---

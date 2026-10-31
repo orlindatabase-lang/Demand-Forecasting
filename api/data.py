@@ -2903,27 +2903,6 @@ def _apply_festival_boost(
     return boosted, festival_boosted
 
 
-def _forecast_p80_total(forecast: list[ForecastPoint], wk_actual: dict[str, int]) -> int:
-    """An upper planning bound for a group's forward horizon.
-
-    The displayed forecast stays P50.  For replenishment we add the normal
-    approximation's 80th-percentile buffer from the group's own recent weekly
-    variability.  This is intentionally computed after all published event
-    adjustments, so a planner never compares stock with an unadjusted model
-    value while looking at an adjusted demand forecast.
-    """
-    p50 = sum(p.qty for p in forecast)
-    hist = [
-        v for week, v in sorted(wk_actual.items())
-        if date.fromisoformat(week) + timedelta(days=6) <= SNAPSHOT_DATE
-    ][-_HIST_WEEKS:]
-    if len(hist) < 2 or not forecast:
-        return int(round(p50))
-    mean = sum(hist) / len(hist)
-    sigma = (sum((v - mean) ** 2 for v in hist) / (len(hist) - 1)) ** 0.5
-    return max(int(round(p50)), int(round(p50 + PRODUCTION_QUANTILE_Z * sigma * len(forecast) ** 0.5)))
-
-
 def _channel_source_base_df():
     """Deduplicated, Gross-filtered real sales rows with a per-row calendar
     month and OMS/WEBSITE source, shared by every Channel & Source drill-down
@@ -3115,7 +3094,7 @@ def _record_weekly_production() -> None:
     data has finished - settling for weekly_log.SETTLE_DAYS days because late
     marketplace orders keep arriving, then completed - its other values
     staying as last refreshed while it ran; then saves the running week: each
-    Style's 3-month P50 forecast, stock + WIP and P80-based suggested production,
+    Style's 3-month forecast, stock + WIP and suggested production,
     refreshed on every publish until the week ends."""
     import weekly_log
     try:
@@ -3359,9 +3338,8 @@ def _compute_weekly_grid(
             weeks, naive_week, wk_actual, series, model_hist,
         )
         forecast, festival_boosted = _apply_festival_boost(forecast, naive_week, wk_actual, boost_windows)
-        forecast_p80 = _forecast_p80_total(forecast, wk_actual)
 
-        built.append((key, len(skus), len(group_styles[key]), forecast, historical, festival_boosted, forecast_p80))
+        built.append((key, len(skus), len(group_styles[key]), forecast, historical, festival_boosted))
         week_qty: dict[str, float] = {p.date: float(p.forecast) for p in historical}
         week_qty.update({p.date: float(p.qty) for p in forecast})
         week_qty_by_key[key] = week_qty
@@ -3489,7 +3467,6 @@ def _compute_weekly_grid(
     # one Style, so these come out the same regardless of which grouping is
     # active (a useful cross-check).
     total_forecast = sum(sum(p.qty for p in item[3]) for item in built)
-    total_forecast_p80 = sum(item[6] for item in built)
 
     # GROSS, not net - total_actual is built from historical/HistoricalPoint,
     # whose wk_actual now comes from _aggregate_group_series(gross=True)
@@ -3523,7 +3500,7 @@ def _compute_weekly_grid(
     # (forward forecast minus available inventory+WIP, floored at 0), summed
     # across EVERY matching group rather than just the current page.
     total_suggested_production = sum(
-        max(0, item[6] - group_available.get(item[0], 0))
+        max(0, sum(p.qty for p in item[3]) - group_available.get(item[0], 0))
         for item in built
     )
 
@@ -3578,7 +3555,7 @@ def _compute_weekly_grid(
     page = built[offset: offset + limit]
 
     rows_payload: list[WeeklyGridRow] = []
-    for key, sku_count, style_count, forecast, historical, festival_boosted, forecast_p80 in page:
+    for key, sku_count, style_count, forecast, historical, festival_boosted in page:
         row_fc = fc_cells.get(key, {})
         day_actual = _aggregate_group_day_actual(groups.get(key, []), gross=True)
         # Launch date only means something for a single design (group_by=
@@ -3646,15 +3623,16 @@ def _compute_weekly_grid(
                 # this grand total never drifts for weeks already finished.
                 grandForecastTotal=sum(month_forecast.values()),
                 futureForecastTotal=future_forecast_total,
-                futureForecastP80=forecast_p80,
                 availableQty=available,
-                suggestedProduction=max(0, forecast_p80 - available),
+                # Forecast minus available (2026-10-31, user-requested; was the
+                # P80 demand bound minus available).
+                suggestedProduction=max(0, future_forecast_total - available),
                 festivalBoosted=festival_boosted,
             )
         )
 
     return WeeklyGridResponse(
-        groupBy=group_by, total=total, totalForecast=total_forecast, totalForecastP80=total_forecast_p80,
+        groupBy=group_by, total=total, totalForecast=total_forecast,
         totalActual=total_actual,
         currentWeekForecast=current_week_forecast, currentWeekActual=current_week_actual,
         currentWeekLabel=current_week_label,
