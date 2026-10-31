@@ -5,7 +5,7 @@ can consume this API with no transformation.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PlanRow(BaseModel):
@@ -276,3 +276,41 @@ class ChannelSourceWeeklyResponse(BaseModel):
     style: str
     weekStarts: list[str]  # ISO dates, oldest to newest - same axis as WeeklyGridRow.cells keys
     series: list[ChannelSourceWeeklySeries]  # one per marketplace with any sales, sorted by totalQty descending
+
+
+# --- /api/forecast/latest and /api/forecast/frozen (2026-10-31, user-requested:
+# separate Latest / Frozen forecast endpoints with a simple, self-explaining JSON).
+class ForecastWeek(BaseModel):
+    weekStart: str = Field(description="First day of the report week (YYYY-MM-DD). The key used in every byWeek.")
+    weekEnd: str = Field(description="Last day of the report week (YYYY-MM-DD).")
+    month: str = Field(description="Month the week belongs to (YYYY-MM). The key used in every byMonth.")
+    label: str = Field(description="Short name for display, e.g. 'Nov W2'. Weeks are 1-7, 8-15, 16-23 and 24-end of month.")
+    status: str = Field(description="'running' (contains today), 'upcoming', or 'completed' (frozen only, with pastWeeks).")
+
+
+class ForecastTableTotal(BaseModel):
+    total: int = Field(description="Sum over every row and every week in this response.")
+    byMonth: dict[str, int] = Field(description="Sum over every row, per month (YYYY-MM). Only the weeks in this response count.")
+    byWeek: dict[str, int] = Field(description="Sum over every row, per week (weekStart).")
+
+
+class ForecastTableRow(BaseModel):
+    style: str | None = Field(default=None, description="Style (design number). Only when groupBy=style.")
+    subCategory: str = Field(description="Sub Category of the row.")
+    category: str = Field(description="Top-level Category of the row.")
+    total: int = Field(description="This row's forecast over every week in this response.")
+    byMonth: dict[str, int] = Field(description="This row's forecast per month (YYYY-MM).")
+    byWeek: dict[str, int] = Field(description="This row's forecast per week (weekStart). A week with no value is left out.")
+
+
+class ForecastTable(BaseModel):
+    forecast: str = Field(description="'latest' or 'frozen'.")
+    about: str = Field(description="One-line explanation of what these numbers are.")
+    unit: str = Field(description="What the numbers count.")
+    dataThrough: str = Field(description="Last day of sales data the forecast is based on (YYYY-MM-DD).")
+    frozenOn: str | None = Field(default=None, description="Frozen only: the date the current weeks were frozen.")
+    groupBy: str = Field(description="'style' or 'subCategory': what each row is.")
+    weeks: list[ForecastWeek] = Field(description="The weeks in this response, oldest first.")
+    total: ForecastTableTotal = Field(description="Totals over every row.")
+    rowCount: int = Field(description="Number of rows.")
+    rows: list[ForecastTableRow] = Field(description="One row per Style or Sub Category, largest total first.")
