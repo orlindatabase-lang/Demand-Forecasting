@@ -22,6 +22,7 @@ const queryClient = new QueryClient({
       retryDelay: (attempt, error) =>
         isLoadingResponse(error) ? 5_000 : Math.min(1_000 * 2 ** attempt, 30_000),
       refetchOnWindowFocus: false,
+      refetchOnReconnect: false,   // fetch only when the user asks (no automatic re-fetching)
     },
   },
 });

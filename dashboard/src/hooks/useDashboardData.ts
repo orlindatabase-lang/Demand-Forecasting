@@ -1,7 +1,10 @@
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { dataService, FORECAST_WEEKS, NO_FILTER, type CategoryFilter } from "@/services/dataService";
 
-const REFRESH_MS = 60_000;
+// No timed re-fetching (2026-10-31, user-requested: data is fetched only when
+// the user opens a page, changes a filter or clicks Refresh). The one exception:
+// Design Suggestions polls while the API is still building the result the
+// user asked for, and stops once it is ready.
 
 export function useWeeklyGrid(
   groupBy: "subCategory" | "style",
@@ -11,7 +14,6 @@ export function useWeeklyGrid(
   return useQuery({
     queryKey: ["weeklyGrid", groupBy, weeks, limit, offset, search, subCategory, category],
     queryFn: () => dataService.weeklyGrid(groupBy, { weeks, limit, offset, search, subCategory, category }),
-    refetchInterval: REFRESH_MS,
     // Keep showing the last page's rows while a new limit/offset/filter
     // combination loads (2026-09-21, found while adding the tier filter -
     // switching it jumps the fetch size from 200 to 2000 rows, and without
@@ -47,7 +49,6 @@ export function useCatalogStyleTiers() {
   return useQuery({
     queryKey: ["catalogStyleTiers"],
     queryFn: () => dataService.catalogStyleTiers(),
-    refetchInterval: REFRESH_MS,
   });
 }
 
@@ -67,7 +68,6 @@ export function useWeeklyProductionLog(enabled: boolean) {
   return useQuery({
     queryKey: ["weeklyProductionLog"],
     queryFn: () => dataService.weeklyProductionLog(),
-    refetchInterval: REFRESH_MS,
     enabled,
   });
 }
@@ -77,7 +77,6 @@ export function useCategoryAnalysis(level: "category" | "subCategory" | "style" 
   return useQuery({
     queryKey: ["categoryAnalysis", level, f.category, f.subCategory, f.tierMode ?? "current", f.brand ?? "", f.tier ?? "", f.style ?? ""],
     queryFn: () => dataService.categoryAnalysis(level, f),
-    refetchInterval: 10 * REFRESH_MS,
     placeholderData: keepPreviousData,
   });
 }
@@ -88,7 +87,6 @@ export function useCategoryAnalysisFiltered(f: { brand: string; tier: string; ca
   return useQuery({
     queryKey: ["categoryAnalysisFiltered", f.brand, f.tier, f.category, f.subCategory, f.style],
     queryFn: () => dataService.categoryAnalysisFiltered(f),
-    refetchInterval: 10 * REFRESH_MS,
     placeholderData: keepPreviousData,
   });
 }
@@ -103,7 +101,6 @@ export function useCategoryAnalysisChannels(
   return useQuery({
     queryKey: ["categoryAnalysisChannels", level, group, f.category, f.subCategory, f.tierMode ?? "current", f.brand ?? "", f.tier ?? "", f.style ?? ""],
     queryFn: () => dataService.categoryAnalysisChannels(level, group, f),
-    refetchInterval: 10 * REFRESH_MS,
   });
 }
 
@@ -121,11 +118,11 @@ export function useCategoryAnalysisStyles(
 }
 
 /** Design Suggestions tab. The API builds the result in the background on
- * first request (~1-2 min); poll every 5 s while it says "building". */
+ * first request (~1-2 min); poll every 5 s while it says "building", then stop. */
 export function useDesignSuggestions() {
   return useQuery({
     queryKey: ["designSuggestions"],
     queryFn: () => dataService.designSuggestions(),
-    refetchInterval: (query) => (query.state.data?.building ? 5_000 : 10 * REFRESH_MS),
+    refetchInterval: (query) => (query.state.data?.building ? 5_000 : false),
   });
 }
