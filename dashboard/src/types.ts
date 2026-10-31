@@ -46,8 +46,9 @@ export interface WeeklyGridRow {
   grandActualTotal: number;
   grandForecastTotal: number;
   futureForecastTotal: number; // forward-only forecast (excludes historical backtested figures)
+  futureForecastP80: number; // upper planning bound over the same horizon
   availableQty: number; // inventory + WIP summed across this row's SKUs
-  suggestedProduction: number; // max(0, futureForecastTotal - availableQty)
+  suggestedProduction: number; // max(0, futureForecastP80 - availableQty)
   festivalBoosted: boolean; // true if the upcoming festival's weeks were raised above the base forecast
 }
 
@@ -84,7 +85,7 @@ export interface WeeklyGridTotals {
   cells: Record<string, WeeklyGridCell>; // weekStart (ISO) -> cell, summed across every matching group
   monthActualTotal: Record<string, number>;
   monthForecastTotal: Record<string, number>;
-  frozenOn?: string; // date the active 2-month forecast freeze was taken
+  frozenOn?: string; // date the active 3-month forecast freeze was taken
   frozenUntil?: string; // end of its window
 }
 
@@ -92,6 +93,7 @@ export interface WeeklyGridResponse {
   groupBy: "subCategory" | "style";
   total: number;
   totalForecast: number; // sum of futureForecastTotal across EVERY matching group, not just this page
+  totalForecastP80: number; // upper planning bound across the same horizon
   totalActual: number;   // sum of grandActualTotal across EVERY matching group, not just this page (GROSS: the
   // user's own explicit status allowlist, see api/data.py's _GROSS_SALE_STATUSES - includes returns/RTO)
   currentWeekForecast: number; // current (possibly still in-progress) week's forecast, ALL groups
@@ -169,9 +171,9 @@ export interface WeeklyProductionLogRow {
   week_start: string; // ISO date
   week_end: string; // ISO date
   forecast_qty: number; // forecast for this week, as of week start
-  forecast_2m_qty: number; // forecast for the ~2 months from the week (live until completed)
+  forecast_2m_qty: number; // legacy field name: P50 forecast for the next 3 months
   available_qty: number; // stock + WIP (live until completed)
-  suggested_production_qty: number; // max(0, forecast_2m - available) (live until completed)
+  suggested_production_qty: number; // P80 coverage target minus available (live until completed)
   captured_on: string; // data date of the week-start capture
   updated_on: string | null; // data date of the last live update
   actual_qty: number | null; // gross units sold in the week (null until completed)
@@ -181,7 +183,7 @@ export interface WeeklyProductionLogRow {
 }
 
 /** One (month, Category / Sub Category) row of the Category Analysis page -
- * GET /api/reports/category-analysis. Gross sale. */
+ * GET /api/category-analysis. Gross sale. */
 export interface CategoryAnalysisRow {
   month: string; // "2026-09"
   group: string; // Category or Sub Category name
@@ -222,7 +224,7 @@ export interface CategoryStyleOption {
   subCategory: string;
 }
 
-/** GET /api/reports/category-analysis/filtered - monthly totals of the styles
+/** GET /api/category-analysis/chart - monthly totals of the styles
  * matching all the filters (group = "selection"), plus every style's options. */
 export interface CategoryAnalysisFilteredResponse {
   dataThrough: string;
@@ -240,7 +242,7 @@ export interface CategoryAnalysisChannelsResponse {
   rows: CategoryAnalysisRow[];
 }
 
-/** One style behind a STYLES cell - GET /api/reports/category-analysis/styles. */
+/** One style behind a STYLES cell - GET /api/category-analysis/styles. */
 export interface CategoryStyleSale {
   style: string;
   subCategory: string;
@@ -260,7 +262,7 @@ export interface CategoryAnalysisStylesResponse {
   stopped: { style: string; subCategory: string; tier: string; prevUnits: number }[]; // sold last month, not this one
 }
 
-// --- Design Suggestions (GET /api/design/suggestions) ---------------------
+// --- Design Suggestions (GET /api/design-suggestions) ---------------------
 export interface DesignRankItem {
   value: string;
   units: number;

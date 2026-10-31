@@ -55,8 +55,10 @@ CREATE TABLE IF NOT EXISTS frozen_snapshot (
 # frozen at today's value, and never changes after that - so a week is frozen
 # the day it first enters the 2-month window (a new style: the day it first
 # has a forecast). Before, one snapshot was kept until its whole 2-month window
-# ended and only then was the next one taken.
-SNAPSHOT_DAYS = 62
+# ended and only then was the next one taken. 3 months since 2026-10-31
+# (user-requested: "show the three month forecast in Frozen", matching the
+# 13-week forecast horizon; was 62 days).
+SNAPSHOT_DAYS = 92
 # On by default (2026-10-19, user-requested: brought back after briefly
 # showing past weeks only). FORECAST_2M_FREEZE=off: no new 2-month snapshots,
 # and the frozen view shows completed weeks only.
@@ -180,7 +182,7 @@ def apply(
                    WHERE scope = ? AND key = ? AND period_start = ? AND start_qty IS NULL""",
                 starts,
             )
-        # Rolling 2-month freeze: freeze today's value of every running or
+        # Rolling 3-month freeze: freeze today's value of every running or
         # upcoming week (starting before today + SNAPSHOT_DAYS) that has no
         # frozen value yet. Already frozen weeks are never touched.
         first = current_week_start(period_end, today)

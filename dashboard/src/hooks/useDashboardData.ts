@@ -1,5 +1,5 @@
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { dataService, NO_FILTER, type CategoryFilter } from "@/services/dataService";
+import { dataService, FORECAST_WEEKS, NO_FILTER, type CategoryFilter } from "@/services/dataService";
 
 const REFRESH_MS = 60_000;
 
@@ -7,7 +7,7 @@ export function useWeeklyGrid(
   groupBy: "subCategory" | "style",
   opts: { weeks?: number; limit?: number; offset?: number; search?: string; subCategory?: string; category?: string } = {},
 ) {
-  const { weeks = 9, limit = 50, offset = 0, search = "", subCategory = "", category = "" } = opts;
+  const { weeks = FORECAST_WEEKS, limit = 50, offset = 0, search = "", subCategory = "", category = "" } = opts;
   return useQuery({
     queryKey: ["weeklyGrid", groupBy, weeks, limit, offset, search, subCategory, category],
     queryFn: () => dataService.weeklyGrid(groupBy, { weeks, limit, offset, search, subCategory, category }),
@@ -21,7 +21,7 @@ export function useWeeklyGrid(
   });
 }
 
-export function useChannelSourceWeekly(style: string | null, weeks = 9) {
+export function useChannelSourceWeekly(style: string | null, weeks = FORECAST_WEEKS) {
   return useQuery({
     queryKey: ["channelSourceWeekly", style, weeks],
     queryFn: () => dataService.channelSourceWeekly(style as string, weeks),
@@ -34,7 +34,7 @@ export function useChannelSourceWeekly(style: string | null, weeks = 9) {
  * TOTAL row's own expandable channel breakdown. Only fetches while
  * ``enabled`` (the TOTAL row's own expand toggle) is true. */
 export function useChannelSourceWeeklyTotal(
-  enabled: boolean, weeks = 9, search = "", subCategory = "", category = "",
+  enabled: boolean, weeks = FORECAST_WEEKS, search = "", subCategory = "", category = "",
 ) {
   return useQuery({
     queryKey: ["channelSourceWeeklyTotal", weeks, search, subCategory, category],

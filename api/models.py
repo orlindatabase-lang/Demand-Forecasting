@@ -22,14 +22,14 @@ class PlanRow(BaseModel):
     inventoryQty: int
     wipQty: int
     availableQty: int  # inventoryQty + wipQty
-    # --- production policy: flat 10-week-demand target (currentDrr * 10 weeks) ---
-    # Uses currentDrr (historical trailing-30-day actual, set by lifecycle.classify),
-    # NOT the forward forecast, so this matches the dashboard's own DRR column.
-    leadTimeDays: int = 0       # informational only; no longer gates production
-    safetyStock: int = 0        # informational only; no longer gates production
-    reorderPoint: int = 0       # = totalSuggestedProduction (10-week demand target)
-    totalSuggestedProduction: int  # currentDrr * 10 weeks (target stock level)
-    calculatedProductionSuggestion: int  # totalSuggestedProduction - availableQty (can be negative)
+    # --- production policy: forecast through the actual replenishment lead time ---
+    leadTimeDays: int = 0
+    safetyStock: int = 0        # P95 reference safety stock (service-level diagnostic)
+    forecastLeadTimeP50: int = 0
+    forecastLeadTimeP80: int = 0
+    reorderPoint: int = 0       # = P80 lead-time demand target
+    totalSuggestedProduction: int  # P80 lead-time demand target
+    calculatedProductionSuggestion: int  # max(0, target - availableQty)
     stockStatus: str  # "In Stock" | "Needs Production"
     historicalLast10d: int
     subCategory: str = ""  # SUB CATEGORY from the SKU master sheet (see design_attributes.sub_category_of)
@@ -82,7 +82,7 @@ class WeeklyGridCell(BaseModel):
     forecast: int = 0
     partial: bool = False  # the current, still-in-progress week
     # Frozen vs unfrozen (2026-10-14, user-requested): frozenForecast = running
-    # and upcoming weeks (~2 months) as forecast at the start of the current
+    # and upcoming weeks (~3 months) as forecast at the start of the current
     # week, a completed week as forecast when it began (None if not recorded);
     # liveForecast = today's forecast for a running or upcoming week (None for
     # a completed week, which is not re-forecast). ``forecast`` stays what the
@@ -125,6 +125,7 @@ class WeeklyGridRow(BaseModel):
     grandActualTotal: int
     grandForecastTotal: int
     futureForecastTotal: int   # sum of the forward-only forecast weeks (excludes historical backtested figures)
+    futureForecastP80: int = 0 # upper planning bound over the same forward horizon
     availableQty: int          # summed inventory + WIP across this row's SKUs
     suggestedProduction: int   # max(0, futureForecastTotal - availableQty)
     festivalBoosted: bool = False  # true if the upcoming festival's weeks were raised above the base forecast
@@ -137,7 +138,7 @@ class WeeklyGridTotals(BaseModel):
     cells: dict[str, WeeklyGridCell]  # weekStart (ISO) -> cell, summed across every matching group
     monthActualTotal: dict[str, int]     # month label -> summed actual, every matching group
     monthForecastTotal: dict[str, int]   # month label -> summed forecast, every matching group
-    frozenOn: str = ""     # date the active 2-month forecast freeze was taken ("" = none yet)
+    frozenOn: str = ""     # date the active 3-month forecast freeze was taken ("" = none yet)
     frozenUntil: str = ""  # end of its window - the next freeze is taken then
 
 
@@ -191,6 +192,7 @@ class WeeklyGridResponse(BaseModel):
     groupBy: str  # "subCategory" | "style"
     total: int  # total distinct groups matching (before pagination)
     totalForecast: int  # sum of futureForecastTotal across EVERY matching group, not just this page
+    totalForecastP80: int = 0
     totalActual: int    # sum of grandActualTotal across EVERY matching group, not just this page (GROSS: the
     # user's own explicit status allowlist, see data.py's _GROSS_SALE_STATUSES - 2026-09-15, includes returns/RTO)
     currentWeekForecast: int  # sum of the current (possibly still in-progress) week's forecast, ALL groups

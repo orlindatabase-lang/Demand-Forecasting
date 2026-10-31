@@ -15,6 +15,9 @@ _WEEK_LAGS = [1, 2, 4, 8, 12, 26, 52]
 _WEEK_ROLL = [4, 8, 12]
 _WEEK_STD = [4, 8]
 _ACTIVE_WEEKS = 13
+_DIRECT_HORIZON_WEEKS = 13
+_DIRECT_TRAIN_WEEKS = 52
+_DIRECT_N_ESTIMATORS_CAP = 700
 _USE_FESTIVAL_FEATURES = True
 MATURATION_DAYS = 7
 _LAUNCH_WINDOW_DAYS = 20
@@ -178,7 +181,9 @@ def save_cache(snapshot: str, forecasts: dict) -> None:
     _cache_file(snapshot).write_text(json.dumps(forecasts))
 
 
-_DESIGN_CACHE_VERSION = "d38"
+# d39: direct weeks 1-13 style forecasts replace recursive predictions for
+# the active three-month planning horizon.
+_DESIGN_CACHE_VERSION = "d39"
 
 
 def _design_cache_file(snapshot: str) -> Path:
@@ -383,6 +388,93 @@ def _train_select_and_refit(panel, feature_cols, target_col, weeks_sorted, test_
 
     print(f"[lgbm_forecast]{log_prefix} training total {time.time() - _t0:.0f}s", file=sys.stderr)
     return final_lgbm.predict, final_lgbm
+
+
+def _fit_direct_horizon_model(panel, id_col: str, target_col: str, feature_cols, cat_cols, final_lgbm):
+    """Fit one pooled *direct* multi-horizon model for weeks 1..13.
+
+    The older recursive loop feeds a prediction back as the next week's lag.
+    That is economical but causes the error at week 1 to compound through a
+    three-month plan.  Here each row represents the state known at an origin
+    week and labels demand at a specific future horizon.  Target-week calendar
+    and festival features are replaced with what was knowable for that future
+    week; lag/trend features remain at the origin, so no future sales leak in.
+    """
+    import numpy as np
+    import pandas as pd
+    import lightgbm as lgb
+
+    if panel.empty:
+        return None, [], {}
+    gmax = panel["_week"].max()
+    train_start = gmax - pd.Timedelta(weeks=_DIRECT_TRAIN_WEEKS + _DIRECT_HORIZON_WEEKS)
+    base_panel = panel.loc[panel["_week"] >= train_start].copy()
+    if base_panel.empty:
+        return None, [], {}
+
+    import festival
+    samples = []
+    grouped_target = base_panel.groupby(id_col)[target_col]
+    for step in range(1, _DIRECT_HORIZON_WEEKS + 1):
+        offset = step - 1
+        frame = base_panel.copy()
+        frame["_direct_target"] = grouped_target.shift(-offset)
+        frame["_week"] = frame["_week"] + pd.Timedelta(weeks=offset)
+        frame = frame.dropna(subset=["_direct_target"])
+        if frame.empty:
+            continue
+
+        target_week = pd.to_datetime(frame["_week"])
+        frame["weekofyear"] = target_week.dt.isocalendar().week.astype("int16")
+        frame["month"] = target_week.dt.month.astype("int16")
+        frame["quarter"] = target_week.dt.quarter.astype("int16")
+        frame["year"] = target_week.dt.year.astype("int32")
+        frame["day_of_year"] = target_week.dt.dayofyear.astype("int16")
+        frame["is_month_start"] = target_week.dt.is_month_start.astype("int8")
+        frame["is_month_end"] = target_week.dt.is_month_end.astype("int8")
+        frame["is_quarter_start"] = target_week.dt.is_quarter_start.astype("int8")
+        frame["is_quarter_end"] = target_week.dt.is_quarter_end.astype("int8")
+        if _USE_FESTIVAL_FEATURES:
+            sig = {w: festival.week_signal(pd.Timestamp(w).date()) for w in target_week.drop_duplicates()}
+            # These may have category dtype in the source panel; turn them
+            # into objects before assigning previously unseen future events.
+            for c in ("festival_event", "category_festival"):
+                if c in frame:
+                    frame[c] = frame[c].astype(object)
+            frame["festival_mult"] = target_week.map(lambda w: sig[w][0]).astype("float64")
+            frame["festival_event"] = target_week.map(lambda w: sig[w][1] or "None").astype(object)
+            frame["days_to_festival_peak"] = target_week.map(lambda w: sig[w][2]).astype("int32")
+            frame["is_festival"] = (frame["festival_mult"] > 1.0).astype("int8")
+            cat = frame["category_name"].astype(str) if "category_name" in frame else "UNKNOWN"
+            frame["category_festival"] = cat + "_" + frame["festival_event"].astype(str)
+        # Product age is deterministic at the target date.  Its original
+        # value is at the one-week-ahead feature row, hence the extra offset.
+        if "product_age_weeks" in frame:
+            frame["product_age_weeks"] = (frame["product_age_weeks"] + offset).astype("int32")
+        frame["horizon_step"] = np.int16(step)
+        samples.append(frame[feature_cols + ["horizon_step", "_week", "_direct_target"]])
+
+    if not samples:
+        return None, [], {}
+    train = pd.concat(samples, ignore_index=True)
+    direct_features = list(feature_cols) + ["horizon_step"]
+    for c in cat_cols:
+        if c in train.columns:
+            train[c] = train[c].astype("category")
+    direct_cat_dtypes = {c: train[c].dtype for c in cat_cols if c in train.columns}
+    params = final_lgbm.get_params(deep=False).copy()
+    params["objective"] = "tweedie"
+    params["n_estimators"] = max(50, min(_DIRECT_N_ESTIMATORS_CAP, int(params.get("n_estimators", 300))))
+    params["verbose"] = -1
+    params["n_jobs"] = -1
+    direct = lgb.LGBMRegressor(**params)
+    direct.fit(
+        train[direct_features], train["_direct_target"],
+        sample_weight=_recency_weights(train["_week"]),
+    )
+    print(f"[lgbm_forecast][direct] fitted {len(train):,} origin-horizon rows "
+          f"for weeks 1-{_DIRECT_HORIZON_WEEKS}", file=sys.stderr)
+    return direct, direct_features, direct_cat_dtypes
 
 
 def compute(df_full) -> dict:
@@ -939,6 +1031,13 @@ def compute_design(df_full) -> dict:
     _predict, final_lgbm = _train_select_and_refit(
         panel, feature_cols, TARGET, weeks_sorted, test_weeks, log_prefix="[design]",
     )
+    try:
+        direct_lgbm, direct_feature_cols, direct_cat_dtypes = _fit_direct_horizon_model(
+            panel, id_col, TARGET, feature_cols, cat_cols, final_lgbm,
+        )
+    except Exception as exc:  # noqa: BLE001 - recursive remains a safe fallback
+        print(f"[lgbm_forecast][design] direct-horizon fit failed ({exc!r}); using recursive forecast", file=sys.stderr)
+        direct_lgbm, direct_feature_cols, direct_cat_dtypes = None, [], {}
 
     ids = np.sort(panel[id_col].unique())
     W = max(_WEEK_LAGS)
@@ -958,6 +1057,12 @@ def compute_design(df_full) -> dict:
         (panel[TARGET] == 0).groupby(panel[id_col]).sum()
         .reindex(ids).fillna(0.0).to_numpy(dtype="float64")
     )
+    # Direct horizons are all conditioned on the same observed origin state;
+    # unlike the recursive state below they never consume their own forecasts.
+    H_observed = H.copy()
+    observed_run_sum = run_sum.copy()
+    observed_run_count = run_count.copy()
+    observed_run_zeros = run_zeros.copy()
 
     for step in range(1, HORIZON_WEEKS + 1):
         wkdate = last_week + pd.Timedelta(weeks=step)
@@ -1027,7 +1132,58 @@ def compute_design(df_full) -> dict:
         for c, dt in cat_dtypes.items():
             if c in X.columns:
                 X[c] = X[c].astype(dt)
-        preds = np.clip(_predict(X[feature_cols]), 0, None)
+        recursive_preds = np.clip(_predict(X[feature_cols]), 0, None)
+        preds = recursive_preds
+        if direct_lgbm is not None and step <= _DIRECT_HORIZON_WEEKS:
+            # `data` already carries the target week's known calendar/event
+            # features.  Replace only stateful lag/trend features with their
+            # values at the last observed week before asking the direct model.
+            direct_data = dict(data)
+            for L in _WEEK_LAGS:
+                direct_data[f"lag_{L}"] = H_observed[:, -L]
+            for w in _WEEK_ROLL:
+                sl = H_observed[:, -w:]
+                cnt = np.sum(~np.isnan(sl), axis=1)
+                direct_data[f"rolling_mean_{w}"] = np.nansum(sl, axis=1) / np.where(cnt > 0, cnt, np.nan)
+            for w in _WEEK_STD:
+                slw = H_observed[:, -w:]
+                cntw = np.sum(~np.isnan(slw), axis=1)
+                mw = np.where(cntw > 0, np.nansum(slw, axis=1) / np.where(cntw > 0, cntw, np.nan), np.nan)
+                direct_data[f"rolling_std_{w}"] = np.sqrt(
+                    np.nansum((slw - mw[:, None]) ** 2, axis=1) / np.where(cntw >= 2, cntw - 1, np.nan)
+                )
+            sl4 = H_observed[:, -4:]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                direct_data["rolling_max_4"] = np.nanmax(sl4, axis=1)
+                direct_data["rolling_min_4"] = np.nanmin(sl4, axis=1)
+            direct_data["sales_diff_1"] = direct_data["lag_1"] - direct_data["lag_2"]
+            with np.errstate(invalid="ignore", divide="ignore"):
+                direct_data["sales_growth_pct"] = np.where(
+                    np.nan_to_num(direct_data["lag_2"]) == 0, 0.0,
+                    (direct_data["lag_1"] - direct_data["lag_2"]) / direct_data["lag_2"],
+                )
+                direct_data["rolling_mean_ratio"] = np.where(
+                    np.nan_to_num(direct_data["rolling_mean_4"]) == 0, 0.0,
+                    direct_data["lag_1"] / direct_data["rolling_mean_4"],
+                )
+                direct_data["coefficient_variation"] = np.where(
+                    np.nan_to_num(direct_data["rolling_mean_4"]) == 0, 0.0,
+                    direct_data["rolling_std_4"] / direct_data["rolling_mean_4"],
+                )
+                direct_data["avg_weekly_sales"] = np.where(
+                    observed_run_count > 0, observed_run_sum / observed_run_count, 0.0,
+                )
+                direct_data["zero_sales_ratio"] = np.where(
+                    observed_run_count > 0, observed_run_zeros / observed_run_count, 0.0,
+                )
+            direct_data["trend_vs_avg"] = direct_data["lag_1"] - direct_data["rolling_mean_4"]
+            direct_data["horizon_step"] = np.full(n, step, dtype="int16")
+            XD = pd.DataFrame(direct_data)
+            for c, dt in direct_cat_dtypes.items():
+                if c in XD.columns:
+                    XD[c] = XD[c].astype(dt)
+            preds = np.clip(direct_lgbm.predict(XD[direct_feature_cols]), 0, None)
         H = np.concatenate([H[:, 1:], preds[:, None]], axis=1)
         run_sum = run_sum + preds
         run_count = run_count + 1

@@ -36,6 +36,7 @@ from fastapi.responses import JSONResponse
 os.environ.setdefault("DEFER_INITIAL_LOAD", "1")
 
 import catalog_style  # noqa: E402
+import category_analysis  # noqa: E402
 import data  # noqa: E402
 from models import (
     CatalogStyleTiersResponse,
@@ -212,7 +213,7 @@ def refresh() -> dict:
         _REFRESH_LOCK.release()
 
 
-@app.get("/api/reports/weekly-grid", response_model=WeeklyGridResponse, tags=["plan"])
+@app.get("/api/weekly-sales", response_model=WeeklyGridResponse, tags=["plan"])
 def get_weekly_grid(
     groupBy: str = Query("subCategory", pattern="^(subCategory|style)$",
                           description="'subCategory' or 'style' (DESIGN_NO)"),
@@ -230,15 +231,15 @@ def get_weekly_grid(
 
 
 @app.get(
-    "/api/reports/channel-source-total/weekly",
+    "/api/weekly-sales/channels",
     response_model=ChannelSourceWeeklyResponse,
     tags=["plan"],
 )
 def get_channel_source_weekly_total(
-    weeks: int = Query(9, ge=1, le=40, description="Forward forecast horizon in weeks — must match the Weekly Sales Report's own request for the returned week axis to line up"),
-    search: str = Query("", description="Same search filter as /api/reports/weekly-grid, so the TOTAL row's breakdown covers exactly the same Styles"),
-    subCategory: str = Query("", description="Same Sub Category filter as /api/reports/weekly-grid"),
-    category: str = Query("", description="Same top-level Category filter as /api/reports/weekly-grid"),
+    weeks: int = Query(13, ge=1, le=40, description="Forward forecast horizon in weeks — must match the Weekly Sales Report's own request for the returned week axis to line up"),
+    search: str = Query("", description="Same search filter as /api/weekly-sales, so the TOTAL row's breakdown covers exactly the same Styles"),
+    subCategory: str = Query("", description="Same Sub Category filter as /api/weekly-sales"),
+    category: str = Query("", description="Same top-level Category filter as /api/weekly-sales"),
 ) -> ChannelSourceWeeklyResponse:
     """Per-marketplace week-wise Gross Sale summed across every Style
     currently matching the Weekly Sales Report's own search/Sub Category/
@@ -248,7 +249,7 @@ def get_channel_source_weekly_total(
     return data.get_channel_source_weekly_total(weeks, search, subCategory, category)
 
 
-@app.get("/api/reports/weekly-production-log", tags=["plan"])
+@app.get("/api/production-log", tags=["plan"])
 def get_weekly_production_log(
     style: str = Query("", description="One Style (DESIGN_NO); blank = all"),
     status: str = Query("", pattern="^(|open|settling|completed)$", description="'open' (week still running), 'settling' (ended, actual still updating), 'completed' (final), or blank for all"),
@@ -260,7 +261,7 @@ def get_weekly_production_log(
     return data.get_weekly_production_log(style, status)
 
 
-@app.get("/api/catalog/style-tiers", response_model=CatalogStyleTiersResponse, tags=["plan"])
+@app.get("/api/style-tiers", response_model=CatalogStyleTiersResponse, tags=["plan"])
 def get_catalog_style_tiers() -> CatalogStyleTiersResponse:
     """Every active catalog Style's image + externally-maintained forecast
     tier (Cloud SQL's CatalogStyle.forecastStatus), grouped by tier —
@@ -269,25 +270,17 @@ def get_catalog_style_tiers() -> CatalogStyleTiersResponse:
     return CatalogStyleTiersResponse(tiers=catalog_style.get_style_tiers())
 
 
-@app.get("/api/catalog/tier-movement", tags=["plan"])
-def get_tier_movement() -> dict:
-    """How long styles stay in each catalog tier and where they move, from the
-    Cloud SQL tier-change log (2026-10-13, user-requested Tier movement tab):
-    per-tier summary, from -> to moves and each style's tier journey."""
-    return data.get_tier_movement()
-
-
-@app.get("/api/catalog/style-lifecycle", tags=["plan"])
+@app.get("/api/style-lifecycle", tags=["plan"])
 def get_style_lifecycle(
     subCategory: str = Query("", description="Exact Sub Category name; blank returns every Sub Category"),
 ) -> dict:
     """Styles that had a real (Gross) sale last calendar year vs styles newly
     launched this calendar year, grouped by Sub Category (2026-09-22, user-
     requested Weekly Sales Report feature)."""
-    return data.get_style_lifecycle(subCategory)
+    return category_analysis.get_style_lifecycle(subCategory)
 
 
-@app.get("/api/reports/category-analysis", tags=["plan"])
+@app.get("/api/category-analysis", tags=["plan"])
 def get_category_analysis(
     level: str = Query("subCategory", pattern="^(category|subCategory|style|tier)$",
                        description="'category', 'subCategory', 'style' (one row per style) or 'tier' (one row per catalog tier)"),
@@ -303,10 +296,10 @@ def get_category_analysis(
     Gross sale, order count, units, and the units' % change vs the
     previous month (the partial current month vs the same days of the
     previous month) - the Category Analysis page (2026-10-03, user-requested)."""
-    return data.get_category_analysis(level, category, subCategory, tierMode, brand, tier, style)
+    return category_analysis.get_category_analysis(level, category, subCategory, tierMode, brand, tier, style)
 
 
-@app.get("/api/reports/category-analysis/channels", tags=["plan"])
+@app.get("/api/category-analysis/channels", tags=["plan"])
 def get_category_analysis_channels(
     level: str = Query("subCategory", pattern="^(category|subCategory|style|tier)$"),
     group: str = Query(..., min_length=1, description="the Category / Sub Category / Style row to break down"),
@@ -320,10 +313,10 @@ def get_category_analysis_channels(
     """One Category Analysis row split by marketplace (Amazon, Flipkart, ...):
     the same monthly styles / orders / units / spike - the row's channel
     drill-down (2026-10-09, user-requested)."""
-    return data.get_category_analysis_channels(level, group, category, subCategory, tierMode, brand, tier, style)
+    return category_analysis.get_category_analysis_channels(level, group, category, subCategory, tierMode, brand, tier, style)
 
 
-@app.get("/api/reports/category-analysis/styles", tags=["plan"])
+@app.get("/api/category-analysis/styles", tags=["plan"])
 def get_category_analysis_styles(
     level: str = Query("subCategory", pattern="^(category|subCategory|style|tier)$"),
     month: str = Query(..., pattern=r"^\d{4}-\d{2}$", description="YYYY-MM"),
@@ -339,10 +332,10 @@ def get_category_analysis_styles(
     """The styles behind one STYLES cell: each style's units / orders that
     month vs the previous month, new styles flagged, plus the stopped ones
     (2026-10-29, user-requested)."""
-    return data.get_category_analysis_styles(level, group, month, channel, category, subCategory, tierMode, brand, tier, style)
+    return category_analysis.get_category_analysis_styles(level, group, month, channel, category, subCategory, tierMode, brand, tier, style)
 
 
-@app.get("/api/reports/category-analysis/filtered", tags=["plan"])
+@app.get("/api/category-analysis/chart", tags=["plan"])
 def get_category_analysis_filtered(
     tier: str = Query("", description="Catalog tier (T0, T1, ... or Unclassified); blank = all"),
     category: str = Query("", description="Category; blank = all"),
@@ -353,17 +346,17 @@ def get_category_analysis_filtered(
     """Monthly styles / orders / units / spike for the styles matching all the
     filters - the Tiers Spike Rate chart (2026-10-13, user-requested). Also
     lists every style's tier / category / sub category for the filter menus."""
-    return data.get_category_analysis_filtered(tier, category, subCategory, style, brand)
+    return category_analysis.get_category_analysis_filtered(tier, category, subCategory, style, brand)
 
 
 @app.get(
-    "/api/reports/channel-source/{style}/weekly",
+    "/api/weekly-sales/channels/{style}",
     response_model=ChannelSourceWeeklyResponse,
     tags=["plan"],
 )
 def get_channel_source_weekly(
     style: str,
-    weeks: int = Query(9, ge=1, le=40, description="Forward forecast horizon in weeks — must match the Weekly Sales Report's own request for the returned week axis to line up"),
+    weeks: int = Query(13, ge=1, le=40, description="Forward forecast horizon in weeks — must match the Weekly Sales Report's own request for the returned week axis to line up"),
 ) -> ChannelSourceWeeklyResponse:
     """Per-marketplace (Amazon/Flipkart/Meesho/Myntra/Nykaa for OMS,
     MOKOSH/Color's Of Earth for WEBSITE) week-wise Gross Sale for one Style —
@@ -372,42 +365,7 @@ def get_channel_source_weekly(
     return data.get_channel_source_weekly(style, weeks)
 
 
-@app.get("/api/debug/tier-accuracy", tags=["debug"])
-def debug_tier_accuracy() -> dict:
-    """Design-level backtest accuracy broken out per catalog tier (2026-09-22,
-    user-requested: "Run the Backtest for each tier") — {tier: {accuracy,
-    designs, weeks}}. Empty until at least one forecasted week has both
-    calendar-elapsed and matured (see data.MATURATION_DAYS)."""
-    return {
-        "designLevelAccuracy": data.DESIGN_ACCURACY,
-        "tierAccuracy": data.TIER_ACCURACY,
-    }
-
-
-@app.get("/api/debug/overall-accuracy", tags=["debug"])
-def debug_overall_accuracy() -> dict:
-    """SKU/design-level overall accuracy the LIVE process already has
-    loaded, read-only (2026-09-24, user-requested: "what is the overall
-    accuracy" - added so this can be checked without spawning a fresh
-    process that has to redo a full live data load, which has occasionally
-    hit a real MemoryError on this machine). ``runBacktest: false`` means
-    these are the naive-only proxy fallback, not a genuine walk-forward
-    backtest (see data.RUN_BACKTEST)."""
-    return {
-        "runBacktest": data.RUN_BACKTEST,
-        # 2026-10-19: say plainly what the numbers are - with the backtest off
-        # they score the naive run-rate, not the forecasting model.
-        "measures": "model walk-forward backtest" if data.RUN_BACKTEST
-        else "naive run-rate proxy - NOT the model's accuracy (backtest off; set RUN_BACKTEST=1 to measure the model)",
-        "overallAccuracySku": data.OVERALL_ACCURACY,
-        "designAccuracy": data.DESIGN_ACCURACY,
-        "latestWeekAccuracy": data.LATEST_WEEK_ACCURACY,
-        "latestWeekIso": data.LATEST_WEEK_ISO,
-        "dataSource": data.DATA_SOURCE,
-    }
-
-
-@app.get("/api/design/suggestions", tags=["design"])
+@app.get("/api/design-suggestions", tags=["design"])
 def get_design_suggestions() -> dict:
     """Season-wise design suggestions for the running and upcoming season
     (2026-10-08, user-requested add-on, see design_suggest.py): preferred

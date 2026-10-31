@@ -234,3 +234,31 @@ def test_lag_features_never_see_their_own_row():
     # No row's lag_1 ever equals its own target (would indicate a shift bug).
     non_null = panel.dropna(subset=["lag_1"])
     assert not (non_null["lag_1"] == non_null["target"]).any()
+
+
+def test_direct_horizon_model_fits_origin_to_future_pairs():
+    """The three-month direct model is trainable on origin-state rows.
+
+    This is deliberately small: it validates the direct-horizon construction
+    without depending on ERP attributes or the full production panel.
+    """
+    import lightgbm as lgb
+
+    weeks = pd.date_range("2025-01-06", periods=70, freq="W-MON")
+    panel = pd.DataFrame({
+        "design": ["A"] * len(weeks),
+        "_week": weeks,
+        "target": np.arange(len(weeks), dtype=float) % 9,
+        "lag_1": np.r_[np.nan, np.arange(len(weeks) - 1, dtype=float) % 9],
+        "weekofyear": weeks.isocalendar().week.astype("int16").to_numpy(),
+    })
+    seed = lgb.LGBMRegressor(objective="tweedie", n_estimators=20, verbose=-1)
+    seed.fit(panel[["lag_1", "weekofyear"]].fillna(0), panel["target"])
+
+    direct, cols, cat_dtypes = lf._fit_direct_horizon_model(
+        panel, "design", "target", ["lag_1", "weekofyear"], [], seed,
+    )
+
+    assert direct is not None
+    assert cols == ["lag_1", "weekofyear", "horizon_step"]
+    assert cat_dtypes == {}

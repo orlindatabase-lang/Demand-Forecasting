@@ -91,9 +91,9 @@ def _run_one_cutoff(df_full: "pd.DataFrame", cutoff: "pd.Timestamp", gross_sales
         (gross_sales_full["order_date"] >= week1_start) & (gross_sales_full["order_date"] <= week1_end)
     ].groupby("DESIGN_NO")["qty"].sum()
 
-    lo = cutoff - pd.Timedelta(days=34)
-    hist = gross_sales_full[(gross_sales_full["order_date"] >= lo) & (gross_sales_full["order_date"] <= cutoff)]
-    naive_week = hist.groupby("DESIGN_NO")["qty"].sum() / 5.0
+    naive_week, _ = data._robust_runrate(
+        gross_sales_full[gross_sales_full["order_date"] <= cutoff], cutoff, "DESIGN_NO",
+    )
 
     return forecasts, actual, naive_week, week1_start
 
@@ -102,16 +102,23 @@ def _score(forecasts, actual, naive_week, week1_start, blend: float, festival_on
     mult = data._week_festival(week1_start.date())[0] if festival_on else 1.0
     err = act_tot = 0.0
     n = 0
-    for design_no, fc in forecasts.items():
-        weekly = fc.get("weekly") if fc else None
-        if not weekly:
-            continue
-        nw = float(naive_week.get(design_no, 0.0))
-        act = float(actual.get(design_no, 0.0))
-        pred = max(0.0, (blend * weekly[0] + (1 - blend) * nw) * mult)
-        err += abs(act - pred)
-        act_tot += act
-        n += 1
+    previous = data.FORECAST_BLEND
+    try:
+        data.FORECAST_BLEND = blend
+        for design_no, fc in forecasts.items():
+            weekly = fc.get("weekly") if fc else None
+            if not weekly:
+                continue
+            nw = float(naive_week.get(design_no, 0.0))
+            act = float(actual.get(design_no, 0.0))
+            # Match the production formula: the known-event multiplier belongs
+            # only to the robust run-rate component, not the event-aware model.
+            pred = data._blend(weekly[0], nw, mult)
+            err += abs(act - pred)
+            act_tot += act
+            n += 1
+    finally:
+        data.FORECAST_BLEND = previous
     return err, act_tot, n
 
 

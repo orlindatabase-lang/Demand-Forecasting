@@ -50,7 +50,9 @@ def main() -> None:
     df = df.dropna(subset=["product_sku_code"]).drop_duplicates()
     df = df[df["order_date"] <= pd.Timestamp.today().normalize()]
     snap = pd.Timestamp(df["order_date"].max()).normalize()
-    sales = df[df["order_status"].astype(str).str.strip().str.lower().isin(data._SOLD_STATUSES)]
+    # Match the deployed model target exactly.  The historic script used NET
+    # statuses here while the model/cache is trained and published on GROSS.
+    sales = df[df["order_status"].astype(str).str.strip().str.lower().isin(data._GROSS_SALE_STATUSES)]
 
     orig_blend = data.FORECAST_BLEND
     orig_week_festival = data._week_festival
