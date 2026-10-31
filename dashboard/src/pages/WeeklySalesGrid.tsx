@@ -631,7 +631,6 @@ function FestivalCard({ outlook }: { outlook: FestivalOutlook | null }) {
 
 interface OverviewTotals {
   totalForecast: number;
-  totalForecastP80: number;
   totalActual: number;
   totalSuggestedProduction: number;
   currentWeekForecast: number;
@@ -683,10 +682,10 @@ function ForecastOverview({
           />
           <SummaryCard
             label="Total Suggested Production"
-            note="P80 coverage target"
+            note="next 3 months"
             value={displayTotals.totalSuggestedProduction}
             accent={FORECAST_COLOR}
-            footer={`P50 ${formatNumber(displayTotals.totalForecast)} · P80 ${formatNumber(displayTotals.totalForecastP80)}`}
+            footer={`Forecast ${formatNumber(displayTotals.totalForecast)}`}
           />
         </Stack>
         {actions && (
@@ -920,7 +919,6 @@ export default function WeeklySalesGrid() {
     if (tierStyleSet === null) {
       return {
         totalForecast: data.totalForecast,
-        totalForecastP80: data.totalForecastP80,
         totalActual: data.totalActual,
         totalSuggestedProduction: data.totalSuggestedProduction,
         currentWeekForecast: data.currentWeekForecast,
@@ -929,7 +927,6 @@ export default function WeeklySalesGrid() {
       };
     }
     const totalForecast = visibleRows.reduce((s, r) => s + r.futureForecastTotal, 0);
-    const totalForecastP80 = visibleRows.reduce((s, r) => s + r.futureForecastP80, 0);
     const totalActual = visibleRows.reduce((s, r) => s + r.grandActualTotal, 0);
     const totalSuggestedProduction = visibleRows.reduce((s, r) => s + r.suggestedProduction, 0);
 
@@ -974,7 +971,6 @@ export default function WeeklySalesGrid() {
 
     return {
       totalForecast,
-      totalForecastP80,
       totalActual,
       totalSuggestedProduction,
       currentWeekForecast,
@@ -1800,8 +1796,11 @@ export default function WeeklySalesGrid() {
                           >
                             {formatNumber(r.suggestedProduction)}
                           </Typography>
-                          <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
-                            P50 {formatNumber(r.futureForecastTotal)} · P80 {formatNumber(r.futureForecastP80)} · Avl {formatNumber(r.availableQty)}
+                          <Typography variant="caption" sx={{ color: "text.secondary", display: "block", whiteSpace: "nowrap" }}>
+                            Forecast {formatNumber(r.futureForecastTotal)}
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: "text.secondary", display: "block", whiteSpace: "nowrap" }}>
+                            Available {formatNumber(r.availableQty)}
                           </Typography>
                         </TableCell>
                       </TableRow>
