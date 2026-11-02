@@ -152,6 +152,30 @@ export interface ChannelSourceWeeklySeries {
   cells: Record<string, number>; // weekStart (ISO) -> Gross qty, sparse (only weeks with any qty)
 }
 
+/** One SKU of a Style - the "N SKUs" drill-down on the Weekly Sales Report. */
+export interface StyleSkuRow {
+  skuCode: string;
+  size: string; // SKU code after the design number, e.g. "M"; "" if it doesn't follow that pattern
+  sold30: number; // gross sale, last 30 days
+  sold90: number; // gross sale, last 90 days
+  sharePct: number; // share of the Style's sale, used to split its forecast
+  forecast: number; // the Style's forecast x sharePct
+  inventoryQty: number;
+  wipQty: number;
+  availableQty: number; // inventoryQty + wipQty
+  suggestedProduction: number; // max(0, forecast - availableQty)
+  actual: Record<string, number>; // report weekStart -> gross sale, completed and running weeks
+}
+
+export interface StyleSkusResponse {
+  style: string;
+  shareBasis: string; // which sale the shares come from, e.g. "last 90 days"
+  forecast: number;
+  availableQty: number;
+  suggestedProduction: number; // the Style row's own: max(0, forecast - available)
+  rows: StyleSkuRow[];
+}
+
 export interface ChannelSourceWeeklyResponse {
   style: string;
   weekStarts: string[]; // ISO dates, oldest to newest — same axis as WeeklyGridRow.cells keys

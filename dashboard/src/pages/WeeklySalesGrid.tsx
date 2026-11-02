@@ -62,6 +62,7 @@ import type {
   UpcomingEventOutlook,
   ChannelSourceWeeklySeries,
   CatalogStyleImage,
+  StyleSkuRow,
 } from "@/types";
 
 const ACTUAL_COLOR = "#312c5c";
@@ -727,6 +728,7 @@ export function SharedOverview() {
 type FlatItem =
   | { kind: "style"; row: WeeklyGridRow }
   | { kind: "market"; style: string; series: ChannelSourceWeeklySeries }
+  | { kind: "sku"; style: WeeklyGridRow; sku: StyleSkuRow }
   | { kind: "status"; style: string; text: string };
 
 // One CSV row per Style, exactly mirroring what's on screen: every week
@@ -808,6 +810,16 @@ export default function WeeklySalesGrid() {
     return new Set(group?.styles.map((s) => s.name) ?? []);
   }, [catalogQuery.data, tierFilter]);
   const [lightboxStyle, setLightboxStyle] = useState<CatalogStyleImage | null>(null);
+  // Styles whose "N SKUs" drill-down is open (2026-11-02, user-requested) -
+  // separate from the chevron's channel drill-down.
+  const [skuStyles, setSkuStyles] = useState<Set<string>>(new Set());
+  const toggleSkus = (style: string) =>
+    setSkuStyles((prev) => {
+      const next = new Set(prev);
+      if (next.has(style)) next.delete(style);
+      else next.add(style);
+      return next;
+    });
   // Clicking a W1..W4 header on a highlighted week shows each overlapping
   // event's own real start/end date (2026-09-24, user-requested) - distinct
   // from the calendar chunk's dates, since a chunk can be a partial slice
@@ -989,6 +1001,13 @@ export default function WeeklySalesGrid() {
       queryFn: () => dataService.channelSourceWeekly(style, FORECAST_WEEKS),
     })),
   });
+  const skuList = useMemo(() => Array.from(skuStyles), [skuStyles]);
+  const skuResults = useQueries({
+    queries: skuList.map((style) => ({
+      queryKey: ["styleSkus", style, FORECAST_WEEKS],
+      queryFn: () => dataService.styleSkus(style, FORECAST_WEEKS),
+    })),
+  });
 
   // Flatten Style rows + any expanded Style's marketplace sub-rows into one
   // list the virtualizer treats as its item source - each sub-row is its own
@@ -1028,6 +1047,16 @@ export default function WeeklySalesGrid() {
     const out: FlatItem[] = [];
     for (const row of visibleRows) {
       out.push({ kind: "style", row });
+      if (skuStyles.has(row.key)) {
+        const result = skuResults[skuList.indexOf(row.key)];
+        if (!result || result.isLoading) {
+          out.push({ kind: "status", style: row.key, text: "Loading SKUs…" });
+        } else if (result.isError || !result.data) {
+          out.push({ kind: "status", style: row.key, text: "Failed to load SKUs." });
+        } else {
+          for (const sku of result.data.rows) out.push({ kind: "sku", style: row, sku });
+        }
+      }
       if (expandedStyles.has(row.key)) {
         const i = expandedList.indexOf(row.key);
         const result = weeklyResults[i];
@@ -1045,7 +1074,7 @@ export default function WeeklySalesGrid() {
       }
     }
     return out;
-  }, [visibleRows, expandedStyles, expandedList, weeklyResults]);
+  }, [visibleRows, expandedStyles, expandedList, weeklyResults, skuStyles, skuList, skuResults]);
 
   // Only the rows scrolled into view are ever mounted - with up to ~1,475
   // Styles fetched at once (PAGE_SIZE), rendering every <TableRow> at once
@@ -1600,7 +1629,7 @@ export default function WeeklySalesGrid() {
                     if (item.kind === "status") {
                       return (
                         <TableRow
-                          key={`${item.style}-status`}
+                          key={`${item.style}-status-${item.text}`}
                           data-index={virtualRow.index}
                           ref={rowVirtualizer.measureElement}
                         >
@@ -1609,6 +1638,91 @@ export default function WeeklySalesGrid() {
                             sx={{ bgcolor: MARKET_ROW_BG, color: "text.secondary", fontStyle: "italic", py: 1 }}
                           >
                             {item.text}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    }
+
+                    if (item.kind === "sku") {
+                      const { sku, style } = item;
+                      const share = sku.sharePct / 100;
+                      const part = (q: number | null | undefined) => (q == null ? q : Math.round(q * share));
+                      const skuCell = (w: WeeklyGridWeek): WeeklyGridCell | undefined => {
+                        const c = style.cells[w.weekStart];
+                        if (!c) return undefined;
+                        return {
+                          ...c,
+                          actual: c.actual === null ? null : (sku.actual[w.weekStart] ?? 0),
+                          forecast: Math.round(c.forecast * share),
+                          liveForecast: part(c.liveForecast),
+                          frozenForecast: part(c.frozenForecast),
+                        };
+                      };
+                      return (
+                        <TableRow
+                          key={`${style.key}-sku-${sku.skuCode}`}
+                          data-index={virtualRow.index}
+                          ref={rowVirtualizer.measureElement}
+                          sx={{ bgcolor: MARKET_ROW_BG }}
+                        >
+                          <TableCell sx={{ position: "sticky", left: 0, zIndex: 1, bgcolor: MARKET_ROW_BG, pl: 3.5 }}>
+                            <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                              <Chip
+                                size="small"
+                                label={sku.size || sku.skuCode}
+                                sx={{ fontWeight: 700, fontSize: "0.7rem", minWidth: 36, bgcolor: "#eef2ff", color: "#3730a3" }}
+                              />
+                              <Typography variant="caption" sx={{ color: "text.secondary", whiteSpace: "nowrap" }}>
+                                {sku.skuCode}
+                              </Typography>
+                            </Stack>
+                          </TableCell>
+                          <TableCell
+                            sx={{
+                              position: "sticky",
+                              left: PIN_LEFT_LAUNCH,
+                              zIndex: 1,
+                              bgcolor: MARKET_ROW_BG,
+                              borderColor: "divider",
+                              ...STICKY_EDGE_SX,
+                            }}
+                          />
+                          {data.months.map((m) => {
+                            const cells = m.weeks.map(skuCell);
+                            return (
+                              <Fragment key={m.label}>
+                                {m.weeks.map((w, i) => (
+                                  <Cell key={w.weekStart} cell={cells[i]} />
+                                ))}
+                                <TotalCell
+                                  actual={cells.reduce((a, c) => a + (c?.actual ?? 0), 0)}
+                                  forecast={cells.reduce((a, c) => a + (c && !c.frozenMissing ? c.forecast : 0), 0)}
+                                />
+                              </Fragment>
+                            );
+                          })}
+                          <TableCell
+                            align="center"
+                            sx={{
+                              position: "sticky",
+                              right: PIN_RIGHT,
+                              zIndex: 1,
+                              bgcolor: MARKET_ROW_BG,
+                              ...STICKY_EDGE_RIGHT_SX,
+                            }}
+                          >
+                            <Typography
+                              variant="body2"
+                              sx={{ fontWeight: 700, color: sku.suggestedProduction > 0 ? FORECAST_COLOR : "text.disabled" }}
+                            >
+                              {formatNumber(sku.suggestedProduction)}
+                            </Typography>
+                            <Typography variant="caption" sx={{ color: "text.secondary", display: "block", whiteSpace: "nowrap" }}>
+                              Forecast {formatNumber(sku.forecast)}
+                            </Typography>
+                            <Typography variant="caption" sx={{ color: "text.secondary", display: "block", whiteSpace: "nowrap" }}>
+                              Available {formatNumber(sku.availableQty)}
+                            </Typography>
                           </TableCell>
                         </TableRow>
                       );
@@ -1729,9 +1843,26 @@ export default function WeeklySalesGrid() {
                             {r.subCategory || "Unclassified"}
                           </Typography>
                           <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", pl: 3.5 }}>
-                            <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                              {r.skuCount} SKU{r.skuCount === 1 ? "" : "s"}
-                            </Typography>
+                            <Tooltip title={skuStyles.has(r.key) ? "Hide the SKUs" : "Show the numbers per SKU"} arrow>
+                              <Typography
+                                variant="caption"
+                                component="button"
+                                type="button"
+                                onClick={() => toggleSkus(r.key)}
+                                sx={{
+                                  color: "primary.main",
+                                  background: "none",
+                                  border: 0,
+                                  p: 0,
+                                  cursor: "pointer",
+                                  textDecoration: "underline dotted",
+                                  textUnderlineOffset: 2,
+                                  "&:hover": { textDecoration: "underline" },
+                                }}
+                              >
+                                {r.skuCount} SKU{r.skuCount === 1 ? "" : "s"} {skuStyles.has(r.key) ? "▴" : "▾"}
+                              </Typography>
+                            </Tooltip>
                             {styleTierMap.get(r.key)?.tier && (
                               <Chip
                                 label={styleTierMap.get(r.key)!.tier}

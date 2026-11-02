@@ -43,6 +43,7 @@ from models import (
     CatalogStyleTiersResponse,
     ChannelSourceWeeklyResponse,
     ForecastTable,
+    StyleSkusResponse,
     WeeklyGridResponse,
 )
 
@@ -395,6 +396,18 @@ def get_channel_source_weekly(
     the inline expandable-row drill-down behind the Demand Forecasting
     page's per-Style rows."""
     return data.get_channel_source_weekly(style, weeks)
+
+
+@app.get("/api/weekly-sales/skus/{style}", response_model=StyleSkusResponse, tags=["plan"])
+def get_style_skus(
+    style: str,
+    weeks: int = Query(13, ge=1, le=40, description="Forecast horizon in weeks - same as the Weekly Sales Report's"),
+) -> StyleSkusResponse:
+    """One Style's numbers per SKU: sale per report week and in the last 30 / 90 days, its share
+    of the Style's forecast, its own available stock (inventory + WIP) and
+    its Suggested Production (forecast - available). The drill-down behind a
+    Style's "N SKUs" on the Weekly Sales Report."""
+    return data.get_style_skus(style, weeks)
 
 
 @app.get("/api/design-suggestions", tags=["design"])
