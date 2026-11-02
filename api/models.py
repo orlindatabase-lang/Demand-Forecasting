@@ -115,7 +115,7 @@ class WeeklyGridRow(BaseModel):
     key: str  # Sub Category name, or Style/DESIGN_NO
     subCategory: str  # this row's Sub Category (== key when groupBy="subCategory")
     category: str = ""  # this row's top-level Category (see design_attributes.category_of)
-    skuCount: int    # distinct SKU (size/color variant) codes pooled into this row
+    skuCount: int    # distinct SKUs (size/color variants) pooled into this row; one SKU spelled two ways ("-M" / "_M") or relisted ("-XL-A") counts once
     styleCount: int  # distinct STYLE/DESIGN_NO codes pooled into this row (== 1 for a "style" row)
     launchDate: str = ""      # ISO date of this row's earliest-launched SKU, "" if unknown/a Sub Category row
     daysSinceLaunch: int = -1  # days since that earliest launch, -1 if unknown
@@ -280,6 +280,7 @@ class ChannelSourceWeeklyResponse(BaseModel):
 # Style's "6 SKUs" to drill down into the numbers per SKU).
 class StyleSkuRow(BaseModel):
     skuCode: str
+    otherCodes: list[str] = []  # other spellings / relistings of the same SKU merged into this row, e.g. "474-03_M", "005-03-XL-A"
     size: str  # SKU code after the design number, e.g. "M", "XL"; "" if it doesn't follow that pattern
     sold30: int  # gross sale, last 30 days up to the data date
     sold90: int  # gross sale, last 90 days up to the data date
