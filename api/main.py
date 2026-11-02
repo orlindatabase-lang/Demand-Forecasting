@@ -403,7 +403,8 @@ def get_style_skus(
     style: str,
     weeks: int = Query(13, ge=1, le=40, description="Forecast horizon in weeks - same as the Weekly Sales Report's"),
 ) -> StyleSkusResponse:
-    """One Style's numbers per SKU: sale per report week and in the last 30 / 90 days, its share
+    """One Style's numbers per SKU: sale per report week and in the last 30 / 90 days, the
+    forecast per month (Style and each SKU), its share
     of the Style's forecast, its own available stock (inventory + WIP) and
     its Suggested Production (forecast - available). The drill-down behind a
     Style's "N SKUs" on the Weekly Sales Report."""

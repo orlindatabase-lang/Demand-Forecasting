@@ -291,12 +291,15 @@ class StyleSkuRow(BaseModel):
     availableQty: int  # inventoryQty + wipQty
     suggestedProduction: int  # max(0, forecast - availableQty)
     actual: dict[str, int] = {}  # report weekStart -> gross sale, completed and running weeks (Weekly Sales Report axis)
+    forecastByMonth: dict[str, int] = {}  # "YYYY-MM" -> this SKU's share of the Style's month forecast
 
 
 class StyleSkusResponse(BaseModel):
     style: str
+    tier: str = ""  # the Style's current tier (catalog forecastStatus, e.g. "T3"); "" if not classified
     shareBasis: str  # which sale the shares come from, e.g. "last 90 days"
     forecast: int  # the Style row's own forecast (sum of the SKU forecasts)
+    forecastByMonth: dict[str, int] = {}  # "YYYY-MM" -> the Style's forecast for that month (the report's month TOTAL), running month onward
     availableQty: int
     suggestedProduction: int  # the Style row's own: max(0, forecast - available)
     rows: list[StyleSkuRow]  # sorted by size order where known, else by sale

@@ -3121,11 +3121,22 @@ def get_style_skus(style: str, weeks: int = 13) -> StyleSkusResponse:
         basis, weights = "equal split (no sales yet)", [1.0] * len(skus)
     w_sum = sum(weights) or 1.0
     forecasts = _split_by_share(style_forecast, weights)
+    # Monthly forecast (2026-11-02, user-requested): the Style row's own month
+    # TOTAL forecasts on the Weekly Sales Report, from the running month to
+    # the end of the horizon, split over the SKUs the same way.
+    this_month = date.today().replace(day=1)
+    style_by_month: dict[str, int] = {}
+    for label, qty in (row.monthForecastTotal if row else {}).items():
+        first = datetime.strptime(label, "%B %Y").date()
+        if first >= this_month:
+            style_by_month[first.strftime("%Y-%m")] = qty
+    style_by_month = dict(sorted(style_by_month.items()))
+    month_split = {m: _split_by_share(q, weights) for m, q in style_by_month.items()}
 
     today = date.today()
     chunks = [(a, b) for a, b in _calendar_chunk_axis(weeks) if a <= today]
     rows: list[StyleSkuRow] = []
-    for s, w, fc in zip(skus, weights, forecasts):
+    for i, (s, w, fc) in enumerate(zip(skus, weights, forecasts)):
         days = days_of[s]
         actual = {
             a.isoformat(): sum(days.get((a + timedelta(days=i)).isoformat(), 0) for i in range((b - a).days + 1))
@@ -3142,6 +3153,7 @@ def get_style_skus(style: str, weeks: int = 13) -> StyleSkusResponse:
             sharePct=round(100 * w / w_sum, 1), forecast=fc,
             inventoryQty=inv, wipQty=wip, availableQty=inv + wip,
             suggestedProduction=max(0, fc - inv - wip), actual=actual,
+            forecastByMonth={m: parts[i] for m, parts in month_split.items()},
         ))
     order = {z: i for i, z in enumerate(_SIZE_ORDER)}
     if all(r.size.upper() in order for r in rows):
@@ -3149,8 +3161,12 @@ def get_style_skus(style: str, weeks: int = 13) -> StyleSkusResponse:
     else:
         rows.sort(key=lambda r: (-r.sold90, r.skuCode))
     available = row.availableQty if row else sum(r.availableQty for r in rows)
+    import catalog_style  # the Style's tier (2026-11-02, user-requested), same source as the report's tier chip
+
     return StyleSkusResponse(
-        style=style, shareBasis=basis, forecast=style_forecast, availableQty=available,
+        style=style, tier=catalog_style.get_current_tier_map().get(style, ""),
+        shareBasis=basis, forecast=style_forecast, forecastByMonth=style_by_month,
+        availableQty=available,
         suggestedProduction=row.suggestedProduction if row else max(0, style_forecast - available),
         rows=rows,
     )
