@@ -305,6 +305,19 @@ class StyleSkusResponse(BaseModel):
     rows: list[StyleSkuRow]  # sorted by size order where known, else by sale
 
 
+class TierSkusResponse(BaseModel):
+    """/api/weekly-sales/skus?tier=T3 (2026-11-02, user-requested): every Style
+    of one tier with its SKUs, plus the tier's totals."""
+    tier: str
+    styleCount: int
+    skuCount: int
+    forecast: int  # sum of the Styles' forecasts (same horizon as the report)
+    forecastByMonth: dict[str, int] = {}  # "YYYY-MM" -> sum of the Styles' month forecasts
+    availableQty: int
+    suggestedProduction: int  # sum of the Styles' own suggestions
+    styles: list[StyleSkusResponse]  # biggest forecast first
+
+
 # --- /api/forecast/latest and /api/forecast/frozen (2026-10-31, user-requested:
 # separate Latest / Frozen forecast endpoints with a simple, self-explaining JSON).
 class ForecastWeek(BaseModel):

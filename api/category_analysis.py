@@ -115,7 +115,7 @@ def get_category_analysis(level: str = "subCategory", category: str = "", sub_ca
     if level not in _CATEGORY_LEVELS:
         raise ValueError(f"level must be one of {_CATEGORY_LEVELS}, got {level!r}")
     tier_mode = "sale" if level == "tier" and tier_mode == "sale" else "current"
-    cache_key = (data._DATA_VERSION, level, category, sub_category, tier_mode, brand, tier, style)
+    cache_key = (data._DATA_VERSION, level, category, sub_category, tier_mode, brand, tier, style, date.today())
     if cache_key in _CATEGORY_ANALYSIS_CACHE:
         return _CATEGORY_ANALYSIS_CACHE[cache_key]
 
@@ -163,10 +163,68 @@ def get_category_analysis(level: str = "subCategory", category: str = "", sub_ca
         frame["style"] = designs
     rows, partial_month = _month_group_rows(frame, count_styles=level != "style")
     out.update(partialMonth=partial_month, rows=rows)
+    if level == "tier":
+        out["forecastRows"], out["forecastFrozenOn"] = _tier_forecast_rows(rows, category, sub_category, brand, tier, style)
     if len(_CATEGORY_ANALYSIS_CACHE) > 64:
         _CATEGORY_ANALYSIS_CACHE.clear()
     _CATEGORY_ANALYSIS_CACHE[cache_key] = out
     return out
+
+
+_FORECAST_MONTHS = 3
+
+
+def _tier_forecast_rows(actual_rows: list[dict], category: str, sub_category: str, brand: str,
+                        tier: str, style: str) -> tuple[list[dict], str]:
+    """The upcoming months' FROZEN forecast per tier (2026-11-02,
+    user-requested: "add the upcoming three months' forecast spike rate, so
+    we can also see the upcoming spike" - then "show the frozen one"): the
+    running month and the next two, each the sum of its styles' frozen
+    forecast (forecast_api's Frozen table, the same numbers as
+    /api/forecast/frozen and the Weekly Sales Report's Forecast: Frozen),
+    under each style's CURRENT tier and the same filters as the table.
+    Spike = units vs the month before: the first month against that month's
+    actual units, later ones against the previous month's forecast. Returns
+    (rows like the actual rows - month, group, styles = styles with a
+    forecast, units, prevUnits, changePct - and the frozen-on date)."""
+    import pandas as pd
+
+    import forecast_api
+
+    # pastWeeks=4 keeps the running month's completed weeks, so it is whole
+    table = forecast_api.forecast_table("frozen", "style", 13, 4)
+    keys = pd.Series([r.style or "" for r in table.rows], dtype=str)
+    keep = _category_filter_mask(keys, category, sub_category, brand, tier, style)
+    tier_of = _style_tier_map()
+    this_month = date.today().strftime("%Y-%m")
+    month_keys = sorted({w.month for w in table.weeks if w.month >= this_month})[:_FORECAST_MONTHS]
+
+    units: dict[tuple[str, str], int] = {}
+    styles: dict[tuple[str, str], int] = {}
+    for i, r in enumerate(table.rows):
+        if keep is not None and not keep.iloc[i]:
+            continue
+        group = tier_of.get((r.style or "").strip().upper()) or "Unclassified"
+        for ym, qty in r.byMonth.items():
+            if ym not in month_keys or qty <= 0:
+                continue
+            units[(ym, group)] = units.get((ym, group), 0) + int(qty)
+            styles[(ym, group)] = styles.get((ym, group), 0) + 1
+
+    groups = {g for _ym, g in units}
+    actual = {(r["month"], r["group"]): r["units"] for r in actual_rows}
+    out: list[dict] = []
+    for i, ym in enumerate(month_keys):
+        prev_ym = str(pd.Period(ym, freq="M") - 1)
+        for g in sorted(groups):
+            u = units.get((ym, g), 0)
+            prev = actual.get((prev_ym, g), 0) if i == 0 else units.get((prev_ym, g), 0)
+            out.append({
+                "month": ym, "group": g, "styles": styles.get((ym, g), 0), "units": u,
+                "prevUnits": int(prev), "prevIsForecast": i > 0,
+                "changePct": round((u - prev) / prev * 100, 1) if prev > 0 else None,
+            })
+    return out, table.frozenOn or ""
 
 
 def _month_group_rows(frame, count_styles: bool) -> tuple[list[dict], str]:

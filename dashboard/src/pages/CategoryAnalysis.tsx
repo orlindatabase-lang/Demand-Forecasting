@@ -30,7 +30,7 @@ import { LoadingSkeleton, ErrorState } from "@/components/common/StateViews";
 import { useCatalogStyleTiers, useCategoryAnalysis, useCategoryAnalysisChannels } from "@/hooks/useDashboardData";
 import { formatNumber } from "@/utils/format";
 import type { CategoryFilter } from "@/services/dataService";
-import type { CategoryAnalysisRow } from "@/types";
+import type { CategoryAnalysisRow, CategoryForecastRow } from "@/types";
 import { COLORS, REPORT, REPORT_HEAD_SX, REPORT_GROUP_HEAD_SX, REPORT_TOTAL_SX, STICKY_EDGE_SX } from "@/theme/colors";
 
 type Level = "category" | "subCategory" | "style" | "tier";
@@ -55,6 +55,43 @@ const METRICS = [
   { key: "units", label: "UNITS", color: UNIT_COLOR },
   { key: "spike", label: "SPIKE", color: STYLE_COLOR },
 ] as const;
+
+// Upcoming months' FROZEN forecast on the Tiers tab (2026-11-02,
+// user-requested: "add the upcoming three months' forecast spike rate", then
+// "show the frozen one"): styles with a forecast, forecast units, and the
+// spike vs the month before.
+const FORECAST_METRICS = [
+  { key: "styles", label: "STYLES", color: STYLE_COLOR },
+  { key: "units", label: "FORECAST", color: UNIT_COLOR },
+  { key: "spike", label: "SPIKE", color: STYLE_COLOR },
+] as const;
+const FORECAST_BG = "#fff7ed"; // forecast month columns, apart from the actual months
+type ForecastCell = Pick<CategoryForecastRow, "styles" | "units" | "prevUnits" | "prevIsForecast" | "changePct">;
+
+/** Forecast spike: forecast units vs the month before (its actual units for
+ * the first upcoming month, its forecast after that). */
+function ForecastSpike({ cell, month }: { cell: ForecastCell | undefined; month: string }) {
+  if (!cell) return <>—</>;
+  const before = `${shortMonth(prevMonth(month))} ${cell.prevIsForecast ? "forecast" : "actual"}`;
+  const tip = `${shortMonth(month)} frozen forecast ${formatNumber(cell.units)} vs ${before} ${formatNumber(cell.prevUnits)}`
+    + (cell.changePct != null ? ` = ${signedPct(cell.changePct)}` : "");
+  if (cell.changePct === null) {
+    return (
+      <Tooltip title={`No units in ${before} to compare with`}>
+        <Typography component="span" variant="body2" sx={{ color: "text.disabled" }}>new</Typography>
+      </Tooltip>
+    );
+  }
+  const up = cell.changePct >= 0;
+  return (
+    <Tooltip title={tip}>
+      <Box component="span" sx={{ fontWeight: 700, color: up ? UP_COLOR : DOWN_COLOR }}>
+        {up ? "▲ +" : "▼ "}
+        {cell.changePct.toFixed(1)}%
+      </Box>
+    </Tooltip>
+  );
+}
 
 /** Units ÷ Styles - average pieces per style that sold that month (null when no style sold). */
 function unitsPerStyle(c: { styles: number; units: number } | undefined): number | null {
@@ -382,6 +419,40 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
     return out;
   }, [months, filtered]);
 
+  // Upcoming forecast months (Tiers tab only): per tier, and the TOTAL row
+  // over the tiers shown, its spike recomputed from the summed units.
+  const forecastMonths = useMemo(
+    () => (isTier ? [...new Set((data?.forecastRows ?? []).map((r) => r.month))].sort() : []),
+    [data, isTier],
+  );
+  const forecastByGroup = useMemo(() => {
+    const out = new Map<string, Record<string, ForecastCell>>();
+    for (const r of data?.forecastRows ?? []) {
+      const g = out.get(r.group) ?? {};
+      g[r.month] = r;
+      out.set(r.group, g);
+    }
+    return out;
+  }, [data]);
+  const forecastTotals = useMemo(() => {
+    const out: Record<string, ForecastCell> = {};
+    for (const m of forecastMonths) {
+      const t: ForecastCell = { styles: 0, units: 0, prevUnits: 0, prevIsForecast: false, changePct: null };
+      for (const g of filtered) {
+        const c = forecastByGroup.get(g.group)?.[m];
+        if (!c) continue;
+        t.styles += c.styles;
+        t.units += c.units;
+        t.prevUnits += c.prevUnits;
+        t.prevIsForecast = c.prevIsForecast;
+      }
+      t.changePct = pct(t.units, t.prevUnits);
+      out[m] = t;
+    }
+    return out;
+  }, [forecastMonths, forecastByGroup, filtered]);
+  const forecastCols = forecastMonths.length * FORECAST_METRICS.length;
+
   // Open scrolled to the latest month (right end), like reading the newest data first.
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -412,13 +483,39 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
           out[`${label} Stopped styles`] = c?.stoppedStyles ?? "";
         }
       }
+      for (const m of forecastMonths) {
+        const f = name === "TOTAL" ? forecastTotals[m] : forecastByGroup.get(name)?.[m];
+        out[`${shortMonth(m)} Frozen Forecast Styles`] = f?.styles ?? "";
+        out[`${shortMonth(m)} Frozen Forecast Units`] = f?.units ?? "";
+        out[`${shortMonth(m)} Frozen Forecast Spike %`] = f?.changePct ?? "";
+      }
       return out;
     });
     downloadCsv(rowsToCsv(rows), isStyle || isTier ? "tiers_spike_rate" : `category_analysis_${level}`);
   };
 
-  const renderCells: RenderCells = (cells, bold, variant = "main", ctx) =>
-    months.map((m, i) => {
+  const renderForecastCells = (bold: boolean, variant: RowVariant, ctx?: RowCtx) =>
+    forecastMonths.map((m) => {
+      const f = variant !== "main" ? undefined : bold ? forecastTotals[m] : forecastByGroup.get(ctx?.group ?? "")?.[m];
+      const base = {
+        ...numCell, ...(bold ? REPORT_TOTAL_SX : { bgcolor: variant === "channel" ? CHANNEL_BG : FORECAST_BG }),
+        fontWeight: bold ? 700 : 400, ...(variant === "main" ? {} : { fontSize: "0.8rem" }),
+      };
+      return (
+        <Fragment key={`fc-${m}`}>
+          <TableCell sx={{ ...base, color: STYLE_COLOR }}>{f ? formatNumber(f.styles) : variant === "main" ? "—" : ""}</TableCell>
+          <TableCell sx={{ ...base, color: UNIT_COLOR, fontWeight: bold ? 800 : 600 }}>
+            {f ? formatNumber(f.units) : variant === "main" ? "—" : ""}
+          </TableCell>
+          <TableCell sx={{ ...base, borderRight: 1, borderRightColor: "divider" }}>
+            {variant === "main" ? <ForecastSpike cell={f} month={m} /> : ""}
+          </TableCell>
+        </Fragment>
+      );
+    });
+
+  const renderCells: RenderCells = (cells, bold, variant = "main", ctx) => [
+    ...months.map((m, i) => {
       const c = cells[m];
       const bg = variant === "channel" ? CHANNEL_BG : variant === "child" ? STYLE_ROW_BG : MONTH_BG[i % 2];
       const base = {
@@ -465,7 +562,9 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
           </TableCell>
         </Fragment>
       );
-    });
+    }),
+    ...renderForecastCells(bold, variant, ctx),
+  ];
 
   return (
     <Box>
@@ -584,6 +683,23 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                         )}
                       </TableCell>
                     ))}
+                    {forecastMonths.map((m) => (
+                      <TableCell
+                        key={`fc-${m}`}
+                        colSpan={FORECAST_METRICS.length}
+                        align="center"
+                        sx={{ ...REPORT_GROUP_HEAD_SX, bgcolor: FORECAST_BG, borderRight: 1, borderRightColor: "divider", height: ROW_H1 }}
+                      >
+                        {monthTitle(m)}
+                        <Tooltip
+                          title={`Frozen forecast${data?.forecastFrozenOn ? `, frozen on ${dayLabel(data.forecastFrozenOn)}` : ""}: each week keeps the forecast it had when it was frozen, like Forecast: Frozen on the Weekly Sales Report.`}
+                        >
+                          <Typography component="span" variant="caption" sx={{ ml: 0.75, color: REPORT.forecastText, fontWeight: 700, cursor: "help" }}>
+                            FROZEN FORECAST
+                          </Typography>
+                        </Tooltip>
+                      </TableCell>
+                    ))}
                   </TableRow>
                   <TableRow>
                     {months.map((m) => (
@@ -593,6 +709,21 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                             key={mt.key}
                             sx={{
                               ...numCell, top: ROW_H1, ...REPORT_HEAD_SX, fontSize: "0.68rem", color: mt.color,
+                              ...(mt.key === "spike" ? { borderRight: 1, borderRightColor: "divider" } : {}),
+                            }}
+                          >
+                            {mt.label}
+                          </TableCell>
+                        ))}
+                      </Fragment>
+                    ))}
+                    {forecastMonths.map((m) => (
+                      <Fragment key={`fc-${m}`}>
+                        {FORECAST_METRICS.map((mt) => (
+                          <TableCell
+                            key={mt.key}
+                            sx={{
+                              ...numCell, top: ROW_H1, ...REPORT_HEAD_SX, bgcolor: FORECAST_BG, fontSize: "0.68rem", color: mt.color,
                               ...(mt.key === "spike" ? { borderRight: 1, borderRightColor: "divider" } : {}),
                             }}
                           >
@@ -646,7 +777,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                           {renderCells(g.months, false, "main", { group: g.group })}
                         </TableRow>
                         {open && (
-                          <ChannelRows level={level} group={g.group} colSpan={months.length * metrics.length} renderCells={renderCells} filter={tableFilter} />
+                          <ChannelRows level={level} group={g.group} colSpan={months.length * metrics.length + forecastCols} renderCells={renderCells} filter={tableFilter} />
                         )}
                       </Fragment>
                     );
