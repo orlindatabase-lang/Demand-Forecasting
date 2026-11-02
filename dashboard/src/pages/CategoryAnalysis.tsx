@@ -58,10 +58,9 @@ const METRICS = [
 
 // Upcoming months' FROZEN forecast on the Tiers tab (2026-11-02,
 // user-requested: "add the upcoming three months' forecast spike rate", then
-// "show the frozen one"): styles with a forecast, forecast units, and the
-// spike vs the month before.
+// "show the frozen one"): forecast units and the spike vs the month before
+// (no styles column - 2026-11-02, user-requested).
 const FORECAST_METRICS = [
-  { key: "styles", label: "STYLES", color: STYLE_COLOR },
   { key: "units", label: "FORECAST", color: UNIT_COLOR },
   { key: "spike", label: "SPIKE", color: STYLE_COLOR },
 ] as const;
@@ -485,7 +484,6 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
       }
       for (const m of forecastMonths) {
         const f = name === "TOTAL" ? forecastTotals[m] : forecastByGroup.get(name)?.[m];
-        out[`${shortMonth(m)} Frozen Forecast Styles`] = f?.styles ?? "";
         out[`${shortMonth(m)} Frozen Forecast Units`] = f?.units ?? "";
         out[`${shortMonth(m)} Frozen Forecast Spike %`] = f?.changePct ?? "";
       }
@@ -503,7 +501,6 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
       };
       return (
         <Fragment key={`fc-${m}`}>
-          <TableCell sx={{ ...base, color: STYLE_COLOR }}>{f ? formatNumber(f.styles) : variant === "main" ? "—" : ""}</TableCell>
           <TableCell sx={{ ...base, color: UNIT_COLOR, fontWeight: bold ? 800 : 600 }}>
             {f ? formatNumber(f.units) : variant === "main" ? "—" : ""}
           </TableCell>
@@ -688,7 +685,7 @@ export default function CategoryAnalysis({ level }: { level: Level }) {
                         key={`fc-${m}`}
                         colSpan={FORECAST_METRICS.length}
                         align="center"
-                        sx={{ ...REPORT_GROUP_HEAD_SX, bgcolor: FORECAST_BG, borderRight: 1, borderRightColor: "divider", height: ROW_H1 }}
+                        sx={{ ...REPORT_GROUP_HEAD_SX, bgcolor: FORECAST_BG, borderRight: 1, borderRightColor: "divider", height: ROW_H1, whiteSpace: "nowrap", px: 2 }}
                       >
                         {monthTitle(m)}
                         <Tooltip
