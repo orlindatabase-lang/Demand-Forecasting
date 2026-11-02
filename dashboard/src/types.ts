@@ -238,6 +238,19 @@ export interface CategoryAnalysisResponse {
   partialMonth: string;
   rows: CategoryAnalysisRow[];
   filterOptions?: Record<string, string[]>; // tier level: {category: its sub categories}, for the filters
+  forecastRows?: CategoryForecastRow[]; // tier level: the running month and the next two, frozen forecast
+  forecastFrozenOn?: string; // tier level: the day that forecast was frozen (ISO)
+}
+
+/** One upcoming month's frozen forecast for one tier (Tiers Spike Rate, 2026-11-02). */
+export interface CategoryForecastRow {
+  month: string; // "2026-12"
+  group: string; // tier
+  styles: number; // styles with a forecast that month
+  units: number; // forecast units (Gross sale)
+  prevUnits: number; // the month before: actual units for the first month, forecast after that
+  prevIsForecast: boolean;
+  changePct: number | null; // units vs prevUnits, null when prevUnits = 0
 }
 
 /** One Category Analysis row split by marketplace - rows' `group` is the marketplace. */

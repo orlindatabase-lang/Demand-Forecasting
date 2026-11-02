@@ -44,6 +44,7 @@ from models import (
     ChannelSourceWeeklyResponse,
     ForecastTable,
     StyleSkusResponse,
+    TierSkusResponse,
     WeeklyGridResponse,
 )
 
@@ -328,7 +329,10 @@ def get_category_analysis(
     """Per month (April 2025 to now) and Category / Sub Category: styles with a
     Gross sale, order count, units, and the units' % change vs the
     previous month (the partial current month vs the same days of the
-    previous month) - the Category Analysis page (2026-10-03, user-requested)."""
+    previous month) - the Category Analysis page (2026-10-03, user-requested).
+    The tier level also returns forecastRows: the running month and the next
+    two, FROZEN forecast units per tier and their spike vs the month before
+    (forecastFrozenOn = the day they were frozen)."""
     return category_analysis.get_category_analysis(level, category, subCategory, tierMode, brand, tier, style)
 
 
@@ -396,6 +400,18 @@ def get_channel_source_weekly(
     the inline expandable-row drill-down behind the Demand Forecasting
     page's per-Style rows."""
     return data.get_channel_source_weekly(style, weeks)
+
+
+@app.get("/api/weekly-sales/skus", response_model=TierSkusResponse, tags=["plan"])
+def get_tier_skus(
+    tier: str = Query(..., description="Catalog tier, e.g. T3 (case-insensitive); 'Unclassified' = Styles with no tier"),
+    weeks: int = Query(13, ge=1, le=40, description="Forecast horizon in weeks - same as the Weekly Sales Report's"),
+) -> TierSkusResponse:
+    """Every Style of one tier with its SKUs - each Style as in
+    /api/weekly-sales/skus/{style} (sale per week and in the last 30 / 90
+    days, forecast and forecast per month, available, Suggested Production
+    per SKU), biggest forecast first - plus the tier's totals."""
+    return data.get_tier_skus(tier, weeks)
 
 
 @app.get("/api/weekly-sales/skus/{style}", response_model=StyleSkusResponse, tags=["plan"])

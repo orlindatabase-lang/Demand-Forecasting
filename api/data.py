@@ -27,6 +27,7 @@ from models import (
     PlanRow,
     StyleSkuRow,
     StyleSkusResponse,
+    TierSkusResponse,
     TopRegion,
     TopWarehouse,
     UpcomingEventOutlook,
@@ -3066,7 +3067,11 @@ def _split_by_share(total: int, weights: list[float]) -> list[int]:
     return out
 
 
-def get_style_skus(style: str, weeks: int = 13) -> StyleSkusResponse:
+_UNSET = object()
+
+
+def get_style_skus(style: str, weeks: int = 13, row=_UNSET, codes: list[str] | None = None,
+                   tier: str | None = None) -> StyleSkusResponse:
     """One Style's numbers per SKU (2026-11-02, user-requested: click a
     Style's "6 SKUs" on the Weekly Sales Report to drill down into them),
     including each SKU's gross sale per report week. The forecast is
@@ -3076,17 +3081,24 @@ def get_style_skus(style: str, weeks: int = 13) -> StyleSkusResponse:
     Available is each SKU's own inventory + WIP, and Suggested Production is
     max(0, forecast - available) per SKU - so the SKU suggestions can add up
     to MORE than the Style's own when some sizes are overstocked (their spare
-    stock can't cover another size)."""
+    stock can't cover another size).
+
+    ``row`` (the Style's Weekly Sales Report row), ``codes`` (its SKU codes)
+    and ``tier`` are looked up when not given - get_tier_skus() passes them
+    in so a whole tier needs one report, not one per Style."""
     # One entry per SKU, with its codes merged when the same SKU is spelled
     # two ways or relisted (2026-11-02, user-reported: "474-03-M" and
     # "474-03_M", "005-03-XL" and "005-03-XL-A", and "423-03-L" and
     # "423-03-427-03-L" are the same SKU - see _sku_key). The code with the
     # most sale is the one shown.
     by_key: dict[str, list[str]] = {}
-    for code in sorted({r.skuCode for r in PLAN_ROWS if r.designNo == style}):
+    if codes is None:
+        codes = [r.skuCode for r in PLAN_ROWS if r.designNo == style]
+    for code in sorted(set(codes)):
         by_key.setdefault(_sku_key(code, style), []).append(code)
-    grid = get_weekly_grid("style", weeks, 2000, 0, style, "", "")
-    row = next((r for r in grid.rows if r.key == style), None)
+    if row is _UNSET:
+        grid = get_weekly_grid("style", weeks, 2000, 0, style, "", "")
+        row = next((r for r in grid.rows if r.key == style), None)
     style_forecast = row.futureForecastTotal if row else 0
 
     skus: list[str] = []
@@ -3161,14 +3173,56 @@ def get_style_skus(style: str, weeks: int = 13) -> StyleSkusResponse:
     else:
         rows.sort(key=lambda r: (-r.sold90, r.skuCode))
     available = row.availableQty if row else sum(r.availableQty for r in rows)
-    import catalog_style  # the Style's tier (2026-11-02, user-requested), same source as the report's tier chip
+    if tier is None:
+        import catalog_style  # the Style's tier (2026-11-02, user-requested), same source as the report's tier chip
+
+        tier = catalog_style.get_current_tier_map().get(style, "")
 
     return StyleSkusResponse(
-        style=style, tier=catalog_style.get_current_tier_map().get(style, ""),
+        style=style, tier=tier,
         shareBasis=basis, forecast=style_forecast, forecastByMonth=style_by_month,
         availableQty=available,
         suggestedProduction=row.suggestedProduction if row else max(0, style_forecast - available),
         rows=rows,
+    )
+
+
+def get_tier_skus(tier: str, weeks: int = 13) -> TierSkusResponse:
+    """Every Style of one tier with its SKUs (2026-11-02, user-requested: the
+    SKU endpoint by Tier instead of by Style) - each Style exactly as
+    get_style_skus() returns it, biggest forecast first, plus the tier's
+    totals. ``tier`` is the catalog tier ("T3", case-insensitive);
+    "Unclassified" = Styles with no tier. Only Styles on the Weekly Sales
+    Report (the ones with a forecast)."""
+    import catalog_style
+
+    want = tier.strip().upper()
+    tier_of = {k.strip().upper(): v for k, v in catalog_style.get_current_tier_map().items()}
+    grid = get_weekly_grid("style", weeks, 100_000, 0, "", "", "")
+    codes_of: dict[str, list[str]] = {}
+    for r in PLAN_ROWS:
+        if r.designNo:
+            codes_of.setdefault(r.designNo, []).append(r.skuCode)
+    styles: list[StyleSkusResponse] = []
+    name = tier.strip()
+    for row in grid.rows:
+        t = tier_of.get(row.key.strip().upper()) or "Unclassified"
+        if t.upper() != want:
+            continue
+        name = t
+        styles.append(get_style_skus(row.key, weeks, row=row, codes=codes_of.get(row.key, []),
+                                     tier="" if t == "Unclassified" else t))
+    styles.sort(key=lambda x: (-x.forecast, x.style))
+    by_month: dict[str, int] = {}
+    for st in styles:
+        for m, q in st.forecastByMonth.items():
+            by_month[m] = by_month.get(m, 0) + q
+    return TierSkusResponse(
+        tier=name, styleCount=len(styles), skuCount=sum(len(st.rows) for st in styles),
+        forecast=sum(st.forecast for st in styles), forecastByMonth=dict(sorted(by_month.items())),
+        availableQty=sum(st.availableQty for st in styles),
+        suggestedProduction=sum(st.suggestedProduction for st in styles),
+        styles=styles,
     )
 
 
