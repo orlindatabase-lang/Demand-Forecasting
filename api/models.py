@@ -276,6 +276,31 @@ class ChannelSourceWeeklyResponse(BaseModel):
     series: list[ChannelSourceWeeklySeries]  # one per marketplace with any sales, sorted by totalQty descending
 
 
+# --- /api/weekly-sales/skus/{style} (2026-11-02, user-requested: click a
+# Style's "6 SKUs" to drill down into the numbers per SKU).
+class StyleSkuRow(BaseModel):
+    skuCode: str
+    size: str  # SKU code after the design number, e.g. "M", "XL"; "" if it doesn't follow that pattern
+    sold30: int  # gross sale, last 30 days up to the data date
+    sold90: int  # gross sale, last 90 days up to the data date
+    sharePct: float  # this SKU's share of the Style's sale, used to split the Style's forecast
+    forecast: int  # the Style's forecast (same horizon as the report) x sharePct
+    inventoryQty: int
+    wipQty: int
+    availableQty: int  # inventoryQty + wipQty
+    suggestedProduction: int  # max(0, forecast - availableQty)
+    actual: dict[str, int] = {}  # report weekStart -> gross sale, completed and running weeks (Weekly Sales Report axis)
+
+
+class StyleSkusResponse(BaseModel):
+    style: str
+    shareBasis: str  # which sale the shares come from, e.g. "last 90 days"
+    forecast: int  # the Style row's own forecast (sum of the SKU forecasts)
+    availableQty: int
+    suggestedProduction: int  # the Style row's own: max(0, forecast - available)
+    rows: list[StyleSkuRow]  # sorted by size order where known, else by sale
+
+
 # --- /api/forecast/latest and /api/forecast/frozen (2026-10-31, user-requested:
 # separate Latest / Frozen forecast endpoints with a simple, self-explaining JSON).
 class ForecastWeek(BaseModel):

@@ -2,6 +2,7 @@ import { apiGet, apiPost } from "./api";
 import type {
   WeeklyGridResponse,
   ChannelSourceWeeklyResponse,
+  StyleSkusResponse,
   CatalogStyleTiersResponse,
   StyleLifecycleResponse,
   WeeklyProductionLogRow,
@@ -116,6 +117,13 @@ export const dataService = {
   async channelSourceWeekly(style: string, weeks = FORECAST_WEEKS) {
     return apiGet<ChannelSourceWeeklyResponse>(
       `/api/weekly-sales/channels/${encodeURIComponent(style)}?weeks=${weeks}`,
+    );
+  },
+
+  /** One Style's numbers per SKU - the "N SKUs" drill-down. */
+  async styleSkus(style: string, weeks = FORECAST_WEEKS) {
+    return apiGet<StyleSkusResponse>(
+      `/api/weekly-sales/skus/${encodeURIComponent(style)}?weeks=${weeks}`,
     );
   },
 

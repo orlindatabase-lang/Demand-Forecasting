@@ -25,6 +25,8 @@ from models import (
     ForecastPoint,
     HistoricalPoint,
     PlanRow,
+    StyleSkuRow,
+    StyleSkusResponse,
     TopRegion,
     TopWarehouse,
     UpcomingEventOutlook,
@@ -3011,6 +3013,90 @@ def get_channel_source_weekly(style: str, weeks: int = 13) -> ChannelSourceWeekl
     sub = df[df["DESIGN_NO"].astype(str) == style]
     return ChannelSourceWeeklyResponse(
         style=style, weekStarts=week_starts_iso, series=_channel_source_series(sub, chunks),
+    )
+
+
+_SIZE_ORDER = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "2XL", "XXXL", "3XL", "4XL", "5XL", "6XL", "7XL", "8XL"]
+
+
+def _split_by_share(total: int, weights: list[float]) -> list[int]:
+    """Split ``total`` in proportion to ``weights`` into whole units that add
+    back up to ``total`` exactly (largest remainder)."""
+    w_sum = sum(weights)
+    if total <= 0 or not weights:
+        return [0] * len(weights)
+    if w_sum <= 0:
+        weights, w_sum = [1.0] * len(weights), float(len(weights))
+    raw = [total * w / w_sum for w in weights]
+    out = [int(math.floor(x)) for x in raw]
+    for i in sorted(range(len(raw)), key=lambda i: raw[i] - out[i], reverse=True)[: total - sum(out)]:
+        out[i] += 1
+    return out
+
+
+def get_style_skus(style: str, weeks: int = 13) -> StyleSkusResponse:
+    """One Style's numbers per SKU (2026-11-02, user-requested: click a
+    Style's "6 SKUs" on the Weekly Sales Report to drill down into them),
+    including each SKU's gross sale per report week. The forecast is
+    made per Style, not per SKU, so each SKU gets the Style's forecast times
+    its share of the Style's gross sale over the last 90 days (all history if
+    the Style sold nothing in 90 days, an equal split if it never sold).
+    Available is each SKU's own inventory + WIP, and Suggested Production is
+    max(0, forecast - available) per SKU - so the SKU suggestions can add up
+    to MORE than the Style's own when some sizes are overstocked (their spare
+    stock can't cover another size)."""
+    skus = sorted({r.skuCode for r in PLAN_ROWS if r.designNo == style})
+    grid = get_weekly_grid("style", weeks, 2000, 0, style, "", "")
+    row = next((r for r in grid.rows if r.key == style), None)
+    style_forecast = row.futureForecastTotal if row else 0
+
+    snap = SNAPSHOT_DATE
+    d30, d90 = (snap - timedelta(days=29)).isoformat(), (snap - timedelta(days=89)).isoformat()
+    end = snap.isoformat()
+    sold30, sold90, sold_all = {}, {}, {}
+    for s in skus:
+        days = _DAY_ACTUAL_GROSS.get(s, {})
+        sold30[s] = sum(q for d, q in days.items() if d30 <= d <= end)
+        sold90[s] = sum(q for d, q in days.items() if d90 <= d <= end)
+        sold_all[s] = sum(days.values())
+    if sum(sold90.values()) > 0:
+        basis, weights = "last 90 days", [float(sold90[s]) for s in skus]
+    elif sum(sold_all.values()) > 0:
+        basis, weights = "all sales to date", [float(sold_all[s]) for s in skus]
+    else:
+        basis, weights = "equal split (no sales yet)", [1.0] * len(skus)
+    w_sum = sum(weights) or 1.0
+    forecasts = _split_by_share(style_forecast, weights)
+
+    today = date.today()
+    chunks = [(a, b) for a, b in _calendar_chunk_axis(weeks) if a <= today]
+    rows: list[StyleSkuRow] = []
+    for s, w, fc in zip(skus, weights, forecasts):
+        days = _DAY_ACTUAL_GROSS.get(s, {})
+        actual = {
+            a.isoformat(): sum(days.get((a + timedelta(days=i)).isoformat(), 0) for i in range((b - a).days + 1))
+            for a, b in chunks
+        }
+        plan = PLAN_BY_SKU.get(s)
+        inv = plan.inventoryQty if plan else 0
+        wip = plan.wipQty if plan else 0
+        size = s[len(style):].lstrip("-") if s.upper().startswith(style.upper()) else ""
+        rows.append(StyleSkuRow(
+            skuCode=s, size=size, sold30=sold30[s], sold90=sold90[s],
+            sharePct=round(100 * w / w_sum, 1), forecast=fc,
+            inventoryQty=inv, wipQty=wip, availableQty=inv + wip,
+            suggestedProduction=max(0, fc - inv - wip), actual=actual,
+        ))
+    order = {z: i for i, z in enumerate(_SIZE_ORDER)}
+    if all(r.size.upper() in order for r in rows):
+        rows.sort(key=lambda r: order[r.size.upper()])
+    else:
+        rows.sort(key=lambda r: (-r.sold90, r.skuCode))
+    available = row.availableQty if row else sum(r.availableQty for r in rows)
+    return StyleSkusResponse(
+        style=style, shareBasis=basis, forecast=style_forecast, availableQty=available,
+        suggestedProduction=row.suggestedProduction if row else max(0, style_forecast - available),
+        rows=rows,
     )
 
 
