@@ -155,6 +155,7 @@ export interface ChannelSourceWeeklySeries {
 /** One SKU of a Style - the "N SKUs" drill-down on the Weekly Sales Report. */
 export interface StyleSkuRow {
   skuCode: string;
+  otherCodes: string[]; // other spellings / relistings of the same SKU merged into this row, e.g. "474-03_M", "005-03-XL-A"
   size: string; // SKU code after the design number, e.g. "M"; "" if it doesn't follow that pattern
   sold30: number; // gross sale, last 30 days
   sold90: number; // gross sale, last 90 days

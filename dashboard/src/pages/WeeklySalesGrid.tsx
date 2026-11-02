@@ -1686,9 +1686,14 @@ export default function WeeklySalesGrid() {
                                 label={sku.size || sku.skuCode}
                                 sx={{ fontWeight: 700, fontSize: "0.7rem", minWidth: 36, bgcolor: "#eef2ff", color: "#3730a3" }}
                               />
-                              <Typography variant="caption" sx={{ color: "text.secondary", whiteSpace: "nowrap" }}>
-                                {sku.skuCode}
-                              </Typography>
+                              <Tooltip
+                                title={sku.otherCodes.length ? `Also listed as ${sku.otherCodes.join(", ")} (relisted or spelled differently) - counted here` : ""}
+                                arrow
+                              >
+                                <Typography variant="caption" sx={{ color: "text.secondary", whiteSpace: "nowrap" }}>
+                                  {sku.skuCode}
+                                </Typography>
+                              </Tooltip>
                             </Stack>
                           </TableCell>
                           <TableCell

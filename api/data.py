@@ -3019,6 +3019,38 @@ def get_channel_source_weekly(style: str, weeks: int = 13) -> ChannelSourceWeekl
 _SIZE_ORDER = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "2XL", "XXXL", "3XL", "4XL", "5XL", "6XL", "7XL", "8XL"]
 
 
+_SIZE_SET = set(_SIZE_ORDER)
+# Two names for one size (2026-11-02, user-specified: "2XL and XXL are the same")
+_SIZE_ALIAS = {"2XL": "XXL", "3XL": "XXXL"}
+
+
+def _sku_key(code: str, design: str = "") -> str:
+    """One spelling for a SKU code, so every listing of the same SKU counts
+    once (2026-11-02, user-specified):
+    - upper case, with "-", "_" and spaces all read as "-"
+      ("474-03_M" = "474-03-M");
+    - a single letter after the size marks a relisting ("005-03-XL-A" =
+      "005-03-XL");
+    - another design number between the Style and the size ("423-03-427-03-L"
+      = "423-03-L"; only when ``design`` is given and what follows is a size);
+    - 2XL is XXL and 3XL is XXXL ("001-04-2XL" = "001-04-XXL").
+    """
+    norm = lambda c: re.sub(r"[-_\s]+", "-", c.strip().upper()).strip("-")
+    key, prefix = norm(code), norm(design)
+    if prefix and key.startswith(prefix + "-"):
+        tail = key[len(prefix) + 1:]
+        m = re.fullmatch(r"\d+-\d+-(.+)", tail)
+        if m and m.group(1).split("-")[0] in _SIZE_SET:
+            key = f"{prefix}-{m.group(1)}"
+    parts = key.rsplit("-", 2)
+    if len(parts) == 3 and parts[1] in _SIZE_SET and re.fullmatch(r"[A-Z]", parts[2]):
+        key = f"{parts[0]}-{parts[1]}"
+    head, _, size = key.rpartition("-")
+    if head and size in _SIZE_ALIAS:
+        key = f"{head}-{_SIZE_ALIAS[size]}"
+    return key
+
+
 def _split_by_share(total: int, weights: list[float]) -> list[int]:
     """Split ``total`` in proportion to ``weights`` into whole units that add
     back up to ``total`` exactly (largest remainder)."""
@@ -3045,17 +3077,39 @@ def get_style_skus(style: str, weeks: int = 13) -> StyleSkusResponse:
     max(0, forecast - available) per SKU - so the SKU suggestions can add up
     to MORE than the Style's own when some sizes are overstocked (their spare
     stock can't cover another size)."""
-    skus = sorted({r.skuCode for r in PLAN_ROWS if r.designNo == style})
+    # One entry per SKU, with its codes merged when the same SKU is spelled
+    # two ways or relisted (2026-11-02, user-reported: "474-03-M" and
+    # "474-03_M", "005-03-XL" and "005-03-XL-A", and "423-03-L" and
+    # "423-03-427-03-L" are the same SKU - see _sku_key). The code with the
+    # most sale is the one shown.
+    by_key: dict[str, list[str]] = {}
+    for code in sorted({r.skuCode for r in PLAN_ROWS if r.designNo == style}):
+        by_key.setdefault(_sku_key(code, style), []).append(code)
     grid = get_weekly_grid("style", weeks, 2000, 0, style, "", "")
     row = next((r for r in grid.rows if r.key == style), None)
     style_forecast = row.futureForecastTotal if row else 0
+
+    skus: list[str] = []
+    days_of: dict[str, dict[str, int]] = {}
+    codes_of: dict[str, list[str]] = {}
+    key_of: dict[str, str] = {}
+    for sku_key, codes in by_key.items():
+        days: dict[str, int] = {}
+        for code in codes:
+            for d, q in _DAY_ACTUAL_GROSS.get(code, {}).items():
+                days[d] = days.get(d, 0) + q
+        main = max(codes, key=lambda c: (sum(_DAY_ACTUAL_GROSS.get(c, {}).values()), c))
+        skus.append(main)
+        days_of[main] = days
+        codes_of[main] = codes
+        key_of[main] = sku_key
 
     snap = SNAPSHOT_DATE
     d30, d90 = (snap - timedelta(days=29)).isoformat(), (snap - timedelta(days=89)).isoformat()
     end = snap.isoformat()
     sold30, sold90, sold_all = {}, {}, {}
     for s in skus:
-        days = _DAY_ACTUAL_GROSS.get(s, {})
+        days = days_of[s]
         sold30[s] = sum(q for d, q in days.items() if d30 <= d <= end)
         sold90[s] = sum(q for d, q in days.items() if d90 <= d <= end)
         sold_all[s] = sum(days.values())
@@ -3072,17 +3126,19 @@ def get_style_skus(style: str, weeks: int = 13) -> StyleSkusResponse:
     chunks = [(a, b) for a, b in _calendar_chunk_axis(weeks) if a <= today]
     rows: list[StyleSkuRow] = []
     for s, w, fc in zip(skus, weights, forecasts):
-        days = _DAY_ACTUAL_GROSS.get(s, {})
+        days = days_of[s]
         actual = {
             a.isoformat(): sum(days.get((a + timedelta(days=i)).isoformat(), 0) for i in range((b - a).days + 1))
             for a, b in chunks
         }
-        plan = PLAN_BY_SKU.get(s)
-        inv = plan.inventoryQty if plan else 0
-        wip = plan.wipQty if plan else 0
-        size = s[len(style):].lstrip("-") if s.upper().startswith(style.upper()) else ""
+        plans = [p for c in codes_of[s] if (p := PLAN_BY_SKU.get(c)) is not None]
+        inv = sum(p.inventoryQty for p in plans)
+        wip = sum(p.wipQty for p in plans)
+        prefix = _sku_key(style)
+        size = key_of[s][len(prefix) + 1:] if key_of[s].startswith(prefix + "-") else ""
         rows.append(StyleSkuRow(
-            skuCode=s, size=size, sold30=sold30[s], sold90=sold90[s],
+            skuCode=s, otherCodes=[c for c in codes_of[s] if c != s], size=size,
+            sold30=sold30[s], sold90=sold90[s],
             sharePct=round(100 * w / w_sum, 1), forecast=fc,
             inventoryQty=inv, wipQty=wip, availableQty=inv + wip,
             suggestedProduction=max(0, fc - inv - wip), actual=actual,
@@ -3425,7 +3481,8 @@ def _compute_weekly_grid(
         )
         forecast, festival_boosted = _apply_festival_boost(forecast, naive_week, wk_actual, boost_windows)
 
-        built.append((key, len(skus), len(group_styles[key]), forecast, historical, festival_boosted))
+        sku_count = len({_sku_key(s, p.designNo if (p := PLAN_BY_SKU.get(s)) else "") for s in skus})
+        built.append((key, sku_count, len(group_styles[key]), forecast, historical, festival_boosted))
         week_qty: dict[str, float] = {p.date: float(p.forecast) for p in historical}
         week_qty.update({p.date: float(p.qty) for p in forecast})
         week_qty_by_key[key] = week_qty
