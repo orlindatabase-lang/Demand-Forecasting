@@ -29,7 +29,7 @@ export default function RefreshButton() {
     onSuccess: (result) => {
       // Every loaded query (weekly grid, production log, ...) now
       // re-fetches against the freshly rebuilt data instead of waiting out
-      // the next page open.
+      // its 30-min refetchInterval.
       queryClient.invalidateQueries();
       setToast({
         severity: "success",
