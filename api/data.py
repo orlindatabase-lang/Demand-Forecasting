@@ -2048,10 +2048,12 @@ def rebuild() -> dict:
     this snapshot's model trains in the background and replaces it. Naive
     alone is served only on a genuine cold start (no saved model at all).
     Called once at import, by the daily auto-refresh, and by
-    ``POST /admin/refresh``. Falls back to mock data on failure.
+    ``POST /admin/refresh``. Falls back to mock data on failure - except when
+    real data is already loaded (a failed refresh): then that data stays.
     """
     global _SOURCE_DF, ACTIVE_FORECAST_MODEL, _LGBM_THREAD, FORECAST_SNAPSHOT, _LOADED_FROM
     global _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN
+    prev_df, prev_rows, prev_loaded = _SOURCE_DF, PLAN_ROWS, _LOADED_FROM
     try:
         df = _source_dataframe()
         _SOURCE_DF = df
@@ -2093,6 +2095,15 @@ def rebuild() -> dict:
         import cache_sync
         cache_sync.upload_changed()
     except Exception as exc:  # noqa: BLE001 — never let data issues kill startup
+        if prev_loaded in ("live", "csv") and prev_rows:
+            # A failed refresh keeps the real data already being served
+            # (2026-11-03, user-reported: the 06:00 refresh ran out of memory
+            # and the dashboard dropped to the 90 mock styles).
+            print(f"[data] refresh failed ({exc!r}); keeping the data loaded before", file=sys.stderr)
+            if PLAN_ROWS is prev_rows:  # the plan was not replaced yet
+                _SOURCE_DF = prev_df
+            return {"source": _LOADED_FROM, "rows": len(PLAN_ROWS), "snapshot": SNAPSHOT_DATE.isoformat(),
+                    "refreshError": repr(exc), **model_status()}
         print(f"[data] real load failed ({exc!r}); falling back to mock", file=sys.stderr)
         _set_plan((
             _MOCK_ROWS, {}, {}, {}, {},

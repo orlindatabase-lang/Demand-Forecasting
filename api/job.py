@@ -5,8 +5,10 @@ Daily batch job (2026-10-02): all the heavy work, then exit.
     2. load the data (BigQuery + ERP) and publish the plan - data.rebuild()
     3. wait for model training (if this snapshot's models aren't saved yet);
        training also records the weekly production log
-    4. save the serving snapshot the small API loads (data.save_serving_snapshot)
-    5. upload everything that changed back to Cloud Storage
+    4. build the Design Suggestions (saved to api/.cache, so the API loads them
+       instead of rebuilding after every restart)
+    5. save the serving snapshot the small API loads (data.save_serving_snapshot)
+    6. upload everything that changed back to Cloud Storage
 
 Run (from the api/ directory):  ..\\venv\\Scripts\\python.exe job.py
 On Cloud Run it runs as a Cloud Run Job (same image, command: python job.py),
@@ -42,6 +44,12 @@ def main() -> int:
         print("[job] waiting for model training...", file=sys.stderr)
         training.join()
     print(f"[job] model: {data.model_status()}", file=sys.stderr)
+
+    try:
+        import design_suggest
+        design_suggest.get_design_suggestions(wait=True)
+    except Exception as exc:  # noqa: BLE001 - the API can still build them itself
+        print(f"[job] design suggestions failed ({exc!r})", file=sys.stderr)
 
     data.save_serving_snapshot()
     cache_sync.upload_changed()

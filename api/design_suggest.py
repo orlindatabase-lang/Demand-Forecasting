@@ -166,6 +166,11 @@ def _direction(value) -> int:
 
 _CACHE: dict = {}
 _LOCK = threading.Lock()
+# The built result, saved so it reaches the Cloud Storage bucket with the rest
+# of api/.cache (2026-11-03, user-requested: all cache data in the bucket).
+# The daily job builds it; the API loads it instead of rebuilding after every
+# restart. Used only while it belongs to the loaded data (same snapshot dates).
+_RESULT_FILE = Path(__file__).resolve().parent / ".cache" / "design_suggestions.json"
 _LAST_ROWS: dict = {}   # training rows of the last build, handed to the background tuner
 
 
@@ -252,6 +257,10 @@ def get_design_suggestions(wait: bool = False) -> dict:
     with _LOCK:
         if _CACHE.get("key") == key:
             return _CACHE["value"]
+        saved = _load_result(data)
+        if saved is not None:
+            _CACHE.update(key=key, value=saved)
+            return saved
         thread = _CACHE.get("thread")
         if not (thread and thread.is_alive() and _CACHE.get("building") == key):
             thread = threading.Thread(target=_build_and_store, args=(data, key), daemon=True, name="design-suggest")
@@ -261,6 +270,33 @@ def get_design_suggestions(wait: bool = False) -> dict:
         thread.join()
         return _CACHE.get("value", {"available": False, "seasons": []})
     return {"available": False, "building": True, "seasons": []}
+
+
+def _result_stamp(data) -> dict:
+    return {"snapshot": data.SNAPSHOT_DATE.isoformat(), "forecastSnapshot": data.FORECAST_SNAPSHOT or ""}
+
+
+def _load_result(data) -> dict | None:
+    """The saved result, if it was built from the data loaded now."""
+    try:
+        saved = json.loads(_RESULT_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if {k: saved.get(k) for k in ("snapshot", "forecastSnapshot")} != _result_stamp(data):
+        return None
+    return saved.get("value")
+
+
+def _save_result(data, value: dict) -> None:
+    if not value.get("available"):
+        return
+    try:
+        _RESULT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _RESULT_FILE.with_name(_RESULT_FILE.name + ".tmp")
+        tmp.write_text(json.dumps({**_result_stamp(data), "value": value}, default=str), encoding="utf-8")
+        tmp.replace(_RESULT_FILE)
+    except OSError as exc:
+        print(f"[design_suggest] could not save the result ({exc!r})", file=sys.stderr)
 
 
 def _build_and_store(data, key) -> None:
@@ -273,6 +309,7 @@ def _build_and_store(data, key) -> None:
         value = {"available": False, "error": str(exc), "seasons": []}
     with _LOCK:
         _CACHE.update(key=key, value=value)
+    _save_result(data, value)
     print(f"[design_suggest] built in {time.time() - t0:.1f}s", file=sys.stderr)
 
     # No cross-validated settings yet (or older than TUNE_MAX_AGE_DAYS): tune
