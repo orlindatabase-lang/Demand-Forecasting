@@ -1219,8 +1219,8 @@ export default function WeeklySalesGrid() {
             <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
               <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 700 }}>FORECAST:</Typography>
               <Tooltip title={FREEZE.on
-                ? `Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: rolling 3 months - each week is frozen the day its forecast first appears within the next 3 months and never changes after that (current weeks frozen since ${shortIso(FREEZE.on)}). Hover any forecast figure to see both.`
-                : "Latest: the current forecast, updated every day (completed weeks: the value they had when they ended). Frozen: past (completed) weeks only, each with the forecast it had when the week began; running and upcoming weeks show —. Hover any forecast figure to see both."}>
+                ? `Latest: upcoming weeks hold still until an update is requested, the running week follows its sale (completed weeks: the value they had when they ended). Frozen: rolling 3 months - each week is frozen the day its forecast first appears within the next 3 months and never changes after that (current weeks frozen since ${shortIso(FREEZE.on)}). Hover any forecast figure to see both.`
+                : "Latest: upcoming weeks hold still until an update is requested, the running week follows its sale (completed weeks: the value they had when they ended). Frozen: past (completed) weeks only, each with the forecast it had when the week began; running and upcoming weeks show —. Hover any forecast figure to see both."}>
                 <ToggleButtonGroup
                   exclusive
                   size="small"

@@ -5,10 +5,12 @@ Daily batch job (2026-10-02): all the heavy work, then exit.
     2. load the data (BigQuery + ERP) and publish the plan - data.rebuild()
     3. wait for model training (if this snapshot's models aren't saved yet);
        training also records the weekly production log
-    4. build the Design Suggestions (saved to api/.cache, so the API loads them
+    4. update the held Latest forecast, only when asked (LATEST_FORECAST_UPDATE=1)
+       or when none is held yet
+    5. build the Design Suggestions (saved to api/.cache, so the API loads them
        instead of rebuilding after every restart)
-    5. save the serving snapshot the small API loads (data.save_serving_snapshot)
-    6. upload everything that changed back to Cloud Storage
+    6. save the serving snapshot the small API loads (data.save_serving_snapshot)
+    7. upload everything that changed back to Cloud Storage
 
 Run (from the api/ directory):  ..\\venv\\Scripts\\python.exe job.py
 On Cloud Run it runs as a Cloud Run Job (same image, command: python job.py),
@@ -32,6 +34,7 @@ def main() -> int:
     started = time.time()
     print("[job] start", file=sys.stderr)
     cache_sync.download_recent()
+    update_latest = os.getenv("LATEST_FORECAST_UPDATE") == "1" or not data._latest_hold_path().exists()
 
     result = data.rebuild()
     print(f"[job] data loaded: {result}", file=sys.stderr)
@@ -44,6 +47,9 @@ def main() -> int:
         print("[job] waiting for model training...", file=sys.stderr)
         training.join()
     print(f"[job] model: {data.model_status()}", file=sys.stderr)
+
+    if update_latest:
+        data.update_latest_forecast()
 
     try:
         import design_suggest

@@ -196,6 +196,19 @@ def refresh() -> dict:
     With SERVING_MODE=snapshot it starts the daily Cloud Run Job instead; the
     API picks up the job's new snapshot within SNAPSHOT_CHECK_SECS.
     409 while a refresh is running; 429 within REFRESH_COOLDOWN_SECS of the last one."""
+    return _guarded_refresh(update_latest=False)
+
+
+@app.post("/admin/forecast/latest/update", tags=["meta"])
+def update_latest_forecast() -> dict:
+    """Update the Latest forecast, which otherwise holds still (a data refresh
+    leaves it alone), to the current model's forecast. With SERVING_MODE=snapshot
+    it starts the daily Cloud Run Job with that update; the API picks it up
+    within SNAPSHOT_CHECK_SECS. Same 409 / 429 as /admin/refresh."""
+    return _guarded_refresh(update_latest=True)
+
+
+def _guarded_refresh(update_latest: bool) -> dict:
     global _LAST_REFRESH
     if not _REFRESH_LOCK.acquire(blocking=False):
         raise HTTPException(409, "A refresh is already running - please wait for it to finish.")
@@ -208,7 +221,9 @@ def refresh() -> dict:
                 headers={"Retry-After": str(math.ceil(wait))},
             )
         if data.SERVING_MODE == "snapshot":
-            result = {"status": "job started", **data.start_daily_job()}
+            result = {"status": "job started", **data.start_daily_job(update_latest)}
+        elif update_latest:
+            result = {"status": "updated", **data.update_latest_forecast()}
         else:
             result = {"status": "refreshed", **data.rebuild()}
         _LAST_REFRESH = time.time()
@@ -242,9 +257,10 @@ def get_latest_forecast(
     subCategory: str = Query("", description="Only this Sub Category (exact name); blank = all"),
     style: str = Query("", description="Only this Style (exact design number); blank = all"),
 ) -> ForecastTable:
-    """Latest forecast: today's forecast for the running week and the upcoming
-    weeks, per Style or Sub Category, per week and per month. Changes on every
-    data refresh. Same numbers as the Weekly Sales Report's Forecast: Latest."""
+    """Latest forecast: the forecast for the running week and the upcoming
+    weeks, per Style or Sub Category, per week and per month. Upcoming weeks
+    hold still until POST /admin/forecast/latest/update (heldOn = the last
+    update). Same numbers as the Weekly Sales Report's Forecast: Latest."""
     return forecast_api.forecast_table("latest", groupBy, weeks, 0, category, subCategory, style)
 
 
