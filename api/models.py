@@ -285,23 +285,25 @@ class StyleSkuRow(BaseModel):
     sold30: int  # gross sale, last 30 days up to the data date
     sold90: int  # gross sale, last 90 days up to the data date
     sharePct: float  # this SKU's share of the Style's sale, used to split the Style's forecast
-    forecast: int  # the Style's forecast (same horizon as the report) x sharePct
+    forecast: int  # frozen forecast: the sum of forecastByMonth
+    latestForecast: int  # the Style's Latest forecast (next `weeks` weeks) x sharePct
     inventoryQty: int
     wipQty: int
     availableQty: int  # inventoryQty + wipQty
-    suggestedProduction: int  # max(0, forecast - availableQty)
+    suggestedProduction: int  # max(0, latestForecast - availableQty)
     actual: dict[str, int] = {}  # report weekStart -> gross sale, completed and running weeks (Weekly Sales Report axis)
-    forecastByMonth: dict[str, int] = {}  # "YYYY-MM" -> this SKU's share of the Style's month forecast
+    forecastByMonth: dict[str, int] = {}  # "YYYY-MM" -> this SKU's share of the Style's frozen month forecast
 
 
 class StyleSkusResponse(BaseModel):
     style: str
     tier: str = ""  # the Style's current tier (catalog forecastStatus, e.g. "T3"); "" if not classified
     shareBasis: str  # which sale the shares come from, e.g. "last 90 days"
-    forecast: int  # the Style row's own forecast (sum of the SKU forecasts)
-    forecastByMonth: dict[str, int] = {}  # "YYYY-MM" -> the Style's forecast for that month (the report's month TOTAL), running month onward
+    forecast: int  # frozen forecast: the sum of forecastByMonth (and of the SKU forecasts)
+    latestForecast: int  # the Style row's Latest forecast (next `weeks` weeks), what Suggested Production uses
+    forecastByMonth: dict[str, int] = {}  # "YYYY-MM" -> the Style's frozen forecast for that month, running month onward
     availableQty: int
-    suggestedProduction: int  # the Style row's own: max(0, forecast - available)
+    suggestedProduction: int  # the Style row's own: max(0, latestForecast - available)
     rows: list[StyleSkuRow]  # sorted by size order where known, else by sale
 
 
@@ -311,8 +313,9 @@ class TierSkusResponse(BaseModel):
     tier: str
     styleCount: int
     skuCount: int
-    forecast: int  # sum of the Styles' forecasts (same horizon as the report)
-    forecastByMonth: dict[str, int] = {}  # "YYYY-MM" -> sum of the Styles' month forecasts
+    forecast: int  # sum of the Styles' frozen forecasts
+    latestForecast: int  # sum of the Styles' Latest forecasts
+    forecastByMonth: dict[str, int] = {}  # "YYYY-MM" -> sum of the Styles' frozen month forecasts
     availableQty: int
     suggestedProduction: int  # sum of the Styles' own suggestions
     styles: list[StyleSkusResponse]  # biggest forecast first

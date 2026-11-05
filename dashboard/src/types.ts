@@ -160,23 +160,25 @@ export interface StyleSkuRow {
   sold30: number; // gross sale, last 30 days
   sold90: number; // gross sale, last 90 days
   sharePct: number; // share of the Style's sale, used to split its forecast
-  forecast: number; // the Style's forecast x sharePct
+  forecast: number; // frozen forecast: the sum of forecastByMonth
+  latestForecast: number; // the Style's Latest forecast x sharePct
   inventoryQty: number;
   wipQty: number;
   availableQty: number; // inventoryQty + wipQty
-  suggestedProduction: number; // max(0, forecast - availableQty)
+  suggestedProduction: number; // max(0, latestForecast - availableQty)
   actual: Record<string, number>; // report weekStart -> gross sale, completed and running weeks
-  forecastByMonth: Record<string, number>; // "YYYY-MM" -> this SKU's share of the Style's month forecast
+  forecastByMonth: Record<string, number>; // "YYYY-MM" -> this SKU's share of the Style's frozen month forecast
 }
 
 export interface StyleSkusResponse {
   style: string;
   tier: string; // the Style's current tier, e.g. "T3"; "" if not classified
   shareBasis: string; // which sale the shares come from, e.g. "last 90 days"
-  forecast: number;
-  forecastByMonth: Record<string, number>; // "YYYY-MM" -> the Style's month forecast, running month onward
+  forecast: number; // frozen forecast: the sum of forecastByMonth
+  latestForecast: number; // the Style row's Latest forecast
+  forecastByMonth: Record<string, number>; // "YYYY-MM" -> the Style's frozen month forecast, running month onward
   availableQty: number;
-  suggestedProduction: number; // the Style row's own: max(0, forecast - available)
+  suggestedProduction: number; // the Style row's own: max(0, latestForecast - available)
   rows: StyleSkuRow[];
 }
 
