@@ -1050,6 +1050,78 @@ def _design_weekly_series(skus: list[str], fc_weekly: dict[str, list[float]]) ->
     return weekly if has_series else None
 
 
+# Latest forecast hold (2026-11-05, user-requested: "freeze the Latest forecast
+# also", updated only on request): {design: {monday_iso: qty}}. A week keeps the
+# value it first had here, whatever a later refresh or retrain computes, until
+# update_latest_forecast() starts over from the current model. Weeks that newly
+# enter the forecast are added at their first value. The running week's report
+# cell still follows the actual sale and pace (see get_weekly_grid()).
+LATEST_HOLD_FILE = "latest_hold.json"
+_LATEST_HOLD: dict[str, dict[str, float]] = {}
+_LATEST_HOLD_ON = ""  # the day of the last update
+
+
+def _latest_hold_path() -> Path:
+    return Path(__file__).resolve().parent / ".cache" / LATEST_HOLD_FILE
+
+
+def _load_latest_hold() -> None:
+    global _LATEST_HOLD, _LATEST_HOLD_ON
+    import json as _json
+
+    try:
+        saved = _json.loads(_latest_hold_path().read_text())
+        _LATEST_HOLD, _LATEST_HOLD_ON = saved["weeks"], saved["heldOn"]
+    except FileNotFoundError:
+        pass
+    except Exception as exc:  # noqa: BLE001 - a bad file must not stop the refresh
+        print(f"[data] latest hold unreadable ({exc!r})", file=sys.stderr)
+
+
+def _save_latest_hold() -> None:
+    import json as _json
+
+    first = (SNAPSHOT_DATE - timedelta(days=SNAPSHOT_DATE.weekday())).isoformat()
+    weeks = {d: {w: q for w, q in held.items() if w >= first} for d, held in _LATEST_HOLD.items()}
+    path = _latest_hold_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(_json.dumps({"heldOn": _LATEST_HOLD_ON, "weeks": weeks}))
+    tmp.replace(path)
+
+
+def _held_series(design_no: str, series: list[float] | None, record: bool) -> list[float] | None:
+    """``series`` with each week's held value; a week with none yet is held
+    at its value here when ``record`` is set (a model forecast, not a cold
+    start's run-rate)."""
+    if series is None:
+        return None
+    held = _LATEST_HOLD.get(design_no, {})
+    out = []
+    for i, qty in enumerate(series):
+        iso = _forecast_week_start(SNAPSHOT_DATE, i).isoformat()
+        if iso not in held and record:
+            held = _LATEST_HOLD.setdefault(design_no, held)
+            held[iso] = qty
+        out.append(held.get(iso, qty))
+    return out
+
+
+def update_latest_forecast() -> dict:
+    """The requested update of the held Latest forecast: drop the hold and
+    publish the current model's forecast, held from now on."""
+    global _LATEST_HOLD, _LATEST_HOLD_ON
+    if ACTIVE_FORECAST_MODEL != "lightgbm":
+        print("[data] no model forecast to update the Latest forecast from", file=sys.stderr)
+        return {"latestForecastHeldOn": _LATEST_HOLD_ON, **model_status()}
+    _LATEST_HOLD, _LATEST_HOLD_ON = {}, date.today().isoformat()
+    _publish_model_plan(_SOURCE_DF, _ACTIVE_FORECASTS or {}, _FC_WEEKLY_DESIGN, FORECAST_SNAPSHOT)
+    _warm_caches()
+    _save_latest_hold()
+    print(f"[data] Latest forecast updated and held ({_LATEST_HOLD_ON})", file=sys.stderr)
+    return {"latestForecastHeldOn": _LATEST_HOLD_ON, **model_status()}
+
+
 def _design_weekly_series_preferred(
     design_no: str, skus: list[str], fc_weekly: dict[str, list[float]],
     design_fc: dict[str, dict] | None, naive_week_map: dict[str, float] | None,
@@ -1072,8 +1144,8 @@ def _design_weekly_series_preferred(
         dseries = design_fc[design_no].get("weekly")
         if dseries:
             naive_d = sum((naive_week_map or {}).get(s, 0.0) for s in skus)
-            return _adjusted_weekly(SNAPSHOT_DATE, dseries, naive_d)
-    return _design_weekly_series(skus, fc_weekly)
+            return _held_series(design_no, _adjusted_weekly(SNAPSHOT_DATE, dseries, naive_d), True)
+    return _held_series(design_no, _design_weekly_series(skus, fc_weekly), bool(design_fc))
 
 
 def _design_model_hist_preferred(
@@ -1802,7 +1874,7 @@ _SNAPSHOT_VARS = (
     "OVERALL_ACCURACY", "LATEST_WEEK_ACCURACY", "LATEST_WEEK_ISO", "SKU_ACCURACY",
     "SKU_MODEL_HIST", "DESIGN_ACCURACY", "DESIGN_MODEL_HIST", "TIER_ACCURACY",
     "HORIZON_ACCURACY", "DESIGN_HORIZON_ACCURACY", "STYLE_LIFECYCLE", "TOP_STATES", "TOP_CITIES", "TOP_WAREHOUSES",
-    "_DESIGN_LEAD", "_GLOBAL_LEAD", "_DESIGN_SECTION",
+    "_DESIGN_LEAD", "_GLOBAL_LEAD", "_DESIGN_SECTION", "_LATEST_HOLD", "_LATEST_HOLD_ON",
 )
 # The only _SOURCE_DF columns the endpoints read (festival outlook, spike
 # lead time, Channel & Source drill-down) - all of them on Gross rows only.
@@ -1991,6 +2063,7 @@ def _train_and_publish(df, snap: date) -> None:
             return
 
         _publish_model_plan(df, forecasts, design_forecasts, s)
+        _save_latest_hold()
         # Re-warm (2026-09-26, user-requested) - _set_plan() bumped
         # _DATA_VERSION and evicted rebuild()'s warm-up.
         _warm_caches()
@@ -2055,6 +2128,7 @@ def rebuild() -> dict:
     global _ACTIVE_FORECASTS, _FC_WEEKLY_DESIGN
     prev_df, prev_rows, prev_loaded = _SOURCE_DF, PLAN_ROWS, _LOADED_FROM
     try:
+        _load_latest_hold()
         df = _source_dataframe()
         _SOURCE_DF = df
         source = "live" if DATA_SOURCE == "live" else "csv"
@@ -2085,6 +2159,8 @@ def rebuild() -> dict:
             _set_plan(_load_real_plan(df))
             ACTIVE_FORECAST_MODEL = "naive"
             FORECAST_SNAPSHOT = ""
+        if forecasts is not None and (forecasts or STYLE_ONLY):
+            _save_latest_hold()
         _warm_caches()
         _record_stock_snapshot()
         if forecasts is not None and (forecasts or STYLE_ONLY) and not needs_training:
@@ -2272,6 +2348,7 @@ def model_status() -> dict:
         # Snapshot the served model was trained on - older than "snapshot"
         # while that snapshot's own model is still training.
         "forecastSnapshot": FORECAST_SNAPSHOT,
+        "latestForecastHeldOn": _LATEST_HOLD_ON,
         # For the default style model this is the relevant lead-time accuracy
         # (keys are 1..13 forecast weeks).  The SKU counterpart is retained
         # for FORECAST_LEVEL=both deployments.
@@ -2397,8 +2474,8 @@ def _build_week_points(
     the headline reconcile (and both reflect festival / sale spikes). Each point's
     date is the Monday start of its week.
 
-    Always live (2026-09-28, user-requested): values are recomputed from the
-    current model + data on every rebuild - no frozen snapshot."""
+    Recomputed on every rebuild, from a series that holds each week's Latest
+    forecast (see _held_series(), 2026-11-05)."""
     historical_mondays, forecast_mondays = _week_axis(weeks)
 
     # --- future forecast (weekly) ------------------------------------------- #
@@ -3976,9 +4053,10 @@ def maybe_refresh_snapshot() -> None:
     threading.Thread(target=_snapshot_refresh, daemon=True, name="snapshot-refresh").start()
 
 
-def start_daily_job() -> dict:
+def start_daily_job(update_latest: bool = False) -> dict:
     """SERVING_MODE=snapshot's Refresh button: start one execution of the
-    Cloud Run Job (DAILY_JOB_NAME) instead of rebuilding in this process."""
+    Cloud Run Job (DAILY_JOB_NAME) instead of rebuilding in this process.
+    ``update_latest``: that run also updates the held Latest forecast."""
     import json as _json
     import urllib.request
     import google.auth
@@ -3989,9 +4067,10 @@ def start_daily_job() -> dict:
     creds, project = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
     creds.refresh(google.auth.transport.requests.Request())
     project = os.getenv("GOOGLE_CLOUD_PROJECT") or project
+    body = {"overrides": {"containerOverrides": [{"env": [{"name": "LATEST_FORECAST_UPDATE", "value": "1"}]}]}} if update_latest else {}
     req = urllib.request.Request(
         f"https://run.googleapis.com/v2/projects/{project}/locations/{region}/jobs/{job}:run",
-        data=b"{}", method="POST",
+        data=_json.dumps(body).encode("utf-8"), method="POST",
         headers={"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=30) as resp:

@@ -349,6 +349,7 @@ class ForecastTable(BaseModel):
     unit: str = Field(description="What the numbers count.")
     dataThrough: str = Field(description="Last day of sales data the forecast is based on (YYYY-MM-DD).")
     frozenOn: str | None = Field(default=None, description="Frozen only: the date the current weeks were frozen.")
+    heldOn: str | None = Field(default=None, description="Latest only: the date of the last requested update.")
     groupBy: str = Field(description="'style' or 'subCategory': what each row is.")
     weeks: list[ForecastWeek] = Field(description="The weeks in this response, oldest first.")
     total: ForecastTableTotal = Field(description="Totals over every row.")

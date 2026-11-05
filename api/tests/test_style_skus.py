@@ -8,12 +8,35 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import date
 from pathlib import Path
 
 os.environ.setdefault("DEFER_INITIAL_LOAD", "1")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # the api/ modules
 
 import data  # noqa: E402
+
+
+def test_held_series_keeps_the_first_value_of_each_week(monkeypatch):
+    monkeypatch.setattr(data, "SNAPSHOT_DATE", date(2026, 11, 4))
+    monkeypatch.setattr(data, "_LATEST_HOLD", {})
+    assert data._held_series("417-03", [10.0, 20.0], True) == [10.0, 20.0]
+    assert data._held_series("417-03", [99.0, 99.0, 30.0], True) == [10.0, 20.0, 30.0]
+
+
+def test_held_series_follows_the_dates_a_week_later(monkeypatch):
+    monkeypatch.setattr(data, "SNAPSHOT_DATE", date(2026, 11, 4))
+    monkeypatch.setattr(data, "_LATEST_HOLD", {})
+    data._held_series("417-03", [10.0, 20.0], True)
+    monkeypatch.setattr(data, "SNAPSHOT_DATE", date(2026, 11, 11))
+    assert data._held_series("417-03", [99.0, 40.0], True) == [20.0, 40.0]
+
+
+def test_held_series_records_nothing_for_a_run_rate_only_forecast(monkeypatch):
+    monkeypatch.setattr(data, "SNAPSHOT_DATE", date(2026, 11, 4))
+    monkeypatch.setattr(data, "_LATEST_HOLD", {})
+    assert data._held_series("417-03", [10.0], False) == [10.0]
+    assert data._LATEST_HOLD == {} and data._held_series("417-03", None, True) is None
 
 
 def test_split_adds_back_up_to_the_style_forecast():

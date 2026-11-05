@@ -9,7 +9,7 @@ the Weekly Sales Report's own cached grid (data.get_weekly_grid), so every
 number is exactly what the dashboard shows:
 
 - latest: today's forecast for the running week and the upcoming weeks;
-  changes on every data refresh.
+  holds still until updated on request (the running week follows its sale).
 - frozen: each week's forecast as it was frozen (rolling 3 months, see
   forecast_freeze.py) and never changes after that; optionally also the
   completed weeks before the running one.
@@ -88,8 +88,8 @@ def forecast_table(
     rows.sort(key=lambda x: x.total, reverse=True)
 
     if kind == "latest":
-        about = ("Today's forecast for the running week and the upcoming weeks. "
-                 "Changes on every data refresh.")
+        about = ("The forecast for the running week and the upcoming weeks. Upcoming weeks hold still "
+                 "until the Latest forecast is updated on request; the running week follows its sale.")
     else:
         about = ("The frozen forecast: each week is frozen at its forecast on the day it first comes "
                  "within the next 3 months, and never changes after that.")
@@ -97,6 +97,7 @@ def forecast_table(
         forecast=kind, about=about, unit="Gross sale units",
         dataThrough=data.SNAPSHOT_DATE.isoformat() if data.SNAPSHOT_DATE else "",
         frozenOn=grid.weeklyTotals.frozenOn if kind == "frozen" else None,
+        heldOn=(data._LATEST_HOLD_ON or None) if kind == "latest" else None,
         groupBy=group_by, weeks=shown,
         total=ForecastTableTotal(
             total=sum(total_by_week.values()), byMonth=_month_totals(total_by_week, shown), byWeek=total_by_week,
