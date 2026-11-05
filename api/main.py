@@ -409,8 +409,8 @@ def get_tier_skus(
 ) -> TierSkusResponse:
     """Every Style of one tier with its SKUs - each Style as in
     /api/weekly-sales/skus/{style} (sale per week and in the last 30 / 90
-    days, forecast and forecast per month, available, Suggested Production
-    per SKU), biggest forecast first - plus the tier's totals."""
+    days, frozen forecast and frozen forecast per month, available, Suggested
+    Production per SKU), biggest forecast first - plus the tier's totals."""
     return data.get_tier_skus(tier, weeks)
 
 
@@ -420,9 +420,9 @@ def get_style_skus(
     weeks: int = Query(13, ge=1, le=40, description="Forecast horizon in weeks - same as the Weekly Sales Report's"),
 ) -> StyleSkusResponse:
     """One Style's numbers per SKU: sale per report week and in the last 30 / 90 days, the
-    forecast per month (Style and each SKU), its share
+    frozen forecast per month (Style and each SKU), its share
     of the Style's forecast, its own available stock (inventory + WIP) and
-    its Suggested Production (forecast - available). The drill-down behind a
+    its Suggested Production (Latest forecast - available). The drill-down behind a
     Style's "N SKUs" on the Weekly Sales Report."""
     return data.get_style_skus(style, weeks)
 

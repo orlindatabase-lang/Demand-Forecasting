@@ -3078,6 +3078,18 @@ def _split_by_share(total: int, weights: list[float]) -> list[int]:
     return out
 
 
+def _frozen_by_month(row) -> dict[str, int]:
+    """A Weekly Sales Report row's frozen forecast per month ("YYYY-MM"), from
+    the running month on - the same weeks as /api/forecast/frozen and the Tiers
+    Spike Rate page. Weeks with no frozen value yet are left out."""
+    first = date.today().strftime("%Y-%m")
+    out: dict[str, int] = {}
+    for iso, cell in (row.cells if row else {}).items():
+        if iso[:7] >= first and cell.frozenForecast is not None:
+            out[iso[:7]] = out.get(iso[:7], 0) + cell.frozenForecast
+    return dict(sorted(out.items()))
+
+
 _UNSET = object()
 
 
@@ -3089,10 +3101,13 @@ def get_style_skus(style: str, weeks: int = 13, row=_UNSET, codes: list[str] | N
     made per Style, not per SKU, so each SKU gets the Style's forecast times
     its share of the Style's gross sale over the last 90 days (all history if
     the Style sold nothing in 90 days, an equal split if it never sold).
-    Available is each SKU's own inventory + WIP, and Suggested Production is
-    max(0, forecast - available) per SKU - so the SKU suggestions can add up
-    to MORE than the Style's own when some sizes are overstocked (their spare
-    stock can't cover another size).
+    ``forecast`` and ``forecastByMonth`` are the FROZEN forecast (2026-11-05,
+    user-requested; the same numbers as the Tiers Spike Rate page), from the
+    running month on. Available is each SKU's own inventory + WIP, and
+    Suggested Production stays on the Latest forecast, like the report's:
+    max(0, latestForecast - available) per SKU - so the SKU suggestions can
+    add up to MORE than the Style's own when some sizes are overstocked (their
+    spare stock can't cover another size).
 
     ``row`` (the Style's Weekly Sales Report row), ``codes`` (its SKU codes)
     and ``tier`` are looked up when not given - get_tier_skus() passes them
@@ -3110,7 +3125,7 @@ def get_style_skus(style: str, weeks: int = 13, row=_UNSET, codes: list[str] | N
     if row is _UNSET:
         grid = get_weekly_grid("style", weeks, 2000, 0, style, "", "")
         row = next((r for r in grid.rows if r.key == style), None)
-    style_forecast = row.futureForecastTotal if row else 0
+    latest_forecast = row.futureForecastTotal if row else 0
 
     skus: list[str] = []
     days_of: dict[str, dict[str, int]] = {}
@@ -3143,23 +3158,16 @@ def get_style_skus(style: str, weeks: int = 13, row=_UNSET, codes: list[str] | N
     else:
         basis, weights = "equal split (no sales yet)", [1.0] * len(skus)
     w_sum = sum(weights) or 1.0
-    forecasts = _split_by_share(style_forecast, weights)
-    # Monthly forecast (2026-11-02, user-requested): the Style row's own month
-    # TOTAL forecasts on the Weekly Sales Report, from the running month to
-    # the end of the horizon, split over the SKUs the same way.
-    this_month = date.today().replace(day=1)
-    style_by_month: dict[str, int] = {}
-    for label, qty in (row.monthForecastTotal if row else {}).items():
-        first = datetime.strptime(label, "%B %Y").date()
-        if first >= this_month:
-            style_by_month[first.strftime("%Y-%m")] = qty
-    style_by_month = dict(sorted(style_by_month.items()))
+    latest_forecasts = _split_by_share(latest_forecast, weights)
+    # Monthly forecast (2026-11-02, user-requested), split over the SKUs the
+    # same way; a SKU's forecast is the sum of its months.
+    style_by_month = _frozen_by_month(row)
     month_split = {m: _split_by_share(q, weights) for m, q in style_by_month.items()}
 
     today = date.today()
     chunks = [(a, b) for a, b in _calendar_chunk_axis(weeks) if a <= today]
     rows: list[StyleSkuRow] = []
-    for i, (s, w, fc) in enumerate(zip(skus, weights, forecasts)):
+    for i, (s, w, latest) in enumerate(zip(skus, weights, latest_forecasts)):
         days = days_of[s]
         actual = {
             a.isoformat(): sum(days.get((a + timedelta(days=i)).isoformat(), 0) for i in range((b - a).days + 1))
@@ -3173,9 +3181,10 @@ def get_style_skus(style: str, weeks: int = 13, row=_UNSET, codes: list[str] | N
         rows.append(StyleSkuRow(
             skuCode=s, otherCodes=[c for c in codes_of[s] if c != s], size=size,
             sold30=sold30[s], sold90=sold90[s],
-            sharePct=round(100 * w / w_sum, 1), forecast=fc,
+            sharePct=round(100 * w / w_sum, 1),
+            forecast=sum(parts[i] for parts in month_split.values()), latestForecast=latest,
             inventoryQty=inv, wipQty=wip, availableQty=inv + wip,
-            suggestedProduction=max(0, fc - inv - wip), actual=actual,
+            suggestedProduction=max(0, latest - inv - wip), actual=actual,
             forecastByMonth={m: parts[i] for m, parts in month_split.items()},
         ))
     order = {z: i for i, z in enumerate(_SIZE_ORDER)}
@@ -3191,9 +3200,9 @@ def get_style_skus(style: str, weeks: int = 13, row=_UNSET, codes: list[str] | N
 
     return StyleSkusResponse(
         style=style, tier=tier,
-        shareBasis=basis, forecast=style_forecast, forecastByMonth=style_by_month,
-        availableQty=available,
-        suggestedProduction=row.suggestedProduction if row else max(0, style_forecast - available),
+        shareBasis=basis, forecast=sum(style_by_month.values()), latestForecast=latest_forecast,
+        forecastByMonth=style_by_month, availableQty=available,
+        suggestedProduction=row.suggestedProduction if row else max(0, latest_forecast - available),
         rows=rows,
     )
 
@@ -3230,7 +3239,8 @@ def get_tier_skus(tier: str, weeks: int = 13) -> TierSkusResponse:
             by_month[m] = by_month.get(m, 0) + q
     return TierSkusResponse(
         tier=name, styleCount=len(styles), skuCount=sum(len(st.rows) for st in styles),
-        forecast=sum(st.forecast for st in styles), forecastByMonth=dict(sorted(by_month.items())),
+        forecast=sum(st.forecast for st in styles), latestForecast=sum(st.latestForecast for st in styles),
+        forecastByMonth=dict(sorted(by_month.items())),
         availableQty=sum(st.availableQty for st in styles),
         suggestedProduction=sum(st.suggestedProduction for st in styles),
         styles=styles,

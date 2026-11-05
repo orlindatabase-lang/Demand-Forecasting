@@ -1737,7 +1737,7 @@ export default function WeeklySalesGrid() {
                               {formatNumber(sku.suggestedProduction)}
                             </Typography>
                             <Typography variant="caption" sx={{ color: "text.secondary", display: "block", whiteSpace: "nowrap" }}>
-                              Forecast {formatNumber(sku.forecast)}
+                              Forecast {formatNumber(sku.latestForecast)}
                             </Typography>
                             <Typography variant="caption" sx={{ color: "text.secondary", display: "block", whiteSpace: "nowrap" }}>
                               Available {formatNumber(sku.availableQty)}

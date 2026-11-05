@@ -8,12 +8,29 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("DEFER_INITIAL_LOAD", "1")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # the api/ modules
 
 import data  # noqa: E402
+
+
+def test_frozen_by_month_sums_frozen_weeks_from_the_running_month_on():
+    today = date.today()
+    this_month = today.strftime("%Y-%m")
+    last_month = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    cell = lambda q: SimpleNamespace(frozenForecast=q)  # noqa: E731
+    row = SimpleNamespace(cells={
+        f"{last_month}-24": cell(50),      # before the running month
+        f"{this_month}-01": cell(10),
+        f"{this_month}-08": cell(20),
+        f"{this_month}-16": cell(None),    # not frozen yet
+    })
+    assert data._frozen_by_month(row) == {this_month: 30}
+    assert data._frozen_by_month(None) == {}
 
 
 def test_split_adds_back_up_to_the_style_forecast():
