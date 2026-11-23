@@ -100,12 +100,17 @@ def apply(
     values: dict[str, dict[str, float]],
     period_end: dict[str, date],
     today: date | None = None,
+    covered_until: date | None = None,
 ) -> dict[str, dict[str, float]]:
     """Return ``values`` ({key: {period_start_iso: qty}}) with every COMPLETED
     period (its end in ``period_end`` before ``today``) replaced by its locked
     value, saving upcoming and running periods' current values and locking
     newly completed ones on the way. A running period locked under the old
-    "freeze from the start" rule is reopened and follows the live value."""
+    "freeze from the start" rule is reopened and follows the live value.
+
+    ``covered_until``: the last day the forecast model covers. A week ending
+    after it is not frozen yet - its value is a placeholder 0, not a forecast
+    (2026-11-23, user-reported: Feb W2 2027 frozen at 0 for every row)."""
     today = today or date.today()
     out: dict[str, dict[str, float]] = {}
     writes: list[tuple] = []
@@ -187,15 +192,36 @@ def apply(
         # frozen value yet. Already frozen weeks are never touched.
         first = current_week_start(period_end, today)
         if SNAPSHOT_ENABLED and first:
+            _drop_blank_freezes(conn, scope, first)
             horizon = (today + timedelta(days=SNAPSHOT_DAYS)).isoformat()
             have = set(conn.execute(
                 "SELECT DISTINCT key, period_start FROM frozen_snapshot WHERE scope = ? AND period_start >= ?",
                 (scope, first)))
             snap = [(scope, k, today.isoformat(), p, float(q)) for k, cells in values.items()
-                    for p, q in cells.items() if first <= p < horizon and (k, p) not in have]
+                    for p, q in cells.items() if first <= p < horizon and (k, p) not in have
+                    and (covered_until is None or (p in period_end and period_end[p] <= covered_until))]
             if snap:
                 conn.executemany("INSERT OR IGNORE INTO frozen_snapshot VALUES (?, ?, ?, ?, ?)", snap)
     return out
+
+
+def _drop_blank_freezes(conn: sqlite3.Connection, scope: str, first: str) -> None:
+    """Undo a running/upcoming week frozen before the model covered it: one
+    day's freeze (as_of) of that week that is 0 for every row and holds at
+    least half of the week's frozen rows - a placeholder, not a forecast
+    (2026-11-23, user-reported: Feb W2 2027 frozen at 0 for every row). Those
+    rows are re-frozen at the next refresh that covers the week. Small all-0
+    batches (new styles with no forecast yet) and every non-zero value are
+    left as they are; completed weeks are never touched."""
+    totals = dict(conn.execute(
+        "SELECT period_start, COUNT(*) FROM frozen_snapshot WHERE scope = ? AND period_start >= ? GROUP BY period_start",
+        (scope, first)))
+    blank = [(scope, p, a) for p, a, n, s in conn.execute(
+        """SELECT period_start, as_of, COUNT(*), SUM(ABS(qty)) FROM frozen_snapshot
+           WHERE scope = ? AND period_start >= ? GROUP BY period_start, as_of""", (scope, first))
+        if s == 0 and n >= 10 and n * 2 >= totals.get(p, 0)]
+    if blank:
+        conn.executemany("DELETE FROM frozen_snapshot WHERE scope = ? AND period_start = ? AND as_of = ?", blank)
 
 
 def copy_locked_to_frozen(before_iso: str, as_of: str, scopes: tuple[str, ...] = ("grid:style", "grid:subCategory")) -> int:

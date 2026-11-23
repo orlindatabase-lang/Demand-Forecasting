@@ -3706,6 +3706,9 @@ def _compute_weekly_grid(
         import forecast_freeze
         fc_cells = forecast_freeze.apply(
             f"grid:{group_by}", live_cells, {c_start.isoformat(): c_end for c_start, c_end in chunks}, today,
+            # Last day the model forecasts: a week past it reads 0 and must not
+            # be frozen yet (2026-11-23, user-reported: Feb W2 frozen at 0).
+            covered_until=(forecast_mondays[-1] + timedelta(days=6)) if forecast_mondays else today,
         )
         start_cells = forecast_freeze.start_values(f"grid:{group_by}")
         snap_cells, frozen_on, frozen_until = forecast_freeze.frozen_values(f"grid:{group_by}")

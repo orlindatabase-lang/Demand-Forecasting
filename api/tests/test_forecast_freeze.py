@@ -141,3 +141,27 @@ def test_copy_locked_to_frozen_replaces_completed_weeks_only(monkeypatch):
     ff.apply("g", {"A": {"2026-09-24": 50, "2026-10-01": 12, "2026-10-08": 22}}, ENDS, date(2026, 10, 2))  # Sep W4 locked at 9
     assert ff.copy_locked_to_frozen("2026-10-01", "2026-10-02", ("g",)) == 1
     assert ff.frozen_values("g", date(2026, 10, 2))[0] == {"A": {"2026-09-24": 9, "2026-10-01": 10, "2026-10-08": 20}}
+
+
+def test_week_past_the_model_horizon_is_not_frozen_until_covered(monkeypatch):
+    monkeypatch.setattr(ff, "SNAPSHOT_ENABLED", True)
+    # Oct W2 ends after the model's last forecast day: its 0 is a placeholder
+    ff.apply("s", {"A": {"2026-10-01": 10, "2026-10-08": 0}}, ENDS, date(2026, 10, 3), covered_until=date(2026, 10, 7))
+    assert ff.frozen_values("s", date(2026, 10, 3))[0] == {"A": {"2026-10-01": 10}}
+    ff.apply("s", {"A": {"2026-10-01": 99, "2026-10-08": 20}}, ENDS, date(2026, 10, 4), covered_until=date(2026, 10, 15))
+    assert ff.frozen_values("s", date(2026, 10, 4))[0] == {"A": {"2026-10-01": 10, "2026-10-08": 20}}
+
+
+def test_blank_freeze_of_a_whole_week_is_redone_other_values_kept(monkeypatch):
+    monkeypatch.setattr(ff, "SNAPSHOT_ENABLED", True)
+    keys = [f"K{i}" for i in range(12)]
+    # Oct W2 frozen at 0 for every row (before the model covered it, old rule);
+    # a new style N frozen at 0 on its own; Oct W1 frozen with real values
+    ff.apply("s", {k: {"2026-10-01": 5, "2026-10-08": 0} for k in keys}, ENDS, date(2026, 10, 2))
+    ff.apply("s", {"N": {"2026-10-16": 0}}, ENDS, date(2026, 10, 3), covered_until=date(2026, 10, 23))
+    live = {k: {"2026-10-01": 7, "2026-10-08": 30, "2026-10-16": 40} for k in keys}
+    live["N"] = {"2026-10-16": 9}
+    ff.apply("s", live, ENDS, date(2026, 10, 4), covered_until=date(2026, 10, 23))
+    vals = ff.frozen_values("s", date(2026, 10, 4))[0]
+    assert vals["K0"] == {"2026-10-01": 5, "2026-10-08": 30, "2026-10-16": 40}   # W1 kept, W2 redone
+    assert vals["N"] == {"2026-10-16": 0}                                      # small batch kept
